@@ -6,9 +6,11 @@ sources:
   - backend/services/retrieval/__init__.py
   - backend/services/retrieval/pipeline.py
   - backend/services/context_builder.py
-depends_on: [memory, knowledge-graph]
-last_reviewed: 2026-04-25
-last_updated: 2026-04-25
+  - backend/services/reranker_service.py
+  - backend/services/chunking.py
+depends_on: [memory, knowledge-graph, preferences-settings]
+last_reviewed: 2026-04-26
+last_updated: 2026-04-26
 ---
 
 # Hybrid Retrieval Pipeline
@@ -34,10 +36,11 @@ The pipeline runs in two stages: retrieval (`retrieval.py`) followed by context 
    - **Cluster bonus** — `min(similar_to_neighbors × 0.15, 0.45)`, boosting notes that share semantic similarity edges with other candidates.
 
    The raw graph score is capped at `1.0`.
-4. **Weighted fusion.** Weights default to `WEIGHT_BM25 = 0.35`, `WEIGHT_COSINE = 0.35`, `WEIGHT_GRAPH = 0.30`. Any missing signal is zeroed and the remaining weights are renormalized so they still sum to `1.0`. The final score per note is `w_bm25*bm25 + w_cos*cosine + w_graph*graph`.
-5. **Sort** by `(score, updated_at)` descending — recency is the tiebreaker when scores are equal.
-6. **Cluster dedup.** `_cluster_dedup()` enforces at most 2 notes per folder so a single folder can't dominate the output, then trims to `limit`.
-7. **Cleanup.** Internal scoring fields (`_score`, `_bm25`, `_cosine`, `_graph`, `_bm25_score`, `_node_id`) are stripped from the returned dicts. The `_signals` dict is preserved for transparency — callers can inspect which signal drove each result.
+4. **Weighted fusion.** Weights default to `WEIGHT_BM25 = 0.35`, `WEIGHT_COSINE = 0.35`, `WEIGHT_GRAPH = 0.30`. Any missing signal is zeroed and the remaining weights are renormalized so they still sum to `1.0`. The fused score per note is `w_bm25*bm25 + w_cos*cosine + w_graph*graph`.
+5. **Signal 5 — cross-encoder reranker (precision pass).** When `JARVIS_DISABLE_RERANKER` is not set and the fastembed `TextCrossEncoder` is importable, the top `JARVIS_RERANKER_POOL` candidates (default `20`) are re-scored with a multilingual cross-encoder (`jinaai/jina-reranker-v2-base-multilingual` by default — see `services/reranker_service.py`). Cross-encoder scores are min-max normalised within the pool and blended with the prior fused score: `final = JARVIS_RERANKER_WEIGHT * rerank_norm + (1 - weight) * fused`, weight default `0.7`. Pool entries beyond the cap keep their fusion-only ordering. The reranker adds a `rerank` key to `_signals` and contributes a `via="rerank"` value to the trace when it dominates. Failure (model not available, pool size 1, or runtime error) is silent: candidates keep their fused scores.
+6. **Sort** by `(score, updated_at)` descending — recency is the tiebreaker when scores are equal.
+7. **Cluster dedup.** `_cluster_dedup()` enforces at most 2 notes per folder so a single folder can't dominate the output, then trims to `limit`.
+8. **Cleanup.** Internal scoring fields (`_score`, `_bm25`, `_cosine`, `_graph`, `_rerank`, `_bm25_score`, `_node_id`) are stripped from the returned dicts. The `_signals` dict is preserved for transparency — callers can inspect which signal drove each result.
 
 **Stage 2 — build_context()**
 
@@ -70,8 +73,11 @@ Cosine is disabled when `JARVIS_DISABLE_EMBEDDINGS=1` (test mode), when `fastemb
 
 ## Key Files
 
-- `backend/services/retrieval.py` — 3-signal hybrid fusion (BM25 + cosine + graph), weight renormalization, `_compute_graph_score` (edge connectivity + convergence + path + similar_to cluster bonus), folder dedup, `_signals` transparency.
-- `backend/services/context_builder.py` — Orchestrates retrieval, applies specialist scoping, fetches note bodies, produces the final `(context_text, token_estimate)` tuple for Claude. Also provides `build_graph_scoped_context()` and the shared `_extract_keywords()` utility.
+- `backend/services/retrieval/__init__.py` — Public surface: re-exports `retrieve` so callers keep using `from services.retrieval import retrieve` after the package split.
+- `backend/services/retrieval/pipeline.py` — 3-signal hybrid fusion (BM25 + cosine + graph) with optional Signal 4 (enrichment) and Signal 5 (cross-encoder reranker), weight renormalisation, `_compute_graph_score` (edge connectivity + convergence + path + similar_to cluster bonus), folder dedup, `_signals` transparency.
+- `backend/services/reranker_service.py` — Lazy-loaded singleton wrapper around fastembed's `TextCrossEncoder`. Module-level fallback to `Xenova/ms-marco-MiniLM-L-12-v2` if the default Jina model fails to load. 100% local, no API calls.
+- `backend/services/context_builder.py` — Orchestrates retrieval, applies specialist scoping, fetches note bodies, produces the final `(context_text, token_estimate, trace)` tuple for Claude. Also provides `build_graph_scoped_context()` and the shared `_extract_keywords()` utility.
+- `backend/services/chunking.py` — Markdown-aware chunker shared with the embedding pipeline; the retrieval signal-2 path queries the chunk index built by this module.
 
 ## API / Interface
 
@@ -145,7 +151,16 @@ WEIGHT_COSINE = 0.35
 WEIGHT_GRAPH = 0.30
 ```
 
-Defined at module top of `retrieval.py`. Changing these rebalances signal influence; the renormalization logic guarantees the effective weights still sum to 1.0 even when a signal is absent.
+Defined at module top of `retrieval/pipeline.py`. Changing these rebalances signal influence; the renormalization logic guarantees the effective weights still sum to 1.0 even when a signal is absent.
+
+### Reranker tuning (env-driven)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JARVIS_DISABLE_RERANKER` | unset | Set to `1` to skip Signal 5 entirely (e.g. tests, low-RAM machines). |
+| `JARVIS_RERANKER_MODEL` | `jinaai/jina-reranker-v2-base-multilingual` | Override the cross-encoder model. Loads on first use; ~1.1 GB. |
+| `JARVIS_RERANKER_POOL` | `20` | Cap on the number of fused candidates passed through the cross-encoder. Higher = more precision, more latency. |
+| `JARVIS_RERANKER_WEIGHT` | `0.7` | Blend factor between rerank and fused scores. `1.0` = pure rerank, `0.0` = ignore rerank. Clamped to `[0, 1]`. |
 
 ## Gotchas
 

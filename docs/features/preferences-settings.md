@@ -69,6 +69,20 @@ When `PATCH /api/settings/api-key` stores a new key it also writes `api_key_set:
 
 `config.py` exposes a `Settings` pydantic-settings model cached via `@lru_cache`. It reads environment variables prefixed with `JARVIS_` and falls back to defaults (`workspace_path = ~/Jarvis`, port 8000). A lightweight `.env` parser runs at import time before pydantic-settings takes over, using `os.environ.setdefault` so existing env vars always win.
 
+### Privacy kill-switches
+
+`services/privacy.py` is the single source of truth for "is this outbound network call allowed?" — every feature that touches the public internet (cloud LLM providers, web search, URL ingest) consults this module before making a request. The model has three layers, in priority order:
+
+1. **`JARVIS_OFFLINE_MODE` environment variable.** Hard lock. When set to `1`/`true`/`yes`/`on`, every outbound integration is blocked and the UI cannot override it. The settings page receives `offline_mode_locked: true` and disables the toggle.
+2. **`privacy_offline_mode` preference.** User-controlled master toggle. When on, *all* per-feature toggles are forced off regardless of their stored value — flipping the master switch is one click rather than three.
+3. **Per-feature preferences:** `privacy_web_search_enabled`, `privacy_url_ingest_enabled`, `privacy_cloud_providers_enabled`. These default to `true` so existing users see no behavioural change; the kill-switches are opt-in protections.
+
+Local-only providers (Ollama, fastembed, the local cross-encoder reranker) are never gated — `is_local_provider()` returns `true` for them and `assert_provider_allowed()` short-circuits.
+
+`get_privacy_settings()` returns the *effective* state (offline-mode-aware), not the raw preferences. Callers should always go through this helper rather than reading `privacy_*` preferences directly. `update_privacy_settings()` is the only sanctioned write path: it rejects unknown keys and refuses to disable offline mode while the env-var lock is engaged (raises `PrivacyBlockedError`).
+
+When a feature is blocked, callers must surface the reason rather than silently failing. `web_search.py` returns `[{"error": "Web search is blocked because Offline Mode is enabled."}]` so Claude sees the message and can fall back to local search. `assert_provider_allowed()` raises `PrivacyBlockedError` with a user-readable message that the chat router converts into an error stream event.
+
 ### Token budget
 
 The daily token budget controls how many tokens Jarvis may consume in a single UTC day before chat is blocked. The budget value is stored as the preference key `daily_token_budget` in `preferences.json` (string-encoded integer). A value of `0` means unlimited.
@@ -123,6 +137,7 @@ Each non-trivial section pairs with a composable under `frontend/app/composables
 - `backend/routers/preferences.py` — CRUD endpoints for arbitrary key/value preferences; used by composables and internal services.
 - `backend/routers/settings.py` — Aggregated settings view, API key update, voice preference update, budget read/write, and token usage endpoints.
 - `backend/services/preference_service.py` — Reads, writes, and deletes entries in `preferences.json`; provides `format_for_prompt()` for Claude context injection.
+- `backend/services/privacy.py` — Central privacy / network kill-switches. `get_privacy_settings()` resolves env lock + master toggle + per-feature flags into an effective state; `assert_provider_allowed()` and the `web_search_enabled()` / `url_ingest_enabled()` / `cloud_providers_enabled()` helpers gate every outbound integration.
 - `backend/services/token_tracking.py` — JSONL-based token usage logging, daily/all-time aggregation, and budget enforcement via `check_budget()` and `get_daily_budget()`.
 - `backend/config.py` — Pydantic-settings `Settings` model with `JARVIS_`-prefixed env var support and `.env` file bootstrap; singleton via `lru_cache`.
 - `frontend/app/pages/settings.vue` — Settings UI: API key section with connected/not-configured status badge and storage-method detail row, contextual input placeholder and button label, file-storage warning, voice toggles, maintenance actions (reindex, graph rebuild), and token usage and budget dashboard with gauge, slider, presets, all-time stats, and 14-day history sparkline.

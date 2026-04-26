@@ -14,9 +14,9 @@ sources:
   - frontend/app/components/NoteViewer.vue
   - frontend/app/components/ImportDialog.vue
   - frontend/app/components/LinkIngestDialog.vue
-depends_on: [database]
-last_reviewed: 2026-04-14
-last_updated: 2026-04-25
+depends_on: [database, preferences-settings]
+last_reviewed: 2026-04-26
+last_updated: 2026-04-26
 ---
 
 
@@ -88,6 +88,18 @@ The file is received by the router as a multipart upload, written to a temporary
 Both paths strip tracking parameters from the URL before storing it in the note's `source` frontmatter field.
 
 An optional `summarize` flag triggers `smart_enrich` after ingest, which calls Claude to add a 1–2 sentence summary and keyword tags to the note's frontmatter. This is the only part of the ingest pipeline that requires an API key and makes external API calls.
+
+URL ingest is gated by the privacy kill-switch (`services/privacy.py`): when offline mode is on or `privacy_url_ingest_enabled` is `false`, the router returns a 403 with the block reason instead of fetching anything. See [preferences-settings.md](preferences-settings.md).
+
+### Ingest job tracking (in-memory)
+
+Ingest is asynchronous from the user's point of view: dropping a 200 MB PDF returns immediately while extraction, chunking, indexing, and Smart Connect run in the background. `services/ingest_jobs.py` is a process-local, thread-safe job tracker that lets the UI show "Ingesting 3/6 files…" without leaking implementation details into SQLite or disk.
+
+Each ingest entry point (file upload, URL ingest, structured CSV/XML, background graph rebuild, section linker) calls `start_job(name, kind=…)` to register a job, then `update_stage(job_id, stage)` as it advances ("uploading" → "extracting" → "indexing" → "embedding" → "linking" → "done"), then `finish_job(job_id, error=…)` on terminate. Finished jobs linger for an `_FINISHED_TTL_S = 8 s` grace window so the UI can flash a ✓ before they disappear.
+
+`schedule_graph_rebuild()` is a special-cased helper: only one `kind="graph_rebuild"` job runs at a time (others are silently dropped), and it spawns its own daemon thread that calls `graph_service.rebuild_graph()`.
+
+The frontend polls `GET /api/memory/ingest/status` every 5 seconds via `useIngestStatus` (singleton composable, ref-counted across components). The composable also tracks **client-side uploads** — the bytes-uploaded progress before the server even sees the request — as a separate `ClientUpload` list. The two lists are merged in the UI: client uploads show real upload bars, then transition into server-tracked jobs once the request lands.
 
 ### AI enrichment
 
@@ -194,7 +206,9 @@ When a large document (e.g. a PDF) is ingested it is split into many section not
 - `backend/services/dismissed_suggestions.py` — Smart Connect dismissal store: SQLite table `dismissed_suggestions(note_path, target_path, dismissed_at)` with `dismiss()`, `undismiss()`, `list_dismissed_for()`, `list_all()`, `remove_note()`
 - `backend/routers/connections.py` — Smart Connect HTTP surface: `GET /api/connections/orphans`, `POST /api/connections/run/{path}` (mode=fast|aggressive), `POST /api/connections/dismiss`, `POST /api/connections/promote`
 - `backend/services/structured_ingest.py` — CSV/XML ingest with Jira export detection; groups issues by epic/project, creates overview + detail notes with wiki-linked people for graph integration
-- `backend/services/url_ingest.py` — URL ingest for YouTube videos (transcript + oEmbed metadata) and general web articles (trafilatura + markdownify)
+- `backend/services/url_ingest.py` — URL ingest for YouTube videos (transcript + oEmbed metadata) and general web articles (trafilatura + markdownify); short-circuits when the privacy kill-switch blocks URL ingest.
+- `backend/services/ingest_jobs.py` — Process-local, thread-safe ingest job tracker. Powers the global "Ingesting…" status badge. Includes `schedule_graph_rebuild()` for the one-at-a-time background graph rebuild after each file ingest.
+- `frontend/app/composables/useIngestStatus.ts` — Singleton composable that polls `/api/memory/ingest/status` every 5 s, merges server-tracked jobs with client-side upload progress, and ref-counts subscribers so the timer only runs while at least one component is mounted.
 - `backend/services/embedding_service.py` — Local fastembed wrapper: lazy model loading, `embed_note` (with content-hash skip), `search_similar`, `reindex_all`, `delete_embedding`, `is_available`, vector blob packing, and cosine similarity helper
 - `backend/utils/markdown.py` — YAML frontmatter parsing (`parse_frontmatter`) and serialization (`add_frontmatter`) used throughout the backend
 - `frontend/app/pages/memory.vue` — Memory page: sidebar/viewer layout, note selection state, folder/search coordination, and import dialog orchestration

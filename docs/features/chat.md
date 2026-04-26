@@ -7,14 +7,18 @@ sources:
   - backend/services/claude.py
   - backend/services/llm_service.py
   - backend/services/_anthropic_client.py
-  - backend/services/tools.py
+  - backend/services/tools/__init__.py
+  - backend/services/tools/definitions.py
+  - backend/services/tools/executor.py
+  - backend/services/web_search.py
   - backend/services/token_tracking.py
   - frontend/app/composables/useChat.ts
   - frontend/app/composables/useWebSocket.ts
   - frontend/app/components/ChatPanel.vue
   - frontend/app/components/TraceList.vue
-depends_on: [retrieval, sessions, specialists, api-key-management]
-last_updated: 2026-04-25
+depends_on: [retrieval, sessions, specialists, api-key-management, preferences-settings]
+last_updated: 2026-04-26
+last_reviewed: 2026-04-26
 ---
 
 # Chat & LLM Integration
@@ -74,7 +78,10 @@ All Anthropic SDK exceptions are caught and converted to `StreamEvent(type="erro
 - `backend/services/claude.py` — `ClaudeService` wrapping the Anthropic streaming API; `_ToolAccumulator` for reassembling fragmented tool-input JSON; `build_system_prompt` for context injection
 - `backend/services/llm_service.py` — `LLMService` wrapping LiteLLM for OpenAI/Google AI/any LiteLLM-supported provider; `LLMConfig` dataclass; `_LiteLLMToolAccumulator` for OpenAI-format streamed tool calls; format converters (`convert_tools_anthropic_to_openai`, `convert_messages_for_litellm`)
 - `backend/services/_anthropic_client.py` — Sync `anthropic.Anthropic` factory, present for test-mocking intent but unused by the codebase (all live paths use `AsyncAnthropic` directly in `ClaudeService`)
-- `backend/services/tools.py` — `TOOLS` list (Anthropic-format input schemas) and `execute_tool` dispatcher mapping tool names to service calls
+- `backend/services/tools/definitions.py` — Anthropic-format input schemas for every tool exposed to Claude (the `TOOLS` list).
+- `backend/services/tools/executor.py` — `execute_tool` dispatcher: maps tool names to underlying service calls (memory CRUD, graph queries, web search, Jira). All tool errors are converted to user-readable strings here.
+- `backend/services/tools/__init__.py` — Re-exports `TOOLS` and `execute_tool` so callers can keep using `from services.tools import …` after the package split.
+- `backend/services/web_search.py` — Thin DuckDuckGo wrapper with privacy gating (`services/privacy.py`). Returns `[{title, url, snippet}, …]` or `[{"error": "<reason>"}]` when blocked.
 - `backend/services/token_tracking.py` — Append-only JSONL usage log with per-day and all-time aggregation helpers; records `provider` and `model` per entry; uses LiteLLM pricing for non-Anthropic providers
 - `frontend/app/composables/useWebSocket.ts` — Persistent WebSocket with heartbeat, exponential-backoff reconnect, and multi-listener message dispatch
 - `frontend/app/composables/useChat.ts` — Conversation state manager; maps raw WebSocket events to UI state; handles retry logic
@@ -138,7 +145,7 @@ All frames are JSON. The client sends; the server sends back a stream of events 
 
 ### Tool definitions
 
-Tools are defined in `TOOLS` (`backend/services/tools.py`) as Anthropic-format input schemas and executed by `execute_tool`.
+Tools are defined in the `tools/` package: schemas in `definitions.py` (the exported `TOOLS` list), dispatch in `executor.py` (the `execute_tool` function). Both are re-exported from `tools/__init__.py` so callers see a single `from services.tools import TOOLS, execute_tool` interface.
 
 | Tool | Required inputs | What it does |
 |---|---|---|
@@ -152,8 +159,13 @@ Tools are defined in `TOOLS` (`backend/services/tools.py`) as Anthropic-format i
 | `save_preference` | `rule` | Persists a user behavior rule to `memory/preferences/` |
 | `query_graph` | `entity` | Traverses the knowledge graph from an entity up to `depth` hops |
 | `ingest_url` | `url` | Fetches a YouTube transcript or web article and saves it to memory |
+| `web_search` | `query` | DuckDuckGo HTML search; returns up to 5 `{title, url, snippet}` hits |
+
+The Jira-aware tools (`jira_list_issues`, `jira_describe_issue`, `jira_blockers_of`, `jira_depends_on`, `jira_sprint_risk`, `jira_cluster_by_topic`) are also dispatched from `executor.py` but live in `tools/jira_tools.py` — they are documented under [jira-strategist.md](jira-strategist.md).
 
 All `path` values are relative to `memory/`. Tool errors are caught and returned as strings rather than exceptions, so Claude receives the error text and can decide how to respond.
+
+`web_search` is gated by the privacy kill-switch in `services/privacy.py`: when offline mode is on or the per-feature toggle is off, the tool returns a single `{"error": "..."}` entry instead of calling DuckDuckGo, so Claude sees the block reason and can fall back to local search. See [preferences-settings.md](preferences-settings.md) for the privacy layer.
 
 ### `useChat` composable interface
 

@@ -54,6 +54,27 @@ budget caps — configurable in Settings → MCP.
 **Full reference:** [`tools.md`](./tools.md) — every tool, what it does,
 and what the user gains when Jarvis uses it.
 
+## Module layout
+
+The `jarvis-mcp` binary is the entry point for `backend/mcp_server/`:
+
+- `__main__.py` — CLI bootstrap (`jarvis-mcp [--workspace PATH] [--allow-writes] [--verbose]`). Resolves the workspace, configures stdio logging to stderr (stdout is reserved for the MCP framing), then hands off to `app.build_app()`.
+- `app.py` — FastMCP application factory. Registers every tool via `tools.register_all(mcp, workspace=…, allow_writes=…)`.
+- `config.py` — Workspace path discovery: `--workspace` CLI flag → `JARVIS_WORKSPACE` env var → `~/.jarvis/config.toml` → default `~/Jarvis`.
+- `middleware/audit.py` — JSONL audit logger. Every tool invocation appends one line to `app/logs/mcp/YYYY-MM-DD.jsonl` with timestamp, tool name, args summary, latency, and outcome.
+- `middleware/budget.py` — Per-session cost-class accounting. Tracks `free` / `cheap` / `standard` / `premium` calls against the user's configured caps; refuses additional calls in a class once the cap is hit.
+- `tools/` — One module per tool family. `register_all()` invokes each module's `register()`:
+  - `search.py` — semantic + BM25 search across notes.
+  - `notes.py` — read tools (and the opt-in write tools when `--allow-writes`).
+  - `graph.py` — graph traversal and node lookup.
+  - `sessions.py` — read past chat sessions and pin/unpin them.
+  - `jira.py` — Jira-aware queries (delegates to `services.tools.jira_tools`).
+  - `meta.py` — `jarvis_workspace_stats`, `jarvis_health`.
+  - `continuation.py` — pagination cursors for tools that may exceed a single response window.
+  - `writes.py` — registered only when `allow_writes=True`; appends notes, dismisses suggestions.
+
+Tools call directly into the same backend services that power the FastAPI app (`services/memory_service`, `services/retrieval`, `services/graph_service`, `services/session_service`, `services/specialist_service`, `services/tools/jira_tools`, …) — there is no HTTP layer between the MCP server and the workspace. Both processes share the SQLite database file in the workspace; pragmas applied via `services/_db.py` (WAL mode, busy timeout, synchronous=NORMAL) keep concurrent writers from tripping each other when the FastAPI app and the MCP server run side by side.
+
 ## Specs
 
 - [`refactor.spec.md`](./refactor.spec.md) — historical refactor notes
