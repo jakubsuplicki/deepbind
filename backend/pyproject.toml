@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis-backend"
+version = "0.15.0"
+description = "Jarvis — An AI workspace that remembers what matters (backend)"
+requires-python = ">=3.12"
+
+[project.scripts]
+jarvis-mcp = "mcp_server.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["jarvis_backend*", "services*", "models*", "routers*", "utils*", "mcp_server*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

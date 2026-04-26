@@ -1,0 +1,33 @@
+fastapi==0.128.8
+uvicorn[standard]==0.39.0
+pydantic-settings==2.11.0
+aiosqlite==0.22.1
+anthropic==0.94.0
+keyring==25.7.0
+pyyaml==6.0.3
+python-multipart==0.0.26
+youtube-transcript-api==1.2.4
+trafilatura==2.0.0
+duckduckgo-search==7.5.1
+markdownify==1.2.2
+lxml_html_clean==0.4.4
+pdfplumber==0.11.9
+defusedxml==0.7.1  # safe XML parsing for Jira imports (step 22a)
+litellm==1.83.7
+fastembed==0.8.0  # local embeddings for semantic search
+psutil==7.2.2  # hardware detection for local model recommendations
+spacy==3.8.14  # NER for entity extraction (Polish + English)
+mcp==1.27.0  # Model Context Protocol SDK (FastMCP server, stdio transport)
+# python-dotenv is transitively pinned by litellm to ==1.0.1 (vulnerable to
+# CVE-2026-28684). We force-upgrade to 1.2.2 via backend/overrides.txt:
+#   - CI/audit:  uv pip install --override overrides.txt -r requirements.txt
+#   - Local dev: install-backend.mjs runs `pip install --upgrade -r overrides.txt`
+#                as a second pass after the main install.
+# litellm only uses load_dotenv() which is API-stable across 1.0 -> 1.2.
+
+# testing
+pytest==9.0.3
+pytest-asyncio==1.3.0
+anyio[trio]==4.12.1
+pytest-anyio==0.0.0
+httpx==0.28.1

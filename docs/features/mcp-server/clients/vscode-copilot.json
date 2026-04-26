@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "jarvis": {
+      "type": "stdio",
+      "command": "jarvis-mcp",
+      "args": ["--transport", "stdio"]
+    }
+  }
+}

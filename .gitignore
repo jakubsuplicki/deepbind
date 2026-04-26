@@ -1,0 +1,51 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Standalone Python (auto-downloaded by install-backend)
+backend/.python-local/
+
+# Standalone Node.js (auto-downloaded by bootstrap installers)
+.node-local/
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jarvis user workspace (user data — never commit)
+Jarvis/
+
+# Environment variables
+.env
+.env.local
+
+# MCP token (per-workspace secret)
+app/mcp_token
+
+# SQLite
+*.db
+*.db-journal
+
+# Logs
+*.log
+
+# Bun (we use npm in CI)
+bun.lock

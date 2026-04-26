@@ -1,0 +1,13 @@
+{
+  "experimental": {
+    "modelContextProtocolServers": [
+      {
+        "transport": {
+          "type": "stdio",
+          "command": "jarvis-mcp",
+          "args": ["--transport", "stdio"]
+        }
+      }
+    ]
+  }
+}

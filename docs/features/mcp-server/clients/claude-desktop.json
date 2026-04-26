@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "jarvis": {
+      "command": "jarvis-mcp",
+      "args": ["--transport", "stdio"]
+    }
+  }
+}

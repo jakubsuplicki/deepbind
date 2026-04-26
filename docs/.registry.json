@@ -1,0 +1,622 @@
+{
+  "features": {
+    "workspace-onboarding": {
+      "doc": "docs/features/workspace-onboarding.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/workspace.py",
+        "backend/services/workspace_service.py",
+        "backend/models/schemas.py",
+        "frontend/app/pages/onboarding.vue"
+      ],
+      "depends_on": [
+        "database",
+        "settings-config",
+        "api-key-management"
+      ],
+      "last_updated": "2026-04-14",
+      "status": "current"
+    },
+    "chat": {
+      "doc": "docs/features/chat.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/chat.py",
+        "backend/services/claude.py",
+        "backend/services/llm_service.py",
+        "backend/services/_anthropic_client.py",
+        "backend/services/tools/__init__.py",
+        "backend/services/token_tracking.py",
+        "frontend/app/composables/useChat.ts",
+        "frontend/app/composables/useWebSocket.ts",
+        "frontend/app/composables/useApiKeys.ts",
+        "frontend/app/components/ChatPanel.vue",
+        "frontend/app/components/ModelSelector.vue",
+        "frontend/app/components/TraceList.vue"
+      ],
+      "depends_on": [
+        "retrieval",
+        "sessions",
+        "specialists",
+        "api-key-management",
+        "local-models"
+      ],
+      "last_updated": "2026-04-25",
+      "status": "current"
+    },
+    "memory": {
+      "doc": "docs/features/memory.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/memory.py",
+        "backend/routers/connections.py",
+        "backend/services/memory_service.py",
+        "backend/services/ingest.py",
+        "backend/services/connection_service.py",
+        "backend/services/alias_index.py",
+        "backend/services/dismissed_suggestions.py",
+        "backend/services/url_ingest.py",
+        "backend/services/structured_ingest.py",
+        "backend/services/embedding_service.py",
+        "backend/services/chunking.py",
+        "backend/utils/markdown.py",
+        "frontend/app/pages/memory.vue",
+        "frontend/app/components/NoteList.vue",
+        "frontend/app/components/NoteViewer.vue",
+        "frontend/app/components/SuggestionsPanel.vue",
+        "frontend/app/components/ImportDialog.vue",
+        "frontend/app/components/LinkIngestDialog.vue",
+        "frontend/app/composables/useNoteTree.ts",
+        "frontend/app/types/index.ts"
+      ],
+      "depends_on": [
+        "database"
+      ],
+      "last_updated": "2026-04-25",
+      "status": "current"
+    },
+    "jira-ingest": {
+      "doc": "docs/features/jira-ingest.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/jira.py",
+        "backend/services/jira_ingest.py",
+        "backend/models/database.py"
+      ],
+      "depends_on": [
+        "memory",
+        "database",
+        "enrichment-pipeline"
+      ],
+      "last_updated": "2026-04-17",
+      "status": "current"
+    },
+    "enrichment-pipeline": {
+      "doc": "docs/features/enrichment-pipeline.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/enrichment.py",
+        "backend/routers/settings.py",
+        "backend/services/enrichment_service.py",
+        "backend/services/enrichment/__init__.py",
+        "backend/services/enrichment/models.py",
+        "backend/services/enrichment/runtime.py",
+        "backend/services/enrichment/subjects.py",
+        "backend/services/enrichment/repository.py",
+        "backend/services/enrichment/worker.py",
+        "backend/services/jira_ingest.py",
+        "backend/models/database.py",
+        "backend/main.py",
+        "frontend/app/pages/settings.vue",
+        "backend/tests/test_enrichment_pipeline.py"
+      ],
+      "depends_on": [
+        "jira-ingest",
+        "local-models",
+        "database"
+      ],
+      "last_updated": "2026-04-17",
+      "status": "current"
+    },
+    "jira-graph": {
+      "doc": "docs/features/jira-graph.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/graph_service/jira_projection.py",
+        "backend/services/graph_service/models.py",
+        "backend/services/graph_service/builder.py",
+        "backend/services/graph_service/__init__.py",
+        "backend/services/jira_ingest.py"
+      ],
+      "depends_on": [
+        "jira-ingest",
+        "knowledge-graph"
+      ],
+      "last_updated": "2026-04-17",
+      "status": "current"
+    },
+    "soft-edges": {
+      "doc": "docs/features/soft-edges.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/graph_service/soft_edges.py",
+        "backend/services/graph_service/builder.py",
+        "backend/services/graph_service/__init__.py",
+        "backend/routers/graph.py",
+        "backend/tests/test_soft_edges.py"
+      ],
+      "depends_on": [
+        "knowledge-graph",
+        "enrichment-pipeline",
+        "jira-graph"
+      ],
+      "last_updated": "2026-04-17",
+      "status": "current"
+    },
+    "knowledge-graph": {
+      "doc": "docs/features/knowledge-graph.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/graph.py",
+        "backend/services/graph_service/__init__.py",
+        "backend/services/graph_service/models.py",
+        "backend/services/graph_service/similarity.py",
+        "backend/services/graph_service/builder.py",
+        "backend/services/graph_service/queries.py",
+        "backend/services/graph_service/entity_edges.py",
+        "backend/services/graph_service/concepts.py",
+        "backend/services/entity_extraction.py",
+        "backend/services/entity_canonicalization.py",
+        "frontend/app/pages/graph.vue",
+        "frontend/app/components/GraphCanvas.vue",
+        "frontend/app/components/GraphNodePreview.vue",
+        "frontend/app/components/GraphFilterBar.vue",
+        "frontend/app/composables/useGraph.ts"
+      ],
+      "depends_on": [
+        "memory"
+      ],
+      "last_updated": "2026-04-24",
+      "status": "current"
+    },
+    "voice": {
+      "doc": "docs/features/voice.md",
+      "type": "feature",
+      "sources": [
+        "frontend/app/composables/useVoice.ts",
+        "frontend/app/composables/stt/types.ts",
+        "frontend/app/composables/stt/webSpeechSTT.ts",
+        "frontend/app/composables/tts/types.ts",
+        "frontend/app/composables/tts/webSpeechTTS.ts",
+        "frontend/app/components/VoiceButton.vue",
+        "frontend/app/components/TranscriptBar.vue"
+      ],
+      "depends_on": [
+        "chat"
+      ],
+      "last_updated": "2026-04-14",
+      "status": "current"
+    },
+    "specialists": {
+      "doc": "docs/features/specialists.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/specialists.py",
+        "backend/services/specialist_service.py",
+        "backend/models/schemas.py",
+        "frontend/app/pages/specialists.vue",
+        "frontend/app/composables/useSpecialists.ts",
+        "frontend/app/components/SpecialistCard.vue",
+        "frontend/app/components/SpecialistWizard.vue",
+        "frontend/app/components/SpecialistBadge.vue",
+        "frontend/app/components/SpecialistKnowledgePanel.vue"
+      ],
+      "depends_on": [
+        "memory"
+      ],
+      "last_updated": "2026-04-24",
+      "status": "current"
+    },
+    "jarvis-self-specialist": {
+      "doc": "docs/features/jarvis-self-specialist.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/specialists.py",
+        "backend/services/specialist_service.py",
+        "backend/services/claude.py",
+        "backend/models/schemas.py",
+        "backend/tests/test_jarvis_self.py",
+        "frontend/app/components/JarvisSelfCard.vue",
+        "frontend/app/composables/useApi.ts",
+        "frontend/app/pages/specialists.vue",
+        "frontend/app/types/index.ts"
+      ],
+      "depends_on": [
+        "specialists",
+        "chat"
+      ],
+      "last_updated": "2026-04-24",
+      "status": "current"
+    },
+    "sessions": {
+      "doc": "docs/features/sessions.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/sessions.py",
+        "backend/services/session_service.py",
+        "frontend/app/composables/useSessions.ts",
+        "frontend/app/components/SessionHistory.vue"
+      ],
+      "depends_on": [
+        "database",
+        "memory",
+        "knowledge-graph"
+      ],
+      "last_updated": "2026-04-14",
+      "status": "current"
+    },
+    "retrieval": {
+      "doc": "docs/features/retrieval.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/retrieval/__init__.py",
+        "backend/services/retrieval/pipeline.py",
+        "backend/services/context_builder.py",
+        "backend/services/chunking.py"
+      ],
+      "depends_on": [
+        "memory",
+        "knowledge-graph"
+      ],
+      "last_updated": "2026-04-25",
+      "status": "current"
+    },
+    "jira-retrieval": {
+      "doc": "docs/features/jira-retrieval.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/retrieval/intent.py",
+        "backend/services/retrieval/intent_parser.py",
+        "backend/routers/retrieval_search.py"
+      ],
+      "depends_on": [
+        "retrieval",
+        "enrichment",
+        "knowledge-graph"
+      ],
+      "last_updated": "2025-07-27",
+      "status": "current"
+    },
+    "planning": {
+      "doc": "docs/features/planning.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/planning_service.py"
+      ],
+      "depends_on": [
+        "retrieval",
+        "chat"
+      ],
+      "last_updated": "2026-04-14",
+      "status": "current"
+    },
+    "preferences-settings": {
+      "doc": "docs/features/preferences-settings.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/preferences.py",
+        "backend/routers/settings.py",
+        "backend/services/preference_service.py",
+        "backend/services/token_tracking.py",
+        "backend/config.py",
+        "frontend/app/pages/settings.vue",
+        "frontend/app/composables/usePreferences.ts",
+        "frontend/app/composables/settings/useGeneralSettings.ts",
+        "frontend/app/composables/settings/useBudgetSettings.ts",
+        "frontend/app/composables/settings/useSharpen.ts",
+        "frontend/app/composables/settings/usePrivacySettings.ts",
+        "frontend/app/composables/settings/useSettingsStatus.ts",
+        "frontend/app/composables/settings/useGraphExpansionSettings.ts",
+        "frontend/app/components/settings/SettingsSection.vue",
+        "frontend/app/components/settings/BudgetSection.vue",
+        "frontend/app/components/settings/SharpenSection.vue",
+        "frontend/app/components/settings/PrivacySection.vue",
+        "frontend/app/components/settings/MaintenanceSection.vue",
+        "frontend/app/components/settings/GraphExpansionSection.vue"
+      ],
+      "depends_on": [
+        "workspace-onboarding",
+        "api-key-management"
+      ],
+      "last_updated": "2026-04-26",
+      "status": "current"
+    },
+    "app-shell": {
+      "doc": "docs/features/app-shell.md",
+      "type": "feature",
+      "sources": [
+        "frontend/app/app.vue",
+        "frontend/app/layouts/default.vue",
+        "frontend/app/pages/index.vue",
+        "frontend/app/pages/main.vue",
+        "frontend/app/composables/useAppState.ts",
+        "frontend/app/composables/useKeyboard.ts",
+        "frontend/app/composables/useApi.ts",
+        "frontend/app/components/Orb.vue",
+        "frontend/app/components/StatusBar.vue",
+        "frontend/app/components/ConfirmDialog.vue",
+        "frontend/app/components/ObsidianHelper.vue",
+        "frontend/app/types/index.ts"
+      ],
+      "depends_on": [],
+      "last_updated": "2026-04-14",
+      "status": "current"
+    },
+    "database": {
+      "doc": "docs/concepts/database.md",
+      "type": "concept",
+      "sources": [
+        "backend/models/database.py",
+        "backend/models/schemas.py",
+        "backend/main.py"
+      ],
+      "depends_on": [],
+      "last_updated": "2026-04-17",
+      "status": "current"
+    },
+    "duel": {
+      "doc": "docs/features/duel.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/council.py",
+        "backend/services/duel_presets.py",
+        "backend/routers/chat.py",
+        "backend/tests/test_duel_backend.py",
+        "frontend/app/composables/useDuel.ts",
+        "frontend/app/components/DuelSetup.vue",
+        "frontend/app/components/DuelDebateView.vue",
+        "frontend/app/components/DuelScoreBar.vue"
+      ],
+      "depends_on": [
+        "chat",
+        "specialists",
+        "knowledge-graph",
+        "retrieval"
+      ],
+      "last_updated": "2026-04-26",
+      "status": "current"
+    },
+    "smart-connect": {
+      "doc": "docs/features/smart-connect.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/connection_service.py",
+        "backend/services/connection_events.py",
+        "backend/services/alias_index.py",
+        "backend/services/dismissed_suggestions.py",
+        "backend/routers/connections.py",
+        "frontend/app/components/SmartConnectStatus.vue",
+        "frontend/app/components/BulkPromoteBanner.vue",
+        "frontend/app/components/SuggestionsPanel.vue",
+        "frontend/app/components/settings/SmartConnectSection.vue"
+      ],
+      "depends_on": [
+        "memory",
+        "knowledge-graph",
+        "retrieval"
+      ],
+      "last_updated": "2026-04-26",
+      "status": "current"
+    },
+    "mcp-server": {
+      "doc": "docs/features/mcp-server/README.md",
+      "type": "feature",
+      "sources": [
+        "backend/routers/mcp.py",
+        "backend/tests/test_mcp_server.py",
+        "frontend/app/composables/useMcp.ts",
+        "frontend/app/composables/settings/useMcpSnippets.ts",
+        "frontend/app/components/settings/McpSection.vue"
+      ],
+      "depends_on": [
+        "memory",
+        "knowledge-graph",
+        "retrieval",
+        "sessions",
+        "jira-ingest"
+      ],
+      "last_updated": "2026-04-26",
+      "status": "current"
+    },
+    "retrieval-trace": {
+      "doc": "docs/features/retrieval-trace.md",
+      "type": "feature",
+      "sources": [
+        "frontend/app/components/TraceList.vue",
+        "backend/services/retrieval/pipeline.py",
+        "backend/services/context_builder.py",
+        "backend/tests/test_context_builder_trace.py"
+      ],
+      "depends_on": [
+        "retrieval",
+        "chat",
+        "knowledge-graph"
+      ],
+      "last_updated": "2026-04-26",
+      "status": "current"
+    },
+    "section-classification": {
+      "doc": "docs/features/section-classification.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/document_classifier.py",
+        "backend/services/retrieval/intent_parser.py",
+        "backend/services/retrieval/pipeline.py",
+        "backend/services/ingest.py",
+        "backend/tests/test_document_classifier.py",
+        "backend/tests/test_pipeline_section_type_boost.py",
+        "backend/tests/test_intent_parser_section_types.py",
+        "backend/tests/test_executor_section_type_passthrough.py"
+      ],
+      "depends_on": [
+        "retrieval",
+        "memory",
+        "pdf-section-split"
+      ],
+      "last_updated": "2026-04-26",
+      "status": "current"
+    },
+    "client-estimator": {
+      "doc": "docs/features/client-estimator.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/specialist_service.py",
+        "backend/services/tools/executor.py",
+        "backend/tests/test_client_estimator_bootstrap.py",
+        "backend/tests/test_executor_section_type_passthrough.py"
+      ],
+      "depends_on": [
+        "specialists",
+        "section-classification",
+        "retrieval"
+      ],
+      "last_updated": "2026-04-26",
+      "status": "current"
+    },
+    "pdf-section-split": {
+      "doc": "docs/features/pdf-section-split.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/ingest.py",
+        "backend/services/graph_service/entity_edges.py",
+        "backend/services/graph_service/concepts.py",
+        "backend/tests/test_pdf_section_split.py",
+        "backend/tests/test_document_section_split.py",
+        "backend/tests/test_ingest_section_graph.py",
+        "backend/tests/test_entity_caps_scaling.py",
+        "backend/tests/test_concepts.py"
+      ],
+      "depends_on": [
+        "memory",
+        "knowledge-graph"
+      ],
+      "last_updated": "2026-04-26",
+      "status": "current"
+    },
+    "eval-baseline": {
+      "doc": "docs/concepts/eval-baseline.md",
+      "type": "concept",
+      "sources": [
+        "backend/tests/eval/runner.py",
+        "backend/tests/eval/queries.py",
+        "backend/tests/eval/queries_reference.py",
+        "backend/tests/eval/setup_reference.py",
+        "backend/tests/eval/test_eval_baseline.py",
+        "backend/tests/eval/test_baseline_floor.py",
+        "backend/tests/eval/test_runner_aggregation.py",
+        "backend/tests/eval/corpus.py"
+      ],
+      "depends_on": [
+        "retrieval",
+        "pdf-section-split"
+      ],
+      "last_updated": "2026-04-26",
+      "status": "current"
+    },
+    "api-key-management": {
+      "doc": "docs/features/api-key-management.md",
+      "type": "feature",
+      "sources": [
+        "frontend/app/composables/useApiKeys.ts",
+        "frontend/app/components/ProviderCard.vue",
+        "frontend/app/components/AddKeyModal.vue",
+        "frontend/app/components/KeyProtectionInfo.vue",
+        "frontend/app/types/index.ts"
+      ],
+      "depends_on": [
+        "preferences-settings",
+        "chat"
+      ],
+      "last_updated": "2026-04-16",
+      "status": "current"
+    },
+    "local-models": {
+      "doc": "docs/features/local-models.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/ollama_service.py",
+        "backend/routers/local_models.py",
+        "backend/routers/chat.py",
+        "backend/tests/test_local_models.py",
+        "backend/tests/test_local_models_integration.py",
+        "frontend/app/composables/useLocalModels.ts",
+        "frontend/app/composables/useLocalSetupFlow.ts",
+        "frontend/app/composables/useChat.ts",
+        "frontend/app/components/OllamaStatus.vue",
+        "frontend/app/components/LocalModelCard.vue",
+        "frontend/app/components/PullProgress.vue",
+        "frontend/app/components/OnboardingLocalFlow.vue",
+        "frontend/app/components/ChatPanel.vue",
+        "frontend/app/components/StatusBar.vue",
+        "frontend/app/pages/main.vue",
+        "frontend/app/pages/settings.vue",
+        "frontend/app/types/index.ts",
+        "frontend/tests/composables/useLocalModelsIntegration.test.ts"
+      ],
+      "depends_on": [
+        "chat",
+        "api-key-management",
+        "workspace-onboarding"
+      ],
+      "last_updated": "2026-04-17",
+      "status": "current"
+    },
+    "cross-source-linking": {
+      "doc": "docs/features/cross-source-linking.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/graph_service/cross_source.py",
+        "backend/services/graph_service/builder.py",
+        "backend/services/graph_service/__init__.py",
+        "backend/services/chunking.py",
+        "backend/services/embedding_service.py",
+        "backend/models/database.py",
+        "backend/routers/graph.py",
+        "backend/tests/test_cross_source.py"
+      ],
+      "depends_on": [
+        "knowledge-graph",
+        "soft-edges",
+        "jira-graph",
+        "enrichment-pipeline",
+        "memory"
+      ],
+      "last_updated": "2026-04-17",
+      "status": "current"
+    },
+    "jira-strategist": {
+      "doc": "docs/features/jira-strategist.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/tools/__init__.py",
+        "backend/services/tools/definitions.py",
+        "backend/services/tools/executor.py",
+        "backend/services/tools/jira_tools.py",
+        "backend/services/duel_presets.py",
+        "backend/services/specialist_service.py",
+        "backend/services/council.py",
+        "backend/routers/chat.py",
+        "backend/tests/test_jira_strategist.py"
+      ],
+      "depends_on": [
+        "specialists",
+        "jira-ingest",
+        "duel",
+        "knowledge-graph",
+        "enrichment-pipeline"
+      ],
+      "last_updated": "2025-07-27",
+      "status": "current"
+    }
+  }
+}
