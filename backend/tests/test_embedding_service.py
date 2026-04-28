@@ -186,3 +186,191 @@ def test_is_available_reflects_fastembed_install():
     import importlib.util
     expected = importlib.util.find_spec("fastembed") is not None
     assert embedding_service.is_available() == expected
+
+
+# ── Chunk-hash-skip on re-ingest (ADR 013 knob-2) ───────────────────────────
+
+
+class _CallCountingModel:
+    """Fake embedding model that counts how many texts it was asked to embed.
+
+    Used to verify that re-ingest of unchanged content skips the model
+    entirely, and that partial edits embed only the changed chunks.
+    """
+
+    def __init__(self):
+        self.embed_calls: list[list[str]] = []
+        self.total_texts_embedded = 0
+
+    def embed(self, texts):
+        import hashlib
+        texts = list(texts)
+        self.embed_calls.append(texts)
+        self.total_texts_embedded += len(texts)
+        for text in texts:
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            yield _FakeVec([(digest[i] - 128) / 128.0 for i in range(32)])
+
+
+class _FakeVec(list):
+    def tolist(self):
+        return list(self)
+
+
+@pytest.fixture
+def counting_embeddings(monkeypatch):
+    """Like ``enable_embeddings`` but returns the counter so tests can assert
+    on the number of texts the model was asked to embed."""
+    monkeypatch.delenv("JARVIS_DISABLE_EMBEDDINGS", raising=False)
+    counter = _CallCountingModel()
+    monkeypatch.setattr(embedding_service, "_model", counter)
+    monkeypatch.setattr(embedding_service, "_DIMENSIONS", 32)
+    monkeypatch.setattr(embedding_service, "is_available", lambda: True)
+    return counter
+
+
+@pytest.mark.anyio
+async def test_chunk_hash_skip_re_embeds_zero_chunks_when_unchanged(counting_embeddings, ws_db):
+    """Re-ingesting identical content must not call the embedding model again.
+
+    ``create_note`` triggers both ``embed_note`` (whole-note vector) and
+    ``embed_note_chunks``; we measure only the second invocation by
+    sampling the counter after creation finishes.
+    """
+    db_path = ws_db / "app" / "jarvis.db"
+    content = "---\ntitle: Test\n---\n\n# Section A\n\nBody one.\n\n# Section B\n\nBody two.\n"
+
+    await create_note("inbox/test.md", content, ws_db)
+    # Make sure chunks are populated (create_note may or may not have embedded them)
+    n_first = await embedding_service.embed_note_chunks("inbox/test.md", content, db_path)
+    assert n_first > 0
+
+    # Sample counter AFTER first chunk-embed; second call must not increment it
+    embeddings_before = counting_embeddings.total_texts_embedded
+    n_second = await embedding_service.embed_note_chunks("inbox/test.md", content, db_path)
+    assert n_second == n_first  # same chunk count
+    assert counting_embeddings.total_texts_embedded == embeddings_before, (
+        f"re-ingest of unchanged content should not call the embedding model, "
+        f"but {counting_embeddings.total_texts_embedded - embeddings_before} texts were embedded"
+    )
+
+
+@pytest.mark.anyio
+async def test_chunk_hash_skip_only_embeds_changed_chunks(counting_embeddings, ws_db):
+    """Editing one section should only re-embed that section's chunks."""
+    db_path = ws_db / "app" / "jarvis.db"
+    original = "---\ntitle: Test\n---\n\n# Section A\n\nThe original A body has enough words to make a real chunk plus some extras.\n\n# Section B\n\nSection B body is also long enough to be its own chunk with real text.\n"
+    edited = "---\ntitle: Test\n---\n\n# Section A\n\nThe ORIGINAL A body has enough words to make a real chunk plus some extras.\n\n# Section B\n\nSection B body is also long enough to be its own chunk with real text.\n"
+
+    await create_note("inbox/test.md", original, ws_db)
+    n_first = await embedding_service.embed_note_chunks("inbox/test.md", original, db_path)
+    assert n_first > 0
+
+    embeddings_before_edit = counting_embeddings.total_texts_embedded
+    n_second = await embedding_service.embed_note_chunks("inbox/test.md", edited, db_path)
+    new_embeddings = counting_embeddings.total_texts_embedded - embeddings_before_edit
+
+    # At least one chunk changed (Section A); at least one (Section B) didn't.
+    assert new_embeddings >= 1, "edited section should re-embed at least one chunk"
+    assert new_embeddings < n_first, (
+        f"partial edit re-embedded {new_embeddings}/{n_first} chunks; "
+        f"chunk-hash-skip should have reused at least one"
+    )
+
+
+@pytest.mark.anyio
+async def test_chunk_hash_skip_reuses_bit_identical_blobs(counting_embeddings, ws_db):
+    """Reused embeddings must be the SAME bytes as before — not re-encoded."""
+    db_path = ws_db / "app" / "jarvis.db"
+    content = "---\ntitle: Test\n---\n\n# Section A\n\nA body that's long enough to make at least one chunk.\n"
+
+    await create_note("inbox/test.md", content, ws_db)
+    await embedding_service.embed_note_chunks("inbox/test.md", content, db_path)
+
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute(
+            "SELECT chunk_index, embedding FROM chunk_embeddings WHERE path = ? ORDER BY chunk_index",
+            ("inbox/test.md",),
+        )
+        first_blobs = {row[0]: row[1] for row in await cursor.fetchall()}
+
+    # Re-ingest identical content
+    await embedding_service.embed_note_chunks("inbox/test.md", content, db_path)
+
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute(
+            "SELECT chunk_index, embedding FROM chunk_embeddings WHERE path = ? ORDER BY chunk_index",
+            ("inbox/test.md",),
+        )
+        second_blobs = {row[0]: row[1] for row in await cursor.fetchall()}
+
+    assert first_blobs.keys() == second_blobs.keys()
+    for idx, blob in first_blobs.items():
+        assert blob == second_blobs[idx], (
+            f"chunk {idx} blob changed across re-ingest of identical content"
+        )
+
+
+@pytest.mark.anyio
+async def test_chunk_hash_skip_replaces_obsolete_chunks_when_content_completely_changes(
+    counting_embeddings, ws_db
+):
+    """Re-ingesting wholly different content should drop old chunks and embed new.
+
+    The hash-skip path is per-chunk; if every chunk's hash misses the
+    snapshot, every chunk is re-embedded — and old DB rows are gone.
+    """
+    db_path = ws_db / "app" / "jarvis.db"
+    # Different titles ensure the anchor chunk also changes — otherwise the
+    # hash-skip path correctly reuses the anchor across re-ingest.
+    original = "---\ntitle: First Title\n---\n\n# Section A\n\nFirst body that is long enough to chunk meaningfully.\n"
+    rewritten = "---\ntitle: Second Title\n---\n\n# Section Z\n\nCompletely different text with no overlap whatsoever.\n"
+
+    await create_note("inbox/test.md", original, ws_db)
+    n_first = await embedding_service.embed_note_chunks("inbox/test.md", original, db_path)
+    assert n_first > 0
+
+    embeddings_before = counting_embeddings.total_texts_embedded
+    n_second = await embedding_service.embed_note_chunks("inbox/test.md", rewritten, db_path)
+    new_embeddings = counting_embeddings.total_texts_embedded - embeddings_before
+
+    assert n_second > 0
+    # Every chunk is new content, so every chunk must be embedded
+    assert new_embeddings == n_second, (
+        f"completely-changed content should re-embed every chunk; "
+        f"{new_embeddings}/{n_second} were embedded"
+    )
+
+    # Old chunks for this note should not coexist with new ones
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM chunk_embeddings WHERE path = ?",
+            ("inbox/test.md",),
+        )
+        row = await cursor.fetchone()
+    assert row[0] == n_second, "old chunks should have been deleted"
+
+
+@pytest.mark.anyio
+async def test_chunk_hash_skip_rebuilds_when_chunks_added(counting_embeddings, ws_db):
+    """Adding new content should embed only the new chunks, not re-embed the old."""
+    db_path = ws_db / "app" / "jarvis.db"
+    short = "---\ntitle: Test\n---\n\n# Section A\n\nSection A has enough body text to produce real chunks.\n"
+    longer = (
+        "---\ntitle: Test\n---\n\n# Section A\n\n"
+        "Section A has enough body text to produce real chunks.\n\n"
+        "# Section B\n\nSection B is brand new and should be the only chunk re-embedded.\n"
+    )
+
+    await create_note("inbox/test.md", short, ws_db)
+    n_first = await embedding_service.embed_note_chunks("inbox/test.md", short, db_path)
+    embeddings_before = counting_embeddings.total_texts_embedded
+
+    n_second = await embedding_service.embed_note_chunks("inbox/test.md", longer, db_path)
+    new_embeddings = counting_embeddings.total_texts_embedded - embeddings_before
+
+    assert n_second > n_first, "longer content should produce more chunks"
+    assert new_embeddings == (n_second - n_first), (
+        f"only the {n_second - n_first} new chunks should embed, "
+        f"but model was called for {new_embeddings}"
+    )

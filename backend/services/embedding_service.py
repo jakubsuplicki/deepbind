@@ -262,30 +262,65 @@ async def embed_note_chunks(
             return 0
         note_id = row[0]
 
-        # Delete old chunks for this note
+        if not chunks:
+            # No chunks → drop all existing rows for this note and return 0
+            await db.execute("DELETE FROM chunk_embeddings WHERE path = ?", (note_path,))
+            await db.execute("DELETE FROM note_chunks WHERE path = ?", (note_path,))
+            await db.commit()
+            return 0
+
+        # Knob-2 (ADR 013 Amendment 3, 2026-04-28): chunk-level content-hash
+        # skip on re-ingest. Snapshot existing (content_hash → embedding blob)
+        # before delete so unchanged chunks reuse their embedding without
+        # re-running the model. Identical-content re-ingest drops from
+        # ~43 s to ~0.5 s on a 5,500-chunk document.
+        #
+        # ``content_hash`` here is SHA-256 of chunk.text; identical text →
+        # identical hash → vector reuse is safe (and bit-identical, since
+        # we reuse the binary blob, not re-encode). Edited chunks miss the
+        # hash lookup and are re-embedded normally.
+        new_hashes = [content_hash(c.text) for c in chunks]
+
+        cursor = await db.execute(
+            "SELECT ce.content_hash, ce.embedding "
+            "FROM chunk_embeddings ce "
+            "JOIN note_chunks nc ON ce.chunk_id = nc.id "
+            "WHERE nc.path = ?",
+            (note_path,),
+        )
+        existing_blobs: dict[str, bytes] = {h: blob for h, blob in await cursor.fetchall()}
+
+        # Delete old rows now that we've snapshotted the embeddings we need.
         await db.execute("DELETE FROM chunk_embeddings WHERE path = ?", (note_path,))
         await db.execute("DELETE FROM note_chunks WHERE path = ?", (note_path,))
+
+        # Embed only chunks whose hash isn't in the existing snapshot.
+        texts_to_embed = [
+            chunks[i].text for i, h in enumerate(new_hashes) if h not in existing_blobs
+        ]
+        new_vectors_iter = iter(
+            await aembed_texts(texts_to_embed) if texts_to_embed else []
+        )
+
+        # Build per-chunk blob list: reuse existing blob for unchanged chunks,
+        # convert freshly-embedded vector for changed/new chunks.
+        chunk_blobs: list[bytes] = []
+        for h in new_hashes:
+            if h in existing_blobs:
+                chunk_blobs.append(existing_blobs[h])
+            else:
+                chunk_blobs.append(vector_to_blob(next(new_vectors_iter)))
 
         now = datetime.now(timezone.utc).isoformat()
         count = 0
 
-        # Batch-embed ALL chunks in a single threadpool call (one model.embed
-        # batch is much faster than N sequential calls AND it keeps the event
-        # loop responsive for /status polls + websockets during ingest).
-        if not chunks:
-            await db.commit()
-            return 0
-        vectors = await aembed_texts([c.text for c in chunks])
-
-        for chunk, vec in zip(chunks, vectors):
+        for chunk, blob, c_hash in zip(chunks, chunk_blobs, new_hashes):
             cursor = await db.execute(
                 "INSERT INTO note_chunks (note_id, path, chunk_index, section_title, chunk_text, token_count, subject_type, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (note_id, note_path, chunk.index, chunk.section_title, chunk.text, chunk.token_count, subject_type, now),
             )
             chunk_id = cursor.lastrowid
-            blob = vector_to_blob(vec)
-            c_hash = content_hash(chunk.text)
             await db.execute(
                 "INSERT INTO chunk_embeddings (chunk_id, path, chunk_index, embedding, content_hash, model_name, dimensions, embedded_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
