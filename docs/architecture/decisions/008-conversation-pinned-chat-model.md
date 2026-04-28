@@ -1,7 +1,7 @@
 # ADR 008 — Conversation-pinned chat model; mid-session swap policy
 
 **Status:** Accepted
-**Date:** 2026-04-27
+**Date:** 2026-04-27 (initial), amended 2026-04-28 (Ollama thinking-toggle mechanism finding)
 **Related:** [ADR 004](004-inference-router-architecture.md) · [ADR 009](009-context-overflow-compaction.md) · [`docs/research/models/model-research-4.md`](../../research/models/model-research-4.md) · [`docs/features/duel.md`](../../features/duel.md) · [`docs/features/sessions.md`](../../features/sessions.md)
 
 ## Context
@@ -84,10 +84,33 @@ When the user explicitly swaps mid-conversation:
 
 The reasoning mode toggle (Instruct ↔ Thinking) depends on which Qwen3 variant the chat slot uses:
 
-- **If the slot is the original Qwen3-30B-A3B (hybrid, May 2025):** Instruct ↔ Thinking is a prompt-format flip on the resident model. Free. Exposed as a per-conversation "thinking depth" toggle.
+- **If the slot is the original Qwen3-30B-A3B (hybrid, May 2025):** Instruct ↔ Thinking is a runtime flag on the resident model. Free. Exposed as a per-conversation "thinking depth" toggle. The toggle mechanism is non-obvious; see "Thinking-toggle mechanism on Ollama" below for the load-bearing detail.
 - **If the slot is the -2507 split (Qwen3-30B-A3B-Instruct-2507 + Qwen3-30B-A3B-Thinking-2507):** Thinking is a separate model. Engaging it is a swap, with all the swap caveats above. **Required to be a user gesture, not auto-route.**
 
 The choice between hybrid and split is a real trade documented below (D12 trade); v1 adopts the **hybrid Qwen3-30B-A3B** for the chat + reasoning slot to enable free mode toggle. The -2507 variants are recorded as a future-quality upgrade path, conditional on storage budget and observed user demand for higher-tier reasoning.
+
+### Thinking-toggle mechanism on Ollama (added 2026-04-28)
+
+The hybrid Qwen3-30B-A3B documents two prompt directives, `/think` and `/no_think`, that should toggle thinking-mode on a per-message basis. **On Ollama 0.18 these directives are not honored when placed in the system or user message** — the model still decodes the full chain-of-thought, Ollama strips the opening `<think>` tag but leaves the prose plus the closing `</think>` in the response body. Putting `/no_think` in the system prompt did not change observed latency or token output in the conversation-replay eval harness.
+
+The mechanism that **does** work on Ollama 0.18 is the top-level `think: false` boolean on the `/api/chat` request body:
+
+```json
+{
+  "model": "qwen3:30b-a3b",
+  "messages": [...],
+  "think": false,
+  "options": {"temperature": 0, "seed": 42}
+}
+```
+
+Empirically the cost difference is roughly 20× on a "say hi" turn (≈10s with thinking on, ≈500ms with thinking off on Qwen3-14B). The eval harness adopted this as the default for ADR 010's gate runs because the production `/no_think` posture must actually be measurable; without it, every measurement was inflated by a thinking-decode pass the directive failed to suppress.
+
+Production implication: when the chat slot toggles thinking depth per conversation (the hybrid's "free toggle" property), the toggle must be applied via the API parameter, not by mutating the system prompt with a directive. The `OllamaChat` adapter at [`chat_adapters.py`](../../../backend/tests/eval/conversations/chat_adapters.py) shows the working shape; production wiring should match.
+
+A secondary finding worth recording: even with `think: false`, the Qwen3 model still emits chain-of-thought *content* (the model's reasoning prose), and Ollama 0.18 only strips the opening `<think>` tag — leaving the prose plus closing `</think>` in the response body. The eval-side adapter strips everything up to and including the last `</think>` before returning the response, on the grounds that production with a properly-configured `/no_think` would not surface the prose either. Production wiring should apply the same strip until upstream (Ollama or the model) handles the close tag cleanly.
+
+(Cross-version note: this finding is specific to Ollama 0.18.0, which the project is pinned to because Ollama 0.21.x segfaults on Apple M5 + macOS 26 — see [ADR 010](010-conversation-replay-eval-harness.md). When upgrading past 0.21.x once that regression is fixed upstream, re-verify the toggle mechanism — Ollama may honor the prompt directive in a later version.)
 
 ### Per-turn `model_id` in session schema
 
