@@ -21,7 +21,7 @@ sources:
 	- frontend/app/pages/settings.vue
 	- frontend/app/types/index.ts
 	- frontend/tests/composables/useLocalModelsIntegration.test.ts
-depends_on: [chat, api-key-management, workspace-onboarding]
+depends_on: [chat, api-key-management, workspace-onboarding, inference-router, profiles]
 last_reviewed: 2026-04-28
 last_updated: 2026-04-28
 ---
@@ -93,7 +93,29 @@ The catalog covers the spectrum from weak laptops to workstations across eight p
 
 Each internal entry carries a `TODO: verify Ollama tag` comment in [`ollama_service.py`](../../backend/services/ollama_service.py). Promotion to user-pickable requires verifying the tag against `https://ollama.com/library/<name>`, then flipping `internal=False`.
 
-Internal entries are present in `MODEL_CATALOG` but excluded from `build_catalog()` unless the caller passes `include_internal=True`. The future InferenceRouter ([ADR 004](../architecture/decisions/004-inference-router-architecture.md)) is the consumer.
+Internal entries are present in `MODEL_CATALOG` but excluded from `build_catalog()` unless the caller passes `include_internal=True`. The [InferenceRouter](inference-router.md) ([ADR 004](../architecture/decisions/004-inference-router-architecture.md)) is the consumer.
+
+### KV-aware footprint accounting
+
+Per ADR 004 §"KV-aware footprint accounting", every catalog entry carries:
+
+- `bytes_per_kv_token: int` — approximate per-token KV cache cost, derived from architectural intuition for ADR 004 §"KV-aware footprint accounting". Granite 4 hybrid-mamba models report ~256–1024 bytes/token (state-space cache is fixed-size); Gemma 4 SWA models ~1024–1536 bytes/token (only the sliding window is stored); transformer Qwen3 / Devstral land at 2048–5120 bytes/token. The ratios across architectures (mamba << swa < transformer) are the load-bearing signal; absolute numbers are refined as measurement data lands.
+- `attention_arch: Literal["transformer", "mamba", "swa"]` — Literal-typed so a typo in a catalog entry fails at construction. Drives the architectural footprint difference.
+- `slot_class: str` — which stack slot the model fills (see [ProfilePack](profiles.md)). The router's `dispatch()` reads this to fill the audit decision; the keep_alive policy table reads it to decide eviction cadence.
+
+`effective_footprint_bytes(entry, ctx_len_now) → int` computes `weights + bytes_per_kv_token × ctx_len_now` and is the predicate the router will use for `can_load(model)` checks once the production-grade memory-pressure signals land (ADR 003 gate).
+
+### Per-slot keep_alive policy
+
+`KEEP_ALIVE_BY_SLOT` (in [`ollama_service.py`](../../backend/services/ollama_service.py)) maps slot class to Ollama `keep_alive` semantics per ADR 004 §"`keep_alive` policy table":
+
+| Slot class | keep_alive | Rationale |
+|---|---|---|
+| `embedding` / `plumbing` | `-1` (forever) | Always-resident; latency-critical, cheap to hold |
+| `conversational` / `reasoning` / `long_context` / `best_local` | `30m` | Behavior preservation — today's hard-coded value |
+| `code` / `vision` | `5m` | On-demand; evict aggressively to free unified memory |
+
+`warm_up_model()` consumes this policy: when called without an explicit `slot_class`, it looks up the catalog entry by `ollama_model` and uses the entry's `slot_class`. Falls back to `DEFAULT_KEEP_ALIVE = "30m"` for non-catalog models.
 
 ### Recommendation Engine
 
@@ -135,7 +157,9 @@ Old taxonomy → new taxonomy mapping (for any external integrations that still 
 
 ### Chat Integration
 
-`_make_llm()` in `chat.py` routes `provider == "ollama"` to `LLMService` with `api_base` set to the Ollama URL and a 600s timeout (vs 120s for cloud). No API key is required — the sentinel value `"ollama"` satisfies LiteLLM's non-empty requirement.
+`_make_llm()` in `chat.py` routes through the [InferenceRouter](inference-router.md) (ADR 004) — for `provider == "ollama"`, the router resolves the user-selected model against the catalog and produces a `DispatchDecision`; `_llm_from_decision()` then constructs an `LLMService` with `api_base` set to the Ollama URL and a 1800s timeout (vs 120s for cloud). No API key is required — the sentinel value `"ollama"` satisfies LiteLLM's non-empty requirement.
+
+The chat WS `done` event includes a `route` field with the routing decision's audit dict (`provider`, `model_id`, `request_class`, `slot_class`, `reason`). Frontends consume this to render which slot served the turn.
 
 ## Key Files
 

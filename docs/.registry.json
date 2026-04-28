@@ -714,11 +714,44 @@
       "depends_on": [
         "chat",
         "api-key-management",
-        "workspace-onboarding"
+        "workspace-onboarding",
+        "inference-router",
+        "profiles"
       ],
       "last_updated": "2026-04-28",
       "status": "current",
-      "_note_2026_04_28": "Catalog correctness pass: fixed Qwen3 native contexts (32K not 40K/256K), Devstral native (256K not 384K), renamed Gemma 4 27B (nonexistent) to Gemma 4 26B-A4B; added Qwen3-14B, Qwen3-30B-A3B-Instruct-2507, Qwen3-4B-Instruct-2507, Granite 4.0 H-Micro/H-Tiny/H-Small. Per code review: all entries with unverified Ollama tags carry internal=True (filtered from user picker until tags are verified against ollama.com/library) — user-pickable list is the 6 original entries with verified tags, internal universe is 7 entries reserved for the future InferenceRouter (ADR 004). Each internal entry carries a TODO: verify Ollama tag comment. Tool_mode taxonomy renamed: native→native_qwen3, json_fallback→adapted, limited→excluded_from_tools (per ADR 004 'Tool-format hardening'). Added probe_runtime_load() + GET /api/local/runtime/load — pure-Python scaffold for the dispatcher's runtime-load signal (psutil + Ollama /api/ps); macOS branch graduates to Tauri-native after ADR 003."
+      "_note_2026_04_28": "Catalog correctness pass: fixed Qwen3 native contexts (32K not 40K/256K), Devstral native (256K not 384K), renamed Gemma 4 27B (nonexistent) to Gemma 4 26B-A4B; added Qwen3-14B, Qwen3-30B-A3B-Instruct-2507, Qwen3-4B-Instruct-2507, Granite 4.0 H-Micro/H-Tiny/H-Small. Per code review: all entries with unverified Ollama tags carry internal=True (filtered from user picker until tags are verified against ollama.com/library) — user-pickable list is the 6 original entries with verified tags, internal universe is 7 entries reserved for the future InferenceRouter (ADR 004). Each internal entry carries a TODO: verify Ollama tag comment. Tool_mode taxonomy renamed: native→native_qwen3, json_fallback→adapted, limited→excluded_from_tools (per ADR 004 'Tool-format hardening'). Added probe_runtime_load() + GET /api/local/runtime/load — pure-Python scaffold for the dispatcher's runtime-load signal (psutil + Ollama /api/ps); macOS branch graduates to Tauri-native after ADR 003. Catalog gained ADR-004 fields: bytes_per_kv_token / attention_arch (transformer|mamba|swa) / slot_class (consumed by InferenceRouter for footprint accounting and slot lookup). Per-slot keep_alive policy table (KEEP_ALIVE_BY_SLOT) replaces the hard-coded '30m'; warm_up_model() reads the policy via the catalog entry's slot_class so plumbing/embedding stay forever-resident, on-demand slots evict in 5m."
+    },
+    "inference-router": {
+      "doc": "docs/features/inference-router.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/inference_router.py",
+        "backend/services/ollama_service.py",
+        "backend/routers/chat.py",
+        "backend/tests/test_inference_router.py",
+        "backend/tests/test_chat_ws.py"
+      ],
+      "depends_on": [
+        "local-models",
+        "profiles"
+      ],
+      "last_updated": "2026-04-28",
+      "status": "scaffold",
+      "_note_2026_04_28": "InferenceRouter skeleton per ADR 004 §'Buildable today': rule-based classifier (chat|tool|code), profile-driven slot lookup, DispatchDecision audit trail. Wired into routers/chat.py: chat handler routes via _route_request() then constructs LLM via _llm_from_decision(); _handle_message emits decision.to_audit_dict() in WS done event for runtime UI consumption. Behavior preservation: legacy single-model installs short-circuit via _resolve_local_override (user-picked model → identity dispatch). Profile-driven path activates when no model override is set. Code-review hardening rounds 1+2 (2026-04-28): _get_llm cache keyed on routed (provider,model,base_url) from the DispatchDecision rather than user input — keeps cache and audit consistent once profile-driven multi-slot installs ship; privacy gate centralised inside _route_request so every entry point (chat handler, duel handler, _make_llm test shim) gets it consistently and only once per call; InferenceRouter.dispatch() is intentionally privacy-naive with the boundary documented at the module docstring level so future non-chat callers know they own the privacy assertion; duel handler also routes through _route_request so it shares the cache and audit shape with chat turns; chat handler passes tools=None to classify (TOOLS is always-populated in this codebase, would dominate every request as 'tool' otherwise; classifier 'tool' branch preserved as the seam ADR 004 enumerates for future explicit-tools call sites); type hints (\"DispatchDecision\") added on _get_llm/_llm_from_decision via TYPE_CHECKING import. Deferred per ADR 004 §'Blocked by upstream ADRs': downgrade-ladder walking under memory pressure (needs production-grade Apple Silicon signals, ADR 003), pinned_loadout enforcement (ADR 008), ML classifier upgrade."
+    },
+    "profiles": {
+      "doc": "docs/features/profiles.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/profile_service.py",
+        "backend/services/_config_io.py",
+        "backend/tests/test_inference_router.py"
+      ],
+      "depends_on": [],
+      "last_updated": "2026-04-28",
+      "status": "scaffold",
+      "_note_2026_04_28": "ProfilePack schema + initial 3-profile scaffold per ADR 005: generic-knowledge-worker (default), developer-devops (coder ladder), patent-prosecutor (no coder, vision required). Schema lands now; remaining 6 profiles in ADR 005's catalog table deferred until domain validation per ADR 005 §'Open follow-ups' #1. get_active_profile() reads app/config.json:active_profile_id with fallback to DEFAULT_PROFILE_ID. Embedding/TTS slot specs are name-only placeholders pending the embedding+TTS slot consumers. Tauri-side profile picker / change UX deferred to post-ADR-003. Code-review hardening rounds 1+2 (2026-04-28): mtime-cached get_active_profile (router's hot path no longer re-reads config every WS message); set_active_profile / set_active_local_model / clear_active_local_model all routed through services/_config_io.py:locked_config_update which (a) takes a POSIX fcntl.flock so concurrent writers can't lose each other's updates via read-modify-write race, (b) writes via atomic_write_json (temp-file + fsync + os.replace + parent-dir fsync, atomic against process crash and best-effort against power loss), (c) skips on unchanged so no-op writes don't bump mtime and invalidate the cache. context_perf_mode_default is Literal-typed so typos fail at construction. validate_profile_catalog() catches model_id typos at CI time; _walk_slot_specs has a schema-drift introspection test (TestWalkSlotSpecs) that asserts ProfileStack.model_fields matches the walker — adding a new optional slot without updating _walk_slot_specs fails CI. KNOWN_PLACEHOLDER_MODEL_IDS is the explicit allowlist for intentional placeholders. Multi-worker note: cache is process-local; uvicorn --workers N has eventual consistency across workers — single-worker desktop binary per ADR 003 makes this moot today."
     },
     "licensing": {
       "doc": "docs/features/licensing.md",

@@ -354,3 +354,75 @@ async def test_ws_falls_back_to_server_key_without_client_key(mock_api_key, mock
             text_events = [e for e in events if e["type"] == "text_delta"]
             assert len(text_events) >= 1
             assert text_events[0]["content"] == "Fallback"
+
+
+
+# ── ADR 004 audit trail (route field on done event) ──────────────────────────
+
+
+@pytest.mark.anyio
+async def test_ws_done_event_includes_route_audit(mock_api_key, mock_claude_stream):
+    """The done event carries the InferenceRouter's audit decision so the
+    runtime UI panel can render which slot served the turn (ADR 004)."""
+    mock_claude_stream.stream_response = _fake_stream(
+        StreamEvent(type="text_delta", content="ok"),
+    )
+
+    from starlette.testclient import TestClient
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws") as ws:
+            ws.receive_json()  # session_start
+            ws.send_json({"content": "Hi"})
+
+            done = None
+            while True:
+                msg = ws.receive_json()
+                if msg["type"] == "done":
+                    done = msg
+                    break
+
+            assert done is not None
+            assert "route" in done, "done event must carry route audit (ADR 004)"
+            route = done["route"]
+            # Wire-format hygiene: only the audit fields, not the model string
+            # or base_url. These are the fields the runtime UI panel reads.
+            assert set(route.keys()) == {
+                "provider", "model_id", "request_class", "slot_class", "reason",
+            }
+            assert route["provider"] == "anthropic"  # default cloud provider
+            assert route["request_class"] == "chat"
+            assert route["slot_class"] == "conversational"
+            assert route["model_id"] is None  # cloud — no catalog id
+
+
+@pytest.mark.anyio
+async def test_ws_done_event_route_reflects_classifier_for_code_request(mock_api_key, mock_claude_stream):
+    """A user message containing a code fence should classify as 'code'
+    in the audit, even when the chat slot still serves the request (no
+    coder slot is available in the default profile, so dispatch falls
+    back to conversational — but the classifier output is preserved)."""
+    mock_claude_stream.stream_response = _fake_stream(
+        StreamEvent(type="text_delta", content="ok"),
+    )
+
+    from starlette.testclient import TestClient
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws") as ws:
+            ws.receive_json()  # session_start
+            ws.send_json({"content": "fix this:\n```py\nprint(1)\n```"})
+
+            done = None
+            while True:
+                msg = ws.receive_json()
+                if msg["type"] == "done":
+                    done = msg
+                    break
+
+            assert done is not None
+            # Default profile has no coder slot for cloud anthropic anyway —
+            # cloud always reports slot_class="conversational" since cloud
+            # dispatch is identity. The classifier output is what we care
+            # about here as the audit signal.
+            assert done["route"]["request_class"] == "code"

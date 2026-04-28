@@ -1,8 +1,23 @@
 # ADR 005 — Profile-driven model stacks (`ProfilePack`)
 
 **Status:** Accepted
-**Date:** 2026-04-27
+**Date:** 2026-04-27 (initial), amended 2026-04-28 (schema + 3-profile scaffold landed)
 **Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 004](004-inference-router-architecture.md) · [ADR 006](006-offline-signed-license.md) · [`docs/research/angle-engineering-firms.md`](../../research/angle-engineering-firms.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §11.7
+
+## Implementation status (2026-04-28)
+
+The schema and a **3-profile starter catalog** landed in [`backend/services/profile_service.py`](../../../backend/services/profile_service.py): `generic-knowledge-worker` (default), `developer-devops`, `patent-prosecutor`. Schema matches §"Schema" exactly — `ProfilePack` / `ProfileStack` / `SlotSpec` / `SlotLadder` are Pydantic models, with `embeddings`/`plumbing`/`conversational`/`reasoning` required and the rest optional (`None` = slot not provisioned).
+
+The [InferenceRouter](../../features/inference-router.md) ([ADR 004](004-inference-router-architecture.md)) consumes `get_active_profile()` on each dispatch — config edits to `app/config.json:active_profile_id` take effect without a backend restart. `set_active_profile()` is the persistence path; it validates against the catalog (raises `ValueError` on unknown id) so a typo can't silently install a non-existent profile.
+
+What deliberately did NOT land in this chunk:
+
+- **The other 6 profiles in §"Initial profile catalog".** Per §"Open follow-ups" #1, those need domain validation by someone close to each vertical (mining / architecture / medical / etc.). Shipping guesses-as-defaults for unvalidated domains would be worse than shipping fewer, honestly-scoped profiles.
+- **Tauri-side onboarding picker UI.** The schema is ready; the picker surface is gated on [ADR 003](003-desktop-distribution-tauri-and-sidecars.md).
+- **Profile change with delta downloads + 30-day GC.** Same gate.
+- **License `allowed_profiles` cross-check.** ADR 006's Tauri-side license loader is the prerequisite — until then, `set_active_profile()` validates only against the catalog (not against `LicenseClaims.allowed_profiles`).
+
+26 tests in [`test_inference_router.py`](../../../backend/tests/test_inference_router.py) cover schema shape, default fallback, slot-ladder integrity, and the integration with the router (developer profile routes code to coder slot, patent profile drops code requests back to chat slot since it has no coder).
 
 ## Context
 

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -13,6 +13,9 @@ from services.llm_service import LLMConfig, LLMService, DEFAULT_MODELS
 from services.tools import TOOLS, ToolNotFoundError, execute_tool
 from services.token_tracking import check_budget, log_usage
 from services.workspace_service import get_api_key
+
+if TYPE_CHECKING:
+    from services.inference_router import DispatchDecision
 
 logger = logging.getLogger(__name__)
 
@@ -264,34 +267,72 @@ async def _stream_follow_up(
     return text
 
 
-def _make_llm(provider: Optional[str], model: Optional[str], api_key: str, base_url: Optional[str] = None):
-    """Create an LLMService for the given provider, or ClaudeService as fallback."""
-    from services.privacy import assert_provider_allowed
+def _llm_from_decision(decision: "DispatchDecision", api_key: str):
+    """Construct an LLM service from a routing decision.
 
-    # Privacy gate: block cloud providers when offline mode / cloud disabled.
-    # Ollama and "anthropic"-by-default both pass through to provider checks.
-    effective_provider = provider or "anthropic"
-    assert_provider_allowed(effective_provider)
-
-    if provider == "ollama":
+    Per ADR 004, model selection runs through the InferenceRouter; this helper
+    is the construction step after routing has already chosen provider+model.
+    Splitting it out avoids re-routing when both the chat handler and
+    `_make_llm()` would otherwise dispatch the same request twice.
+    """
+    if decision.provider == "ollama":
         from services.ollama_service import DEFAULT_OLLAMA_BASE_URL
         config = LLMConfig(
             provider="ollama",
-            model=model or DEFAULT_MODELS.get("ollama", "ollama_chat/qwen3:8b"),
+            model=decision.model or DEFAULT_MODELS.get("ollama", "ollama_chat/qwen3:8b"),
             api_key="ollama",  # LiteLLM needs a non-empty string
-            api_base=base_url or DEFAULT_OLLAMA_BASE_URL,
+            api_base=decision.base_url or DEFAULT_OLLAMA_BASE_URL,
             timeout=1800,
         )
         return LLMService(config)
-    if provider and provider != "anthropic":
+    if decision.provider and decision.provider != "anthropic":
         config = LLMConfig(
-            provider=provider,
-            model=model or DEFAULT_MODELS.get(provider, "gpt-4o"),
+            provider=decision.provider,
+            model=decision.model or DEFAULT_MODELS.get(decision.provider, "gpt-4o"),
             api_key=api_key,
         )
         return LLMService(config)
     # Anthropic — use native ClaudeService for best streaming fidelity
     return ClaudeService(api_key=api_key)
+
+
+def _route_request(
+    provider: Optional[str],
+    model: Optional[str],
+    base_url: Optional[str],
+    messages: Optional[list] = None,
+    tools: Optional[list] = None,
+):
+    """Classify the request and dispatch through the InferenceRouter (ADR 004).
+
+    Enforces the privacy gate (`assert_provider_allowed`) before routing —
+    centralised here so every entry point (chat handler, duel handler, the
+    `_make_llm` test shim) gets the gate consistently and only once per call.
+
+    Returns a `DispatchDecision`. The chat handler calls this once per turn,
+    feeds the decision to `_llm_from_decision()`, and emits the decision's
+    audit fields in the WS `done` event so the runtime UI panel can show
+    `request_class` / `slot_class` / routing reason.
+    """
+    from services.inference_router import classify, get_router
+    from services.privacy import assert_provider_allowed
+
+    assert_provider_allowed(provider or "anthropic")
+    request_class = classify(messages, tools)
+    return get_router().dispatch(provider, model, base_url, request_class)
+
+
+def _make_llm(provider: Optional[str], model: Optional[str], api_key: str, base_url: Optional[str] = None):
+    """Create an LLMService for the given provider, routing through ADR 004.
+
+    Back-compat entry point: tests pass concrete provider+model and expect a
+    constructed LLM. The privacy gate runs inside `_route_request` so it's
+    not duplicated here. The router's dispatch is identity-on-override for
+    catalog-known models, so the constructed model string is unchanged from
+    pre-router behavior on legacy single-model installs.
+    """
+    decision = _route_request(provider, model, base_url)
+    return _llm_from_decision(decision, api_key)
 
 
 async def _handle_message(
@@ -333,8 +374,25 @@ async def _handle_message(
         await _send_event(ws, "warning", content=f"Approaching daily token budget ({budget['percent']:.0f}% used).")
 
     from services.privacy import PrivacyBlockedError
+    # Route the request once. `_route_request` enforces the privacy gate, so
+    # a blocked provider raises before LLM construction. Routing before
+    # construction keeps the cache key tracking the *resolved* model — required
+    # to keep cache and decision in sync once profile-driven multi-slot installs
+    # ship (the resolved model can differ from the user-selected `model` when
+    # the user hasn't picked one). The decision is also surfaced in the WS
+    # `done` event for the runtime UI panel (ADR 004 audit trail).
     try:
-        claude = get_llm(api_key or "", provider, model, base_url) if get_llm else _make_llm(provider, model, api_key or "", base_url)
+        # `tools` is always populated in this codebase (TOOLS list flows from
+        # the specialist filter) so it carries no per-request signal — pass
+        # `tools=None` to the classifier so content-based rules (code-fence
+        # detection) actually drive the decision. When future call sites
+        # have request-specific tool descriptors, they can pass them through.
+        decision = _route_request(provider, model, base_url, messages=messages, tools=None)
+        claude = (
+            get_llm(api_key or "", decision)
+            if get_llm
+            else _llm_from_decision(decision, api_key or "")
+        )
     except PrivacyBlockedError as exc:
         await _send_event(ws, "error", content=str(exc))
         await _send_event(ws, "done", session_id=session_id)
@@ -426,6 +484,9 @@ async def _handle_message(
         "session_id": session_id,
         "model": model or "claude-sonnet-4-20250514",
         "provider": provider or "anthropic",
+        # ADR 004 audit trail: the runtime UI panel reads these fields to
+        # render "this turn was served by slot X because Y".
+        "route": decision.to_audit_dict(),
     }
     # Include tool_mode for local models so the frontend can show tool support info
     if provider == "ollama" and model:
@@ -503,7 +564,10 @@ async def _handle_duel(
         await _send_event(ws, "error", content=str(exc))
         return
 
-    claude = get_llm(api_key, provider, model)
+    # Duel is conversational by design — route via InferenceRouter so it
+    # composes with the same cache key as regular chat turns on the connection.
+    duel_decision = _route_request(provider, model, None)
+    claude = get_llm(api_key, duel_decision)
     orchestrator = DuelOrchestrator(claude)
 
     try:
@@ -593,15 +657,18 @@ async def chat_ws(websocket: WebSocket) -> None:
         await _send_event(websocket, "session_history", messages=existing)
 
     # Reuse a single LLM service per connection to avoid per-message HTTP pool churn.
-    # Cache is keyed on (api_key, provider, model) — changed key/provider creates new instance.
+    # Cache is keyed on the *resolved* (api_key, provider, model, base_url) from the
+    # router's DispatchDecision so a profile-driven slot swap mid-connection rebuilds
+    # the LLM rather than serving the cached one for a different slot — required by
+    # ADR 004 to keep the audit trail and the actual generation consistent.
     _connection_llm = None
-    _connection_llm_key: tuple = (None, None, None, None)  # (api_key, provider, model, base_url)
+    _connection_llm_key: tuple = (None, None, None, None)
 
-    def _get_llm(api_key: str, provider: Optional[str] = None, model: Optional[str] = None, base_url: Optional[str] = None):
+    def _get_llm(api_key: str, decision: "DispatchDecision"):
         nonlocal _connection_llm, _connection_llm_key
-        cache_key = (api_key, provider, model, base_url)
+        cache_key = (api_key, decision.provider, decision.model, decision.base_url)
         if _connection_llm is None or _connection_llm_key != cache_key:
-            _connection_llm = _make_llm(provider, model, api_key, base_url)
+            _connection_llm = _llm_from_decision(decision, api_key)
             _connection_llm_key = cache_key
         return _connection_llm
 

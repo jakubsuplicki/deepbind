@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import ipaddress
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -129,6 +129,15 @@ class ModelCatalogEntry(BaseModel):
     best_for: List[str]
     native_tools: bool
     internal: bool = False  # True for plumbing/classifier slots not exposed in the user-facing chat picker
+    # ADR 004 §"KV-aware footprint accounting" fields. Effective footprint at
+    # request time = weights + bytes_per_kv_token × ctx_len_now. The values
+    # are approximate, derived from architectural intuition for ADR 004 §"KV-aware
+    # footprint accounting"; they're refined as measurement data lands. The
+    # ratios across architectures (mamba << swa < transformer) are the
+    # load-bearing signal, not the absolute numbers.
+    bytes_per_kv_token: int = 4096  # transformer default; mamba/swa override below
+    attention_arch: Literal["transformer", "mamba", "swa"] = "transformer"
+    slot_class: str = "conversational"  # "conversational" | "long_context" | "reasoning" | "code" | "best_local" | "plumbing" | "embedding" | "vision"
 
 
 class ModelRecommendation(BaseModel):
@@ -241,6 +250,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["fast", "multilingual", "lightweight", "128K via YaRN"],
         best_for=["quick chat", "weak hardware", "testing"],
         native_tools=False,
+        bytes_per_kv_token=2048,
+        attention_arch="transformer",
+        slot_class="conversational",
     ),
     ModelCatalogEntry(
         id="qwen3-4b",
@@ -259,6 +271,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["balanced", "multilingual", "128K via YaRN"],
         best_for=["everyday chat", "multilingual tasks", "moderate hardware"],
         native_tools=False,
+        bytes_per_kv_token=3072,
+        attention_arch="transformer",
+        slot_class="conversational",
     ),
     ModelCatalogEntry(
         id="qwen3-8b",
@@ -277,6 +292,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["universal", "multilingual", "tool calling", "128K via YaRN"],
         best_for=["everyday chat", "tools", "general use"],
         native_tools=True,
+        bytes_per_kv_token=4096,
+        attention_arch="transformer",
+        slot_class="conversational",
     ),
     ModelCatalogEntry(
         id="ministral-3-8b",
@@ -295,6 +313,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["long context", "documents", "edge deployment"],
         best_for=["long documents", "big context windows", "research"],
         native_tools=False,
+        bytes_per_kv_token=3072,
+        attention_arch="transformer",
+        slot_class="long_context",
     ),
     ModelCatalogEntry(
         id="gemma4-e4b",
@@ -313,6 +334,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["reasoning", "agentic", "multimodal"],
         best_for=["reasoning tasks", "agentic workflows", "analysis"],
         native_tools=True,
+        bytes_per_kv_token=1024,
+        attention_arch="swa",
+        slot_class="reasoning",
     ),
     ModelCatalogEntry(
         id="devstral-small-2-24b",
@@ -331,6 +355,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["coding", "repo exploration", "multi-file edits", "384K via RoPE extension"],
         best_for=["code generation", "software engineering", "repo work"],
         native_tools=True,
+        bytes_per_kv_token=5120,
+        attention_arch="transformer",
+        slot_class="code",
     ),
     # ──────────────────────────────────────────────────────────────────────
     # Entries below are present in the catalog universe (consumed by the
@@ -363,6 +390,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         best_for=["best quality", "complex tasks", "premium local"],
         native_tools=True,
         internal=True,
+        bytes_per_kv_token=1536,
+        attention_arch="swa",
+        slot_class="best_local",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — Qwen3 -2507 split fine-tunes use various
@@ -384,6 +414,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         best_for=["long documents on light hardware", "instruction following"],
         native_tools=True,
         internal=True,
+        bytes_per_kv_token=3072,
+        attention_arch="transformer",
+        slot_class="long_context",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — `qwen3:14b` is plausible but unverified.
@@ -404,6 +437,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         best_for=["everyday chat on 24 GB unified memory", "tools", "general use"],
         native_tools=True,
         internal=True,
+        bytes_per_kv_token=5120,
+        attention_arch="transformer",
+        slot_class="conversational",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — required by ADR 008 as the v1 chat-pinned
@@ -425,6 +461,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         best_for=["best local chat", "long conversations", "tools"],
         native_tools=True,
         internal=True,
+        bytes_per_kv_token=4096,
+        attention_arch="transformer",
+        slot_class="best_local",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — IBM Granite 4.0 tag conventions vary
@@ -446,6 +485,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         best_for=["plumbing/dispatcher classifier slot"],
         native_tools=False,
         internal=True,
+        bytes_per_kv_token=256,
+        attention_arch="mamba",
+        slot_class="plumbing",
     ),
     ModelCatalogEntry(
         id="granite-4-h-tiny",
@@ -465,6 +507,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         best_for=["plumbing/dispatcher mid-tier"],
         native_tools=False,
         internal=True,
+        bytes_per_kv_token=512,
+        attention_arch="mamba",
+        slot_class="plumbing",
     ),
     ModelCatalogEntry(
         id="granite-4-h-small",
@@ -484,6 +529,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         best_for=["plumbing/dispatcher top-tier"],
         native_tools=True,
         internal=True,
+        bytes_per_kv_token=1024,
+        attention_arch="mamba",
+        slot_class="plumbing",
     ),
 ]
 
@@ -517,6 +565,28 @@ def get_catalog() -> List[ModelCatalogEntry]:
 def get_model_by_id(model_id: str) -> Optional[ModelCatalogEntry]:
     """Look up a model by its catalog ID."""
     return _CATALOG_BY_ID.get(model_id)
+
+
+def get_model_by_litellm(litellm_model: str) -> Optional[ModelCatalogEntry]:
+    """Look up a catalog entry by its LiteLLM model string."""
+    if not litellm_model:
+        return None
+    for entry in MODEL_CATALOG:
+        if entry.litellm_model == litellm_model:
+            return entry
+    return None
+
+
+def effective_footprint_bytes(entry: ModelCatalogEntry, ctx_len_now: int) -> int:
+    """Per ADR 004 §"KV-aware footprint accounting".
+
+    Effective footprint = weights + bytes_per_kv_token × ctx_len_now. The
+    InferenceRouter's `can_load(model)` uses this rather than `download_size_gb`
+    alone — a long Jira-ingest can balloon the chat-model footprint mid-session
+    and a weights-only check would underestimate the swap risk.
+    """
+    weights = int(entry.download_size_gb * (1024 ** 3))
+    return weights + entry.bytes_per_kv_token * max(0, ctx_len_now)
 
 
 # ── Hardware Probe ───────────────────────────────────────────────────────────
@@ -1035,9 +1105,69 @@ async def delete_model(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL) -> b
 # ── Model Warm-up ────────────────────────────────────────────────────────────
 
 
-async def warm_up_model(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL) -> bool:
-    """Send a tiny prompt to keep model loaded in Ollama memory."""
+# Per ADR 004 §"`keep_alive` policy table" — the per-slot policy mapping. The
+# router and `warm_up_model` both consume this; production behavior preservation
+# is that the conversational slot stays at "30m" (today's hard-coded value).
+#
+# Semantics (Ollama API): a string value is a duration (e.g. "30m", "1h"); the
+# magic value `-1` keeps the model resident indefinitely; `0s` evicts on idle.
+KEEP_ALIVE_BY_SLOT: Dict[str, str] = {
+    # Always-resident slots: never auto-evict. Embeddings and plumbing are
+    # latency-critical and cheap to hold.
+    "embedding": "-1",
+    "plumbing": "-1",
+    # Default chat / reasoning / long-context slots: keep loaded for half an
+    # hour after last use, then evict to free unified memory.
+    "conversational": "30m",
+    "reasoning": "30m",
+    "long_context": "30m",
+    "best_local": "30m",
+    # On-demand slots: evict aggressively after idle. The router will reload
+    # them on the next request that matches their class.
+    "code": "5m",
+    "vision": "5m",
+}
+
+DEFAULT_KEEP_ALIVE = "30m"  # Fallback for unknown slots / non-catalog models
+
+
+def keep_alive_for_slot(slot_class: Optional[str]) -> str:
+    """Look up the per-slot keep_alive policy. Returns DEFAULT_KEEP_ALIVE for
+    an unknown slot — the dispatcher should never fail just because the slot
+    class isn't in the policy table; surface a warning at the caller if the
+    operator wants stricter enforcement.
+    """
+    if not slot_class:
+        return DEFAULT_KEEP_ALIVE
+    return KEEP_ALIVE_BY_SLOT.get(slot_class, DEFAULT_KEEP_ALIVE)
+
+
+async def warm_up_model(
+    model: str,
+    base_url: str = DEFAULT_OLLAMA_BASE_URL,
+    *,
+    slot_class: Optional[str] = None,
+) -> bool:
+    """Send a tiny prompt to keep model loaded in Ollama memory.
+
+    `slot_class` selects the per-slot keep_alive policy. When omitted, the
+    catalog is consulted (if `model` matches a catalog entry by ollama_model)
+    and the entry's `slot_class` is used. Falls back to DEFAULT_KEEP_ALIVE
+    for non-catalog models.
+    """
     base_url = _normalize_and_validate_ollama_base_url(base_url)
+
+    if slot_class is None:
+        # Look up catalog entry by ollama_model name to derive the slot class.
+        # This matters for ADR 004's policy: a code-slot model should evict
+        # in 5m, not stay resident for 30m.
+        for entry in MODEL_CATALOG:
+            if entry.ollama_model == model:
+                slot_class = entry.slot_class
+                break
+
+    keep_alive = keep_alive_for_slot(slot_class)
+
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
             resp = await client.post(
@@ -1046,7 +1176,7 @@ async def warm_up_model(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL) -> 
                     "model": model,
                     "messages": [{"role": "user", "content": "hi"}],
                     "stream": False,
-                    "keep_alive": "30m",
+                    "keep_alive": keep_alive,
                 },
             )
             return resp.status_code == 200
@@ -1142,45 +1272,41 @@ def set_active_local_model(
     litellm_model: str,
     base_url: str = DEFAULT_OLLAMA_BASE_URL,
 ) -> None:
-    """Write the active local model to workspace config.json."""
+    """Write the active local model to workspace config.json atomically.
+
+    Uses `locked_config_update` from `services._config_io` so concurrent
+    writers (e.g. `set_active_profile` running at the same time) don't drop
+    each other's updates via a read-modify-write race.
+    """
     from config import get_settings
+    from services._config_io import locked_config_update
 
     settings = get_settings()
     config_path = settings.workspace_path / "app" / "config.json"
-    config: Dict[str, Any] = {}
-    if config_path.exists():
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
-
-    config["local_model"] = {
-        "active": True,
-        "model_id": model_id,
-        "litellm_model": litellm_model,
-        "base_url": _normalize_and_validate_ollama_base_url(base_url),
-    }
-
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+    with locked_config_update(config_path) as config:
+        config["local_model"] = {
+            "active": True,
+            "model_id": model_id,
+            "litellm_model": litellm_model,
+            "base_url": _normalize_and_validate_ollama_base_url(base_url),
+        }
 
 
 def clear_active_local_model() -> None:
-    """Remove the active local model from workspace config.json."""
+    """Mark the active local model as inactive in workspace config.json.
+
+    Goes through `locked_config_update` for the same reason as
+    `set_active_local_model` — the read-modify-write race exists here too.
+    Skip-on-unchanged keeps the mtime stable when there was no `local_model`
+    key to clear (no-op write avoided).
+    """
     from config import get_settings
+    from services._config_io import locked_config_update
 
     settings = get_settings()
     config_path = settings.workspace_path / "app" / "config.json"
     if not config_path.exists():
         return
-    try:
-        with open(config_path) as f:
-            config = json.load(f)
+    with locked_config_update(config_path) as config:
         if "local_model" in config:
             config["local_model"]["active"] = False
-            with open(config_path, "w") as f:
-                json.dump(config, f, indent=2)
-    except (json.JSONDecodeError, IOError):
-        pass

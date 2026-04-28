@@ -102,7 +102,7 @@ All Anthropic SDK exceptions are caught and converted to `StreamEvent(type="erro
 
 ## Key Files
 
-- `backend/routers/chat.py` — WebSocket endpoint, per-message orchestration, multi-provider routing (`_make_llm`), recursive tool chain loop, session save-on-disconnect
+- `backend/routers/chat.py` — WebSocket endpoint, per-message orchestration, multi-provider routing through the [InferenceRouter](inference-router.md) (`_route_request` → `_llm_from_decision`; `_make_llm` is the back-compat shim), recursive tool chain loop, session save-on-disconnect
 - `backend/services/claude.py` — `ClaudeService` wrapping the Anthropic streaming API; `_ToolAccumulator` for reassembling fragmented tool-input JSON; `build_system_prompt` for context injection
 - `backend/services/llm_service.py` — `LLMService` wrapping LiteLLM for OpenAI/Google AI/any LiteLLM-supported provider; `LLMConfig` dataclass; `_LiteLLMToolAccumulator` for OpenAI-format streamed tool calls; format converters (`convert_tools_anthropic_to_openai`, `convert_messages_for_litellm`)
 - `backend/services/_anthropic_client.py` — Sync `anthropic.Anthropic` factory, present for test-mocking intent but unused by the codebase (all live paths use `AsyncAnthropic` directly in `ClaudeService`)
@@ -162,8 +162,16 @@ All frames are JSON. The client sends; the server sends back a stream of events 
 // for graph-expansion entries, and a `signals` map of raw per-signal scores.
 // Older clients ignore unknown event types; safe to skip.
 
-{ "type": "done", "session_id": string }
+{ "type": "done", "session_id": string,
+  "model"?: string, "provider"?: string, "tool_mode"?: string,
+  "route"?: { "provider": string, "model_id": string|null,
+              "request_class": string, "slot_class": string,
+              "reason": string } }
 // Turn is complete. The final assembled response is already in session history.
+// `tool_mode` is sent for ollama provider so the frontend can show tool support.
+// `route` is the InferenceRouter audit decision (ADR 004) — runtime UI panel
+// reads it to render which slot served the turn and why. Older clients
+// ignore unknown fields.
 
 { "type": "error", "content": string }
 // Recoverable or fatal error. Check content for user-facing message.
