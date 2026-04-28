@@ -112,6 +112,18 @@ Ollama keeps a model resident for `DEFAULT_KEEP_ALIVE = "30m"` after last use. `
 
 Per-model TTFT, decode throughput, and end-to-end wall clock are measured by the sibling latency harness at [`backend/tests/eval/latency/`](../../backend/tests/eval/latency/). Captures baselines per `(machine, knob_stack)` against the canonical loadouts on the actual ICP hardware (single-machine first: Apple M5 Pro 24 GB), with one Anthropic Claude Sonnet reference scenario as the explicit competitor benchmark. Bootstrap-CI gate on metric diffs determines whether an optimization knob (flash attention, KV-cache q8, prefix caching, speculative decoding) earned its complexity. See [`docs/concepts/latency-baseline.md`](../concepts/latency-baseline.md) and [ADR 011](../architecture/decisions/011-latency-benchmark-harness.md). CLI: `python -m tests.eval.latency.run_bench`.
 
+### Canonical chat-model selection (the per-machine problem)
+
+The "v1 canonical chat model" used to be hard-coded — initially Qwen3-30B-A3B per [ADR 010](../architecture/decisions/010-conversation-replay-eval-harness.md), now Qwen3-14B per ADR 010 §"Issue 4" — but the right shape for a self-installing desktop product is per-machine selection. Different users have different Ollama versions, OS major versions, hardware tiers, and memory budgets, and behavior like `think: false` honoring is environment-specific (the 30B-A3B leaks chain-of-thought on Ollama 0.18.0 + macOS 26 + M5 Pro, and works correctly on other combinations).
+
+[ADR 012](../architecture/decisions/012-chat-model-self-test.md) files the architectural answer: at install or on demand, run a three-probe self-test against each candidate model in the user-pickable catalog —
+
+1. **Correctness probe** — does the model honor `think: false` and produce a clean answer to "say hi in one word"?
+2. **Hardware-fit probe** — does `effective_footprint_bytes(entry, default_ctx)` fit comfortably under available RAM?
+3. **Speed probe** — does the model achieve usable TPS on warm-short and chat-realistic-shallow?
+
+Pick the largest passing model. Persist the choice. Re-run on Ollama / OS / hardware change. Implementation lives at [`backend/services/chat_model_probe.py`](../../backend/services/chat_model_probe.py); reuses the same scenario definitions and Ollama HTTP client as the latency benchmark, so the runtime probe and the dev benchmark stay in lockstep.
+
 ### Recommendation Engine
 
 `score_model()` computes a compatibility score (0–100) for each model based on:

@@ -668,6 +668,22 @@
       "last_updated": "2026-04-26",
       "status": "current"
     },
+    "chat-model-probe": {
+      "doc": "docs/architecture/decisions/012-chat-model-self-test.md",
+      "type": "feature",
+      "sources": [
+        "backend/services/chat_model_probe.py",
+        "backend/tests/test_chat_model_probe.py"
+      ],
+      "depends_on": [
+        "local-models",
+        "latency-benchmark",
+        "preferences-settings"
+      ],
+      "last_updated": "2026-04-28",
+      "status": "scaffold",
+      "_note_2026_04_28": "ADR 012 install-time chat-model self-test. Three probes per candidate model: (1) correctness — does the model honor think:false and produce a clean answer to 'say hi in one word', regex-checked against thinking-prose patterns; catches the Qwen3-30B-A3B chain-of-thought leak on Ollama 0.18.0 found by ADR 010 §Issue 4. (2) Hardware-fit — does effective_footprint_bytes(entry, default_ctx) sit under 80% of total RAM; reuses the existing helper that the future memory-pressure auto-downgrade also uses. (3) Speed — runs warm-short and chat-realistic-shallow scenarios from the latency harness once each, checks total_ms ≤ 1500 ms and decode_tps ≥ 8 (calibrated against the 14.6s-broken-vs-1.8s-snappy threshold from the M5 Pro 24 GB findings). Orchestrator iterates user-pickable catalog entries largest-first, hardware-fit prefilter is cheapest so runs first, correctness next (~5-10s per candidate), speed last (~10-20s per candidate, two scenarios); first passing candidate wins, with safe-fallback to None when nothing passes. Persistence to app/config.json under chat_model_probe key via locked_config_update; user_override field lets a user force a specific model unconditionally. 27 unit tests covering thinking-prose pattern panel (8 leaked + 7 clean cases), hardware-fit at threshold edges + KV-architecture differences, orchestrator with stubbed Ollama (largest-first iteration, safe-fallback when nothing passes, hardware-fit prefilter skips before Ollama call), persistence round-trip + non-clobbering of other config keys + override-vs-recommendation precedence. Backend service lands in this chunk; onboarding wiring (frontend) and settings re-run UI are subsequent chunks per ADR 012 migration path."
+    },
     "latency-benchmark": {
       "doc": "docs/concepts/latency-baseline.md",
       "type": "concept",
@@ -742,7 +758,8 @@
         "chat",
         "api-key-management",
         "workspace-onboarding",
-        "latency-benchmark"
+        "latency-benchmark",
+        "chat-model-probe"
       ],
       "last_updated": "2026-04-28",
       "status": "current",
