@@ -1,7 +1,7 @@
 # ADR 009 — Retrieval-first context-overflow compaction
 
 **Status:** Accepted
-**Date:** 2026-04-27
+**Date:** 2026-04-27 (initial), amended 2026-04-28 (eval-side `retrieval-substitution-v1` landed; production wiring pending)
 **Related:** [ADR 004](004-inference-router-architecture.md) · [ADR 008](008-conversation-pinned-chat-model.md) · [`docs/features/retrieval.md`](../../features/retrieval.md) · [`docs/features/sessions.md`](../../features/sessions.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §5
 
 ## Context
@@ -141,6 +141,36 @@ Saves the plumbing-model dependency. Disturbs the chat model's attention with su
 - [`retrieval`](../../features/retrieval.md) gains a "find earlier turn" entry point (re-uses the same retrieval pipeline with a session-scoped filter).
 - New conversation UI elements: in-active-context indicator, pin-turn affordance, re-include affordance, compaction expand-summary view.
 - [`ProfilePack`](../decisions/005-profile-driven-model-stacks.md) gains `context_recent_n`, `context_compaction_threshold`, `context_perf_mode_default`.
+
+## Implementation status (2026-04-28)
+
+The strategy described above is the production target. As of this amendment date, only the **eval-side scaffold** has landed; production-side compaction is unwired.
+
+### What exists
+
+- **ContextStrategy swap point in production.** [`backend/services/chat/context_strategy.py`](../../../backend/services/chat/context_strategy.py) defines the `ContextStrategy` Protocol; [`backend/routers/chat.py`](../../../backend/routers/chat.py) routes session history through it. The default is `FullHistoryStrategy` — identity over the input — so production behavior is unchanged. This is the swap point through which the eventual compaction strategy attaches; it landed empty so [ADR 010](010-conversation-replay-eval-harness.md)'s gate could compare alternatives against the real production path.
+- **`retrieval-substitution-v1` exists, eval-side only.** [`backend/tests/eval/conversations/strategies.py`](../../../backend/tests/eval/conversations/strategies.py) implements `RetrievalSubstitutionV1Strategy(recent_n, top_k)`. It truncates to recent-N user turns (identical to `NaiveTruncateStrategy`), then scores each *dropped* user turn by deterministic content-token overlap with the latest user turn and prepends the top-K dropped (user, assistant) pairs in chronological order as a synthesized user-role block. ADR 010's gate compares it against `naive-truncate-N` at matched N to test "does retrieval-substitution earn its complexity over the cheap baseline."
+- **Eval-side substrate vs production substrate diverges intentionally.** The eval-side v1 reaches into the *dropped portion of the conversation history* — the conversation is the corpus, because the eval fixtures don't have a populated workspace. The production strategy described above reaches into the **markdown vault** via the existing retrieval pipeline. Both test the same hypothesis (targeted retrieval can substitute for full-history) against the substrate available. The production strategy is the next iteration; the eval-side v1 isolates the retrieval-substitution variable from the workspace-population variable.
+
+### What does not exist
+
+- **Production-side compaction is unwired.** No `compaction_service.py`, no token-aware budget, no proactive 70% trigger, no system-prompt budget enforcement, no compaction event log, no UI surface. Conversations still receive the full history every turn until the model errors out.
+- **Effective-context awareness per model.** `ModelCatalogEntry` does not yet have `effective_context_tokens` or `tokenizer_id`. The codebase still operates on character approximations.
+- **Vault-roundtrip retrieval for dropped turns.** The retrieval pipeline does not yet have a "find earlier turn" entry point. Production compaction will need this.
+
+### Sequencing note
+
+The eval results from ADR 010 (pending the next 30B grid run with depth-pressure fixtures) will inform whether the production wiring should:
+
+- **(a)** mirror the eval-side `retrieval-substitution-v1` directly (history-self-retrieval), or
+- **(b)** follow the original ADR 009 design (vault-retrieval over markdown sessions),
+- **(c)** or pick a different strategy entirely if both lose to a wider naive-truncate window.
+
+A production-side wiring against the wrong choice is wasted work. Wait for the gate verdict, then commit.
+
+### Naming clarification
+
+"`retrieval-substitution-v1`" in the ADR text refers to the *eval-side scaffold*, not the production target. The production strategy will be a different class with a clearer name once the gate verdict picks one. This ADR is amended (rather than rewritten) so the design intent stays auditable; the production-target text above stands, but the v1 name in the codebase belongs to the eval-side variant.
 
 ## Open follow-ups (non-blocking)
 
