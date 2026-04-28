@@ -100,11 +100,11 @@ async def test_import_txt_content_preserved(ws_db, txt_file):
 
 @pytest.mark.anyio
 async def test_import_pdf_extracts_text(ws_db, tmp_path):
-    """PDF ingest requires pdfplumber. Skip if not installed."""
+    """PDF ingest requires pypdfium2. Skip if not installed."""
     try:
-        import pdfplumber
+        import pypdfium2  # noqa: F401
     except ImportError:
-        pytest.skip("pdfplumber not installed")
+        pytest.skip("pypdfium2 not installed")
 
     # Create a minimal PDF for test would require a library
     # Instead we just test the error case
@@ -117,8 +117,8 @@ async def test_import_pdf_extracts_text(ws_db, tmp_path):
 
 @pytest.mark.anyio
 async def test_import_pdf_indexed(ws_db, tmp_path):
-    """Test placeholder; real test requires pdfplumber."""
-    pytest.skip("pdfplumber test requires actual PDF")
+    """Test placeholder; real test requires a real PDF fixture."""
+    pytest.skip("PDF ingest test requires actual PDF fixture")
 
 
 @pytest.mark.anyio

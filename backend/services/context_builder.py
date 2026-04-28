@@ -62,7 +62,7 @@ def _scope_results(results: List[dict], sources: List[str]) -> List[dict]:
 
 
 def _read_file_content(f: Path) -> str:
-    """Read file content, handling PDFs via pdfplumber."""
+    """Read file content, handling PDFs via pypdfium2 (see services.ingest)."""
     if f.suffix.lower() == ".pdf":
         from services.ingest import _extract_pdf_text
         return _extract_pdf_text(f)

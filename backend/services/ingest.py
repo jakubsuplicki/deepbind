@@ -445,18 +445,42 @@ def _make_index_frontmatter(title: str, source: str, doc_type: str = "pdf") -> s
 
 
 def _extract_pdf_text(file_path: Path) -> str:
-    """Extract text from PDF using pdfplumber if available, else fallback."""
+    """Extract text from PDF using pypdfium2 (Google PDFium binding).
+
+    Replaces pdfplumber as of ADR 013 knob-1: pypdfium2 is ~9× faster on
+    a 585-page document (baseline-0: 19.7s → baseline-1: ~2s) and is
+    Apache-2.0 / BSD-3 licensed, unlike PyMuPDF (AGPL/commercial).
+
+    PDFium is not thread-safe — keep extraction single-threaded per call.
+    Higher-level callers may dispatch via ``asyncio.to_thread`` (one worker
+    at a time inside PDFium); concurrent ingestion of multiple PDFs is the
+    user's responsibility to serialize. ``PdfPage`` and ``PdfTextPage``
+    handles are explicitly closed so memory stays bounded on very large
+    fixtures.
+    """
     try:
-        import pdfplumber
-        text_parts = []
-        with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text_parts.append(page_text)
-        return "\n\n".join(text_parts)
+        import pypdfium2 as pdfium
     except ImportError:
-        raise IngestError("pdfplumber not installed. Install with: pip install pdfplumber")
+        raise IngestError("pypdfium2 not installed. Install with: pip install pypdfium2")
+
+    text_parts: list[str] = []
+    pdf = pdfium.PdfDocument(file_path)
+    try:
+        for i in range(len(pdf)):
+            page = pdf[i]
+            try:
+                textpage = page.get_textpage()
+                try:
+                    page_text = textpage.get_text_range()
+                finally:
+                    textpage.close()
+            finally:
+                page.close()
+            if page_text:
+                text_parts.append(page_text)
+    finally:
+        pdf.close()
+    return "\n\n".join(text_parts)
 
 
 async def _emit_document_sections(
@@ -745,7 +769,7 @@ async def fast_ingest(
         await asyncio.to_thread(target.write_text, fm + content, encoding="utf-8")
 
     elif ext == ".pdf":
-        # pdfplumber is fully synchronous and CPU-heavy on big PDFs (200 MB+).
+        # PDF extraction is fully synchronous and CPU-heavy on big PDFs.
         # Without to_thread it blocks the FastAPI event loop, which is why
         # /api/memory/ingest/status polls were stacking up as 'pending'.
         _stage("extracting")
