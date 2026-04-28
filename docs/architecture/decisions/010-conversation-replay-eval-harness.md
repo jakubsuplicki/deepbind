@@ -94,7 +94,7 @@ The judge model is conditional on the eval-side hardware available. Three config
 - Fixtures are hand-authored; they contain no customer data, no internal IP, nothing that wouldn't be acceptable to send to a third party.
 - The judge is a measurement tool, not a shipped-product component — it has no analogue in production behavior.
 
-The cost is small: ~10 fixtures × 3 strategy pairs × 2 orders × 3 seeds ≈ 180 judgments per full-grid run, at roughly 5K-in / 200-out per judgment — pennies per run.
+The cost is small: ~19 fixtures × 3 strategy pairs × 2 orders × 3 seeds ≈ 340 judgments per full-grid run at the current suite size, at roughly 5K-in / 200-out per judgment — still pennies per run. Scales linearly with fixture count.
 
 **Upgrade path — local Qwen3-235B-A22B-Thinking-2507 (Tier C, Apache 2.0).** Once Tier C dev hardware (Mac Studio Ultra 192 GB / multi-GPU rig / dedicated cloud GPU box) is available, swap the judge to local. Same protocol, same scoring, just a different judge endpoint. The judgment-protocol abstraction (below) makes the swap a single config change.
 
@@ -184,9 +184,11 @@ Skips silently in ordinary CI (no env var, no reference workspace fixture). Func
 - `keep_alive: -1` for eval models so model-load cost doesn't pollute latency measurements.
 - Random / time / UUID generation seeded per fixture.
 
-### Launch fixtures (10)
+### Fixtures (currently 19 — original 10 + 5 stress + 4 depth-pressure)
 
-Hand-authored, designed against the failure-mode taxonomy:
+Hand-authored, designed against the failure-mode taxonomy. The original ten landed at first-cut; the suite has grown twice in response to specific gaps the early runs surfaced (see "First baseline run" amendment below).
+
+**Original 10 launch fixtures.**
 
 | # | Fixture | What it stresses |
 |---|---|---|
@@ -201,7 +203,26 @@ Hand-authored, designed against the failure-mode taxonomy:
 | 9 | `pivot-mid-conversation` | User changes topic; old-topic must not bleed into new |
 | 10 | `session-boundary-ambiguity` | "We discussed earlier" near the compaction boundary |
 
-Each fixture × four strategies × ~10–30 turns × pinned 30B-A3B chat + 235B judge fits in roughly 2–3 hours of wall-clock for the full grid on Tier C dev hardware. Feasible to run pre-merge on developer hardware; not so fast that fixtures balloon. Add a fixture every time real usage produces a regression the existing 10 didn't catch — same growth discipline as `queries_reference.py`.
+**Added in the higher-rigor pass (5 stress fixtures).**
+
+| # | Fixture | What it stresses |
+|---|---|---|
+| 11 | `fifty-turn-marathon` | 50-turn conversation; tests behavior beyond the typical chat-slot context window |
+| 12 | `multi-target-derivation` | Several scored turns deriving from chained earlier turns |
+| 13 | `code-domain-debugging` | Code identifier recall in a multi-function file (function-name precision) |
+| 14 | `numerical-correction` | User self-corrects a value mid-conversation; recall must use the corrected version |
+| 15 | `code-switch-pl-en` | Mid-conversation language switch (Polish → English) preserving identifier fidelity |
+
+**Added 2026-04-28 (4 depth-pressure fixtures, ≥17 user turns each, anchor at turn 0).** These exist specifically to fail under `naive-truncate-16` and pass under `full-history`; without them the suite's gate signal was bounded by fixtures topping out at 14–16 user turns. Unit-test guards pin two properties per fixture: (a) `naive-truncate-16` actually drops the buried token from the assembled context, and (b) `retrieval-substitution-v1` at recent-N=4 actually re-introduces the token via keyword overlap.
+
+| # | Fixture | What it stresses | Anchor token |
+|---|---|---|---|
+| 16 | `deep-name-recall` | Identifier (codename) recall at depth-19 | `Albatross-9` |
+| 17 | `deep-number-recall` | Numerical recall (£ amount) at depth-19 | `47,500` |
+| 18 | `deep-decision-recall` | Tech-stack decision + rejected alternative | `PostgreSQL` |
+| 19 | `deep-multi-detail-recall` | Two distinct facts (client + date) at depth-18 | `Northwind` |
+
+19 fixtures × 7 strategies × 3 seeds = 399 calls per full grid. At roughly 6–18 s per call on Qwen3-30B-A3B with `think: false` on Apple Silicon, that's 40 min – 2 h wall-clock per run on Tier-A dev hardware. Pre-merge gate runs use a subset (changed strategy only); full grid on release. Add a fixture every time real usage produces a regression the existing suite didn't catch — same growth discipline as `queries_reference.py`.
 
 ## Alternatives considered
 
@@ -239,7 +260,7 @@ Rejected. Absolute scoring is dramatically less reliable than pairwise across th
 - Wall-clock cost: chat replay dominates because the chat model runs on local hardware. On 24 GB Apple Silicon with Qwen3-30B-A3B Q4_K_M, replay alone is roughly 1–2 hours for the full grid; judge calls (hosted API, parallelizable) add minutes. Pre-merge gates must be selective (run only the changed strategy's pairs per PR; full grid pre-release).
 - Hosted judge introduces a vendor dependency for the eval pipeline. Mitigated by `JudgeProvider` abstraction, fixed-version model selection (`claude-opus-4-7` etc., not "latest"), and recorded judgments stored in baselines so historical runs are replayable even if the hosted model is later deprecated.
 - Hosted judge means a small per-run API cost. Pennies per full-grid run, but it's not zero. Tracked in the open follow-ups for budget visibility.
-- Hand-authored fixtures are a fixed cost; 10 launch fixtures plus ongoing growth is a discipline obligation. Mitigated by the "grow on real-usage failure" pattern that already works for `queries_reference.py`.
+- Hand-authored fixtures are a fixed cost; the launch ten plus ongoing growth (currently 19, see Fixtures section) is a discipline obligation. Mitigated by the "grow on real-usage failure" pattern that already works for `queries_reference.py`.
 - Fixtures freeze a snapshot of expected behavior. Schema migrations (e.g., new tool surface) may invalidate fixtures and require re-recording. Version fixtures with the schema, document re-recording in this ADR's open follow-ups.
 
 ### What this changes about existing code
@@ -331,7 +352,7 @@ Both pre-conditions for a meaningful re-run are now in place; the model run itse
 
 1. **Fixture-schema versioning.** Add `schema_version` to fixture JSON and to baselines. Re-recording protocol when tool surface or expected-facts schema changes.
 2. **Local-judge upgrade trigger.** Define the criteria for swapping the default hosted judge to a local model: (a) Tier C dev hardware in place; (b) hosted-judge cost or rate-limit becoming material at the harness's run cadence; (c) a customer-facing reason to claim "the eval is fully local" (none expected, but worth recording). Until at least one of those is true, hosted-default is correct.
-3. **Per-profile fixture shards.** ADR 005 profiles (legal, engineering, medical) have different conversation patterns. Once profile-specific behavior diverges, fixtures fork by profile. Out of scope for v1 launch; the launch 10 are profile-agnostic.
+3. **Per-profile fixture shards.** ADR 005 profiles (legal, engineering, medical) have different conversation patterns. Once profile-specific behavior diverges, fixtures fork by profile. Out of scope for v1 launch; the original ten are profile-agnostic, and the depth-pressure additions tag a profile (`legal`, `engineering`, `generic`) but are still cross-profile in spirit.
 4. **CI integration for the floor test.** Currently opt-in via env var. Once the reference workspace and judge model are reliably available on a dedicated eval runner, promote to required-on-merge for retrieval/compaction-affecting paths.
 5. **Token-cost regression budget.** The floor test gates latency; an analogous gate on tokens-into-judge per run would catch eval-cost runaway. Add once we have a few full-grid runs to set a budget.
 6. **Confabulation rate as a first-class metric.** `must_not_contain` already exists; aggregating into a per-strategy "confabulation rate" surface in the output JSON makes the negative signal as visible as the positive one.
