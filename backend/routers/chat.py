@@ -7,6 +7,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from services import session_service
 from services import specialist_service
+from services.chat import DEFAULT_STRATEGY, ContextStrategy
 from services.claude import ClaudeService, StreamEvent, build_system_prompt, build_system_prompt_with_stats
 from services.llm_service import LLMConfig, LLMService, DEFAULT_MODELS
 from services.tools import TOOLS, ToolNotFoundError, execute_tool
@@ -205,6 +206,16 @@ async def _stream_follow_up(
 
     Supports recursive tool calls up to MAX_TOOL_ROUNDS total.
     Returns accumulated text.
+
+    Scope boundary (ADR 010): the ContextStrategy from ``_handle_message``
+    is **not** re-applied here. Tool-loop messages are built incrementally
+    by ``_build_tool_messages`` from the already-assembled initial context,
+    and the in-loop ``_compact_stale_tool_results`` handles the only
+    legitimate compaction that should happen mid-tool-loop (collapsing
+    older tool_result payloads). A future strategy that wants to compact
+    *during* a tool-loop must extend this contract explicitly — silent
+    re-assembly here would break tool_use / tool_result pairing and
+    corrupt the eval baseline.
     """
     text = ""
     pending_tools: list[StreamEvent] = []
@@ -293,6 +304,7 @@ async def _handle_message(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     base_url: Optional[str] = None,
+    context_strategy: Optional[ContextStrategy] = None,
 ) -> None:
     api_key = client_api_key or get_api_key()
     if not api_key and provider != "ollama":
@@ -300,7 +312,14 @@ async def _handle_message(
         return
 
     session_service.add_message(session_id, "user", content)
-    messages = session_service.get_messages(session_id)
+    strategy = context_strategy or DEFAULT_STRATEGY
+    messages = strategy.assemble(session_service.get_messages(session_id))
+    if not isinstance(messages, list):
+        raise TypeError(
+            f"ContextStrategy {strategy.name!r} returned {type(messages).__name__}; "
+            "expected list. The strategy boundary rejects malformed returns "
+            "to prevent confusing provider-level errors downstream."
+        )
     system_prompt, prompt_stats = await build_system_prompt_with_stats(content, graph_scope=graph_scope)
     active_specs = specialist_service.get_active_specialists()
     tools = specialist_service.filter_tools(TOOLS, specialists=active_specs)
