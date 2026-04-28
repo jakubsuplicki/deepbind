@@ -247,6 +247,52 @@ Existing baselines remain readable (the new fields are optional). The schema_ver
 - `test_run_grid_runs_reference_scenarios_only_once_per_grid` — duplicate-reference regression test.
 - `test_aggregate_captures_sample_response_text` + `test_aggregate_truncates_long_response_text` — sample text capture + truncation.
 
+## Amendment 3 (2026-04-28 evening) — canonical baseline-0 captured against Qwen3-14B
+
+After Amendment 1's chat-model swap and Amendment 2's harness fixes, the canonical baseline-0 was captured. Artifact: `tests/eval/latency/baselines/apple-m5-20260428T102349Z.json`. This is the reference point against which all future optimization knobs diff.
+
+**Run config.** Nightly scope (default). `qwen3:14b` (qwen3:8b skipped cleanly because not pulled — the Amendment 2 skip behavior worked as designed). 5 scenarios × 5 timed runs × 1 model × 5 seeds = 25 timed cells. `--no-reference` (no Anthropic key set; the Amendment 1 reference scenario is informational, not load-bearing for tonight's run). Wall-clock: ~25 min.
+
+### Baseline-0 numbers on M5 Pro 24 GB / Ollama 0.18.0 / Qwen3-14B Q4_K_M / stock knobs
+
+| Scenario | TTFT p50 | TPS p50 | total p95 | Sample response (verbatim) |
+|---|---:|---:|---:|---|
+| `warm-short` | 151 ms | 20.3 | 310 ms | `"Hi."` |
+| `prefill-4k` | 163 ms | 14.5 | 732 ms | `"The capital of France is Paris."` |
+| `prefill-16k` | 194 ms | 12.1 | 869 ms | `"The capital of France is Paris."` |
+| `chat-realistic-shallow` | 154 ms | 14.0 | 1809 ms | `"You mentioned earlier that you were work…"` (correctly recalled the topic-defining detail from the synthesized history) |
+| `decode-throughput` | 157 ms | 13.5 | 21643 ms | `"The periodic table is a systematic arran…"` (real content) |
+
+**Three findings.**
+
+1. **Sample responses confirm correctness.** The Amendment 2 `sample_response_text` field paid for itself on this single run — every cell shows a real answer, not chain-of-thought prose. The chat-realistic scenario's response actually quotes the topic the model was supposed to recall, validating that 14B + `think: false` + the realistic-conversation shape produces correct output. This is the visible difference from the broken 30B-A3B run earlier in the day.
+
+2. **Prefill is a gentle slope, not a cliff.** Going from warm-short (effectively 0K context) to prefill-16k (16K context):
+   - TTFT: 151 ms → 194 ms (+28%) — roughly linear in context.
+   - TPS: 20.3 → 12.1 (−40%) — meaningful but not catastrophic. The 30B-A3B equivalent dropped 58%.
+   - total p95: 310 ms → 869 ms (+180%) — but at 16K context the absolute number is still under 1 second.
+
+   This means long-conversation behavior is *usable* on 14B even before compaction lands; with ADR 009's retrieval-first compaction wired (gate-validated tonight), the prefill-16k case reduces to the prefill-4k case for typical long-conversation usage.
+
+3. **Numbers are reproducible.** PR-scope earlier in the day captured warm-short at 154 ms / 20.3 TPS / 311 ms p95; the full nightly captured 151 / 20.3 / 310 — within ~1% noise. Run-to-run repeatability is well inside the bootstrap-CI tolerance, which means future knob diffs won't be drowned in noise.
+
+### What baseline-0 unlocks
+
+The optimization knob loop becomes runnable. Each subsequent `run_bench --knob-stack <name>` can be diffed against this baseline via `gate.compare_runs()`; the bootstrap CI returns improvement / regression / equivalent / insufficient_data.
+
+Highest-priority knobs to try, in order:
+
+1. **Speculative decoding** with `qwen3:1.7b` as draft model. Already pulled. Expected: +50–100% TPS lift across scenarios. If TPS jumps from 14 → 25 on chat-realistic, total p95 drops from 1.8 s to ~1 s.
+2. **`OLLAMA_FLASH_ATTENTION=1`**. One env var, modest gain, free to verify.
+3. **`OLLAMA_KV_CACHE_TYPE=q8_0`**. Halves KV memory; useful headroom on 24 GB. Slight quality cost — measure on the conversation eval simultaneously to verify no clean-pass regression.
+4. **Prefix caching verification.** Multi-turn conversations should reuse the system-prompt prefill across turns. Verify Ollama is doing this; if not, configure.
+
+Each knob is its own chunk: enable, re-run nightly (~25 min), commit baseline-N if CI excludes zero.
+
+### Skipped cells in baseline-0
+
+`qwen3:8b` cells show `SKIP` with `skip_reason: "model 'qwen3:8b' not pulled in Ollama"`. The Amendment 2 prefilter caught this at run start; the cells are recorded as informational gaps. To fill them in: `ollama pull qwen3:8b` and re-run. The 8B numbers become load-bearing once the install-time chat-model probe (ADR 012) needs them for hardware-floor recommendation logic.
+
 ## Open follow-ups (non-blocking)
 
 1. **Cold-start scenario.** Requires Ollama process control (kill + restart between runs). Add when the first knob-loop chunk needs it.

@@ -395,6 +395,40 @@ Both pre-conditions for a meaningful re-run are now in place; the model run itse
 
 **Run not yet executed.** The grid (7 strategies × 19 fixtures × 3 seeds = 399 calls) has not been launched against 30B-A3B yet — that's a user-triggered overnight run. The harness is operational; results pending.
 
+## Second baseline run (2026-04-28 evening, post-Issue-4 swap) — decisive gate verdict
+
+After the canonical-chat-model swap from `qwen3:30b-a3b` to `qwen3:14b` (Issue 4), the full grid was re-run against 14B with the default strategy sweep. This is the canonical baseline-0 for the conversation eval going forward. The artifact lives at `tests/eval/conversations/baselines/run-20260428T112547Z.json`.
+
+**Run config.** 7 strategies × 19 fixtures × 3 seeds = 399 calls. `qwen3:14b` Q4_K_M, `temperature: 0`, `num_ctx: 16384`, `think: false`, fixed seeds (1, 2, 3), pinned RNG seed (17) for the bootstrap CI. Wall-clock: ~30–60 min on M5 Pro 24 GB / Ollama 0.18.0.
+
+**Headline.** ADR 009's retrieval-first stance is empirically validated. Naive truncation regresses against full-history at every aggressive window size (N=4, 8, 12 all fail; N=16 kisses zero). Retrieval-substitution at matched N closes the gap fully — `retrieval-substitution-v1-n8-k3` matches full-history; `retrieval-substitution-v1-n4-k3` lands ~5 pp behind.
+
+The full gate-decision table and the build plan for production wiring live in [ADR 009 §"Gate verdict (2026-04-28 evening) — ADR 009 stands; production wiring justified"](009-context-overflow-compaction.md#gate-verdict-2026-04-28-evening--adr-009-stands-production-wiring-justified). Reproduced summary:
+
+| Comparison | Δ (B − A) | 95% CI | Verdict |
+|---|---:|---|---|
+| `full-history` vs `naive-truncate-4`  | −0.526 | [−0.789, −0.263] | regression |
+| `full-history` vs `naive-truncate-8`  | −0.263 | [−0.474, −0.105] | regression |
+| `full-history` vs `naive-truncate-12` | −0.211 | [−0.421, −0.053] | regression |
+| `full-history` vs `naive-truncate-16` | −0.158 | [−0.316, +0.000] | equivalent (CI kisses zero) |
+| `naive-truncate-4` vs `retrieval-substitution-v1-n4-k3` | +0.474 | [+0.263, +0.684] | **improvement** |
+| `naive-truncate-8` vs `retrieval-substitution-v1-n8-k3` | +0.263 | [+0.105, +0.474] | **improvement** |
+
+**What this changes about ADR 010 itself.** Nothing — the harness did exactly what it was filed to do. The decision gate produced decisive signal; the bootstrap-CI floor distinguished real effects from noise; the pinned chat model + fixtures + seeds + RNG made the verdict reproducible. The harness graduates from "newly built" to "operational and trusted."
+
+**Comparison to the first baseline run** (Issue 3, against the broken 30B-A3B):
+
+| Aspect | First run (30B-A3B, broken) | Second run (14B, swapped) |
+|---|---|---|
+| `full-history` vs `naive-truncate-16` | equivalent (Δ=0.000) | equivalent (Δ=−0.158, CI kisses zero) |
+| `full-history` vs `naive-truncate-8` | equivalent (Δ=−0.111) | **regression** (Δ=−0.263) |
+| `full-history` vs `naive-truncate-4` | regression (Δ=−0.444) | regression (Δ=−0.526) |
+| `retrieval-substitution-v1` measured | no | **yes** |
+
+The second run is the one that actually answers ADR 009's question. The first run's "naive-truncate-8 looks equivalent" verdict was contaminated by chain-of-thought-leak noise that obscured the real signal; the corrected fixtures + clean 14B output make the regression visible.
+
+**The first run's baselines are preserved as historical artifacts** documenting the pre-swap state. They are NOT the canonical baseline-0; the second run is.
+
 ## Open follow-ups (non-blocking)
 
 1. **Fixture-schema versioning.** Add `schema_version` to fixture JSON and to baselines. Re-recording protocol when tool surface or expected-facts schema changes.

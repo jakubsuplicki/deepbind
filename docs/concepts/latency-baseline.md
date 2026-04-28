@@ -166,6 +166,41 @@ Knob-stack changes are *not* invalidating — that's the whole point; they're ho
 - **Continuous benchmarking infrastructure.** No automated runs on every commit; the harness runs locally. Promotion to required-on-merge in CI is gated on dedicated eval hardware.
 - **Production-path changes.** This is dev infra; nothing customer-facing imports from `tests/eval/latency/`.
 
+## Canonical baseline-0 (2026-04-28)
+
+The reference point for every subsequent optimization knob diff. Captured against `qwen3:14b` Q4_K_M on Apple M5 Pro 24 GB / Ollama 0.18.0 / stock knobs. Artifact: `tests/eval/latency/baselines/apple-m5-20260428T102349Z.json`.
+
+| Scenario | TTFT p50 | TPS p50 | total p95 | Sample response |
+|---|---:|---:|---:|---|
+| `warm-short` | 151 ms | 20.3 | 310 ms | `"Hi."` |
+| `prefill-4k` | 163 ms | 14.5 | 732 ms | `"The capital of France is Paris."` |
+| `prefill-16k` | 194 ms | 12.1 | 869 ms | `"The capital of France is Paris."` |
+| `chat-realistic-shallow` | 154 ms | 14.0 | 1809 ms | `"You mentioned earlier that you were work…"` (correct topic recall) |
+| `decode-throughput` | 157 ms | 13.5 | 21643 ms | `"The periodic table is a systematic arran…"` (real content) |
+
+The `qwen3:8b` cells are skipped (model not pulled at capture time); they fill in on the next run after `ollama pull qwen3:8b`. The `reference-anthropic-warm-short` scenario was skipped via `--no-reference` (no API key set); informational, not gate-load-bearing.
+
+**What baseline-0 says about the product on M5 Pro 24 GB:**
+
+- **TTFT 151 ms warm** beats every cloud option (Sonnet ~400–800 ms typical TTFT). Local wins on the speed-of-first-response perception that matters for "displaces shadow ChatGPT."
+- **Prefill is a gentle slope, not a cliff.** TPS drops 40 % from warm to 16K context (vs 58 % on the broken 30B-A3B before the swap). Long-conversation behavior is usable on 14B even before compaction lands.
+- **Sample responses are clean** — no chain-of-thought leak, model produces real answers. The Amendment 2 `sample_response_text` field made this verifiable by reading the JSON, no separate curl needed.
+- **Run-to-run reproducibility is ~1 %** (PR-scope dry run earlier in day matched the full nightly within 1 % on warm-short). Bootstrap-CI gate has clean signal to work with.
+
+## What knob loop does to baseline-0
+
+Each subsequent `run_bench --knob-stack <name>` diffs against this baseline. Expected near-term:
+
+| Knob | Expected effect on TPS | Expected effect on TTFT |
+|---|---|---|
+| Speculative decoding (`qwen3:1.7b` draft) | +50–100% | minor |
+| `OLLAMA_FLASH_ATTENTION=1` | +5–15% | −10–20% on long context |
+| `OLLAMA_KV_CACHE_TYPE=q8_0` | +5–10% (bandwidth) | minor |
+| Prefix caching verification | n/a single-turn | 2nd+ turn near-instant |
+| MLX-direct (deferred per ADR 003) | +50–200% | −30–50% |
+
+Each knob = enable, re-run, `gate.compare_runs()` against baseline-0 (or the latest committed baseline-N), commit baseline-(N+1) only if the CI excludes zero on the relevant metric.
+
 ## Cross-references
 
 - **[`docs/concepts/eval-baseline.md`](eval-baseline.md)** — sibling concept doc for the retrieval-quality baseline. Same discipline.

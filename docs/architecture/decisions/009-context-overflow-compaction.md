@@ -172,6 +172,68 @@ A production-side wiring against the wrong choice is wasted work. Wait for the g
 
 "`retrieval-substitution-v1`" in the ADR text refers to the *eval-side scaffold*, not the production target. The production strategy will be a different class with a clearer name once the gate verdict picks one. This ADR is amended (rather than rewritten) so the design intent stays auditable; the production-target text above stands, but the v1 name in the codebase belongs to the eval-side variant.
 
+## Gate verdict (2026-04-28 evening) — ADR 009 stands; production wiring justified
+
+The conversation eval grid completed against `qwen3:14b` on M5 Pro 24 GB / Ollama 0.18.0 (run `tests/eval/conversations/baselines/run-20260428T112547Z.json`). The bootstrap-CI gate produced decisive verdicts on every comparison ADR 010 was filed to settle.
+
+### Naive truncation vs full-history (the "is naive enough?" check)
+
+| Comparison | Δ (B − A) | 95% CI | Verdict |
+|---|---:|---|---|
+| `full-history` vs `naive-truncate-4`  | −0.526 | [−0.789, −0.263] | **regression** |
+| `full-history` vs `naive-truncate-8`  | −0.263 | [−0.474, −0.105] | **regression** |
+| `full-history` vs `naive-truncate-12` | −0.211 | [−0.421, −0.053] | **regression** |
+| `full-history` vs `naive-truncate-16` | −0.158 | [−0.316, +0.000] | equivalent (CI kisses zero) |
+
+Naive truncation regresses against full-history at every aggressive window size. Even at N=16 the CI just barely includes zero — one more failing fixture flips it to regression. **Naive truncation is not a viable substitute for full-history on long-conversation fixtures.**
+
+### Retrieval-substitution vs naive truncation at matched N (the "does retrieval earn its complexity?" check)
+
+| Comparison | Δ (B − A) | 95% CI | Verdict |
+|---|---:|---|---|
+| `naive-truncate-4` vs `retrieval-substitution-v1-n4-k3` | **+0.474** | [+0.263, +0.684] | **improvement** |
+| `naive-truncate-8` vs `retrieval-substitution-v1-n8-k3` | **+0.263** | [+0.105, +0.474] | **improvement** |
+
+Both gates' CIs exclude zero on the improvement side at 95%. Retrieval-substitution lifts clean-pass rate by **+47 pp at recent_n=4** and **+26 pp at recent_n=8** over naive truncation at the same window size.
+
+### Reconstructed absolute clean-pass rates (relative to full-history)
+
+| Strategy | Distance from full-history clean-pass rate |
+|---|---:|
+| `full-history` | baseline (reference) |
+| `retrieval-substitution-v1-n8-k3` | **≈ matches full-history** (Δ ≈ 0 pp) |
+| `retrieval-substitution-v1-n4-k3` | −5 pp |
+| `naive-truncate-16` | −16 pp |
+| `naive-truncate-12` | −21 pp |
+| `naive-truncate-8` | −26 pp |
+| `naive-truncate-4` | −53 pp |
+
+`retrieval-substitution-v1-n8-k3` is the empirical optimum: 8 recent turns + 3 retrieved dropped pairs = quality indistinguishable from full-history at a small fraction of the context budget.
+
+### Decision changes
+
+1. **ADR 009's retrieval-first stance is empirically validated.** Retrieval-substitution beats naive truncation at every matched window; naive truncation is *not* equivalent to full-history at any usable window size. The complexity earns its keep.
+2. **Production canonical config: `recent_n=8, top_k=3`.** That's the gate-validated optimum. `recent_n=4, top_k=3` is the fallback for tighter context budgets on hardware-floor machines.
+3. **Production wiring is justified work, not speculative.** The "wait for the gate verdict, then commit" sequencing note in this ADR's Implementation Status section is now resolved: the verdict is in, production wiring proceeds.
+4. **Eval-side `retrieval-substitution-v1` (history-self-retrieval) is the validated mechanism.** Production goes one step further per the original ADR design: vault-retrieval over markdown sessions instead of history-self-retrieval. The eval validates the *pattern*; production refines the *substrate*.
+
+### Build plan for production wiring (next chunks)
+
+1. **Substrate** (~3 files): `effective_context_tokens` + `tokenizer_id` on `ModelCatalogEntry`; HuggingFace tokenizer integration; token-counting helpers.
+2. **`backend/services/compaction_service.py`** (~1 file): production retrieval-substitution. Recent_n=8, top_k=3 default. Reaches into the markdown vault via the existing retrieval pipeline (the original ADR 009 §"Decision" design), not the history-self-retrieval shortcut the eval used.
+3. **Chat router wiring** in [`_handle_message`](../../../backend/routers/chat.py): call compaction at per-turn boundary; never mid-stream / mid-tool-loop (ADR 009 §"Atomicity").
+4. **Audit trail**: `compaction_event` log per session in [`session_service`](../../../backend/services/session_service.py).
+5. **System-prompt budget enforcement** in [`context_builder`](../../../backend/services/context_builder.py): total budget against `effective_context_tokens`, not just per-note caps.
+6. **Frontend UI surface** (separate chunk per ADR 009 §"UI surface"): in-active-context indicator, pin-turn affordance, re-include affordance, compaction expand-summary view.
+
+Backend chunks #1–#5 land first; UI chunk #6 follows once the backend behavior is stable.
+
+### What this verdict does NOT settle
+
+- **Vault-retrieval quality at production substrate.** The eval validated history-self-retrieval at recent_n=8/top_k=3. Production reaches into the vault via the retrieval pipeline; that pipeline's "find earlier turn" entry point doesn't exist yet and is part of build-step #2 above. Whether the vault substrate matches eval-side quality is an open empirical question that the next conversation-eval run (with `retrieval_enabled=True` against a populated workspace) will answer.
+- **Threshold tuning.** The 70% proactive-trigger threshold and the recent_n=8 default are now eval-justified for this fixture set, but real-usage data will refine them. Tune via the existing harness once production compaction lands.
+- **Failure-mode coverage.** The 19 launch fixtures cover the failure modes we knew to test for. Real users will discover failure modes the fixture set didn't anticipate; the growth discipline ("add a fixture every time real usage produces a regression") applies.
+
 ## Open follow-ups (non-blocking)
 
 1. **Eval-driven tuning of thresholds.** The 70% trigger and recent-N=8 defaults need empirical validation via [`eval-baseline`](../../concepts/eval-baseline.md). Build the tuning harness alongside the compaction implementation.
