@@ -1,0 +1,229 @@
+{
+  "by_scenario": [
+    {
+      "errors": [],
+      "fixture_path": "/Users/commandcenter/Projects/deepbind/samples/911Report.pdf",
+      "n_errors": 0,
+      "n_timed_runs": 3,
+      "scenario_name": "chunk-911Report",
+      "skip_reason": null,
+      "stage": "chunk",
+      "stage_stats": [
+        {
+          "mean_ms": 70.13,
+          "name": "chunk",
+          "p50_ms": 70.21,
+          "p95_ms": 70.47,
+          "stdev_ms": 0.4,
+          "units_median": {
+            "chunks_emitted": 5546.0,
+            "input_chars": 1957363.0
+          }
+        }
+      ],
+      "total_ms_mean": 70.43,
+      "total_ms_p50": 70.5,
+      "total_ms_p95": 70.77,
+      "total_ms_stdev": 0.38
+    },
+    {
+      "errors": [],
+      "fixture_path": "/Users/commandcenter/Projects/deepbind/samples/911Report.pdf",
+      "n_errors": 0,
+      "n_timed_runs": 3,
+      "scenario_name": "embed-batch-64-911Report",
+      "skip_reason": null,
+      "stage": "embed_batch",
+      "stage_stats": [
+        {
+          "mean_ms": 496.53,
+          "name": "embed_batch",
+          "p50_ms": 498.62,
+          "p95_ms": 498.74,
+          "stdev_ms": 3.73,
+          "units_median": {
+            "batch_size": 64.0,
+            "input_chars_total": 88406.0,
+            "vector_dim": 384.0
+          }
+        }
+      ],
+      "total_ms_mean": 496.61,
+      "total_ms_p50": 498.71,
+      "total_ms_p95": 498.82,
+      "total_ms_stdev": 3.73
+    },
+    {
+      "errors": [],
+      "fixture_path": "/Users/commandcenter/Projects/deepbind/samples/911Report.pdf",
+      "n_errors": 0,
+      "n_timed_runs": 3,
+      "scenario_name": "end-to-end-911Report",
+      "skip_reason": null,
+      "stage": "end_to_end",
+      "stage_stats": [
+        {
+          "mean_ms": 356.91,
+          "name": "extract",
+          "p50_ms": 357.53,
+          "p95_ms": 357.59,
+          "stdev_ms": 1.12,
+          "units_median": {
+            "chars": 1957363.0,
+            "fixture_bytes": 7574768.0,
+            "pages_approx": 585.0
+          }
+        },
+        {
+          "mean_ms": 10.92,
+          "name": "section_detect",
+          "p50_ms": 10.9,
+          "p95_ms": 11.12,
+          "stdev_ms": 0.2,
+          "units_median": {
+            "input_chars": 1957363.0,
+            "sections_detected": 60.0
+          }
+        },
+        {
+          "mean_ms": 71.68,
+          "name": "chunk",
+          "p50_ms": 72.27,
+          "p95_ms": 72.93,
+          "stdev_ms": 1.63,
+          "units_median": {
+            "chunks_emitted": 5546.0,
+            "input_chars": 1957363.0
+          }
+        },
+        {
+          "mean_ms": 506.57,
+          "name": "embed_batch",
+          "p50_ms": 504.62,
+          "p95_ms": 517.51,
+          "stdev_ms": 10.11,
+          "units_median": {
+            "batch_size": 64.0,
+            "input_chars_total": 88406.0,
+            "vector_dim": 384.0
+          }
+        },
+        {
+          "mean_ms": 6.82,
+          "name": "entity_extract",
+          "p50_ms": 6.8,
+          "p95_ms": 6.89,
+          "stdev_ms": 0.07,
+          "units_median": {
+            "entities_extracted": 296.0,
+            "input_chars": 50000.0
+          }
+        }
+      ],
+      "total_ms_mean": 954.8,
+      "total_ms_p50": 949.59,
+      "total_ms_p95": 967.27,
+      "total_ms_stdev": 10.85
+    },
+    {
+      "errors": [],
+      "fixture_path": "/Users/commandcenter/Projects/deepbind/samples/911Report.pdf",
+      "n_errors": 0,
+      "n_timed_runs": 3,
+      "scenario_name": "entity-extract-911Report",
+      "skip_reason": null,
+      "stage": "entity_extract",
+      "stage_stats": [
+        {
+          "mean_ms": 6.82,
+          "name": "entity_extract",
+          "p50_ms": 6.82,
+          "p95_ms": 6.85,
+          "stdev_ms": 0.03,
+          "units_median": {
+            "entities_extracted": 296.0,
+            "input_chars": 50000.0
+          }
+        }
+      ],
+      "total_ms_mean": 6.83,
+      "total_ms_p50": 6.84,
+      "total_ms_p95": 6.86,
+      "total_ms_stdev": 0.03
+    },
+    {
+      "errors": [],
+      "fixture_path": "/Users/commandcenter/Projects/deepbind/samples/911Report.pdf",
+      "n_errors": 0,
+      "n_timed_runs": 3,
+      "scenario_name": "extract-911Report",
+      "skip_reason": null,
+      "stage": "extract",
+      "stage_stats": [
+        {
+          "mean_ms": 366.07,
+          "name": "extract",
+          "p50_ms": 363.84,
+          "p95_ms": 375.4,
+          "stdev_ms": 8.44,
+          "units_median": {
+            "chars": 1957363.0,
+            "fixture_bytes": 7574768.0,
+            "pages_approx": 585.0
+          }
+        }
+      ],
+      "total_ms_mean": 367.79,
+      "total_ms_p50": 365.57,
+      "total_ms_p95": 377.14,
+      "total_ms_stdev": 8.46
+    },
+    {
+      "errors": [],
+      "fixture_path": "/Users/commandcenter/Projects/deepbind/samples/911Report.pdf",
+      "n_errors": 0,
+      "n_timed_runs": 3,
+      "scenario_name": "section-detect-911Report",
+      "skip_reason": null,
+      "stage": "section_detect",
+      "stage_stats": [
+        {
+          "mean_ms": 10.76,
+          "name": "section_detect",
+          "p50_ms": 10.8,
+          "p95_ms": 10.83,
+          "stdev_ms": 0.11,
+          "units_median": {
+            "input_chars": 1957363.0,
+            "sections_detected": 60.0
+          }
+        }
+      ],
+      "total_ms_mean": 10.77,
+      "total_ms_p50": 10.81,
+      "total_ms_p95": 10.84,
+      "total_ms_stdev": 0.11
+    }
+  ],
+  "machine_info": {
+    "knob_stack": [
+      "pypdfium2_extract"
+    ],
+    "model_label": "Apple M5",
+    "ollama_version": "ollama version is 0.18.0\nWarning: client version is 0.21.2",
+    "platform": "darwin-arm64",
+    "ram_gb": 24
+  },
+  "run_metadata": {
+    "fixture_path": "/Users/commandcenter/Projects/deepbind/samples/911Report.pdf",
+    "n_timed_runs": 3,
+    "n_warmup_runs": 1,
+    "seeds": [
+      1,
+      2,
+      3
+    ],
+    "timestamp_utc": "2026-04-28T13:13:44Z"
+  },
+  "schema_version": 1
+}

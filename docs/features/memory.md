@@ -14,9 +14,9 @@ sources:
   - frontend/app/components/NoteViewer.vue
   - frontend/app/components/ImportDialog.vue
   - frontend/app/components/LinkIngestDialog.vue
-depends_on: [database, preferences-settings]
+depends_on: [database, preferences-settings, ingest-benchmark]
 last_reviewed: 2026-04-26
-last_updated: 2026-04-26
+last_updated: 2026-04-28
 ---
 
 
@@ -271,6 +271,56 @@ POST   /enrich/{note_path}
   Returns: { path, summary, tags, enriched: true }
   Errors: 400 if note not found or API key not configured
 ```
+
+### Ingest latency baseline (ADR 013)
+
+Every stage of the ingest pipeline is timed by `backend/tests/eval/ingest/`,
+producing per-stage durations plus end-to-end wall clock against a stable
+fixture (`samples/911Report.pdf`). Same shape as the chat-latency harness
+(ADR 011) and the conversation-eval harness (ADR 010): paired bootstrap-CI
+gate on per-stage metrics, baseline JSON committed to disk so `git diff
+baselines/` is the regression review.
+
+Run with:
+
+```bash
+.venv/bin/python -m tests.eval.ingest.run_bench           # nightly grid
+.venv/bin/python -m tests.eval.ingest.run_bench --scope pr  # end-to-end only
+```
+
+See [docs/concepts/ingest-latency-baseline.md](../concepts/ingest-latency-baseline.md)
+for canonical baseline-0 / baseline-1 numbers and next-knob sequencing.
+
+Status as of 2026-04-28:
+
+- **Knob-1 landed** — `_extract_pdf_text` swapped from pdfplumber to
+  [pypdfium2](https://github.com/pypdfium2-team/pypdfium2)
+  (Apache-2.0/BSD-3, Python bindings to Google's PDFium). PyMuPDF was
+  disqualified upfront on AGPL/commercial license.
+  - Extract stage: 19,686 ms → 376 ms (**55× speedup**)
+  - Quality: equivalent on prose, slightly better on multi-column
+    tables (no false-adjacency interleaving). Full quality
+    verification in [ADR 013](../architecture/decisions/013-ingest-latency-benchmark-harness.md).
+- **Knob-2 landed** — `embed_note_chunks` now snapshots existing
+  `(content_hash → embedding_blob)` rows before delete and reuses
+  the binary blob for chunks whose hash matches. Only changed chunks
+  are sent through the embedding model. Vectors are bit-identical
+  for unchanged content.
+  - First ingest of 911Report (cold): 25.6 s (unchanged — knob-2 is a no-op when all chunks are new)
+  - Re-ingest of unchanged content: **1.4 s (18.6× faster, 24.2 s saved)**
+  - Re-ingest with one paragraph edited: **2.0 s (12.9× faster, 23.6 s saved)**
+  - Helps the "I clicked Reindex" / "I accidentally re-imported" /
+    "I fixed a typo" UX paths.
+- **Knobs 3-7 (future)** — ONNX threading, int8 quantized model,
+  smaller English-only model, background/lazy embedding (UX), MLX
+  backend on Apple Silicon. See ADR 013 knob loop table.
+
+**Harness vs production**: the ingest-latency harness measures a
+worst-case compute-only path (whole-document chunking, 5,546 chunks
+on the 911 Report). Production `fast_ingest` section-splits PDFs
+first → ~3,023 chunks → ~25.6 s end-to-end. Both numbers are real
+but track different shapes; the harness is for stable per-stage
+diffs, production measurement is for realistic UX impact.
 
 ## Gotchas
 
