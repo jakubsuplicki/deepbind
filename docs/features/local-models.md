@@ -108,6 +108,10 @@ Two catalog fields feed the future memory-pressure auto-downgrade — when free 
 
 Ollama keeps a model resident for `DEFAULT_KEEP_ALIVE = "30m"` after last use. `warm_up_model()` sends a tiny prompt with this keep_alive value to keep a freshly-selected model loaded. A future overflow-event handler may shorten this dynamically when the auto-downgrade fires; today's value is a single static default.
 
+### Latency baseline
+
+Per-model TTFT, decode throughput, and end-to-end wall clock are measured by the sibling latency harness at [`backend/tests/eval/latency/`](../../backend/tests/eval/latency/). Captures baselines per `(machine, knob_stack)` against the canonical loadouts on the actual ICP hardware (single-machine first: Apple M5 Pro 24 GB), with one Anthropic Claude Sonnet reference scenario as the explicit competitor benchmark. Bootstrap-CI gate on metric diffs determines whether an optimization knob (flash attention, KV-cache q8, prefix caching, speculative decoding) earned its complexity. See [`docs/concepts/latency-baseline.md`](../concepts/latency-baseline.md) and [ADR 011](../architecture/decisions/011-latency-benchmark-harness.md). CLI: `python -m tests.eval.latency.run_bench`.
+
 ### Recommendation Engine
 
 `score_model()` computes a compatibility score (0–100) for each model based on:

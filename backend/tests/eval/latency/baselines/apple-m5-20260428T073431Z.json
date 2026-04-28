@@ -1,0 +1,66 @@
+{
+  "by_cell": [
+    {
+      "decode_tps_mean": 9.66,
+      "decode_tps_p50": 10.02,
+      "decode_tps_p95": 11.78,
+      "decode_tps_stdev": 2.3,
+      "errors": [],
+      "model_id": "ollama:qwen3:30b-a3b",
+      "n_errors": 0,
+      "n_timed_runs": 5,
+      "output_tokens_mean": 64.0,
+      "prompt_tokens_mean": 412.0,
+      "scenario_name": "chat-realistic-shallow",
+      "total_ms_mean": 7756.85,
+      "total_ms_p50": 7038.75,
+      "total_ms_p95": 11701.53,
+      "total_ms_stdev": 2292.74,
+      "ttft_ms_mean": 623.24,
+      "ttft_ms_p50": 570.51,
+      "ttft_ms_p95": 816.31,
+      "ttft_ms_stdev": 119.81
+    },
+    {
+      "decode_tps_mean": 15.91,
+      "decode_tps_p50": 15.23,
+      "decode_tps_p95": 25.77,
+      "decode_tps_stdev": 6.37,
+      "errors": [],
+      "model_id": "ollama:qwen3:30b-a3b",
+      "n_errors": 0,
+      "n_timed_runs": 5,
+      "output_tokens_mean": 8.0,
+      "prompt_tokens_mean": 38.0,
+      "scenario_name": "warm-short",
+      "total_ms_mean": 923.3,
+      "total_ms_p50": 816.81,
+      "total_ms_p95": 1774.51,
+      "total_ms_stdev": 491.57,
+      "ttft_ms_mean": 343.58,
+      "ttft_ms_p50": 252.45,
+      "ttft_ms_p95": 810.35,
+      "ttft_ms_stdev": 266.09
+    }
+  ],
+  "machine_info": {
+    "knob_stack": [],
+    "model_label": "Apple M5",
+    "ollama_version": "ollama version is 0.18.0\nWarning: client version is 0.21.2",
+    "platform": "darwin-arm64",
+    "ram_gb": 24
+  },
+  "run_metadata": {
+    "n_timed_runs": 5,
+    "n_warmup_runs": 1,
+    "seeds": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "timestamp_utc": "2026-04-28T07:34:31Z"
+  },
+  "schema_version": 1
+}

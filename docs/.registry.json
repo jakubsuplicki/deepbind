@@ -75,11 +75,12 @@
         "specialists",
         "api-key-management",
         "local-models",
-        "preferences-settings"
+        "preferences-settings",
+        "latency-benchmark"
       ],
       "last_updated": "2026-04-28",
       "status": "current",
-      "_note_2026_04_28": "ADR 004 (inference router) phasing section added; no source changes."
+      "_note_2026_04_28": "Cross-link added to the latency-benchmark concept (ADR 011) — sibling harness measures user-perceived chat latency (TTFT / decode_tps / total_ms) against the same chat path under the same discipline as the conversation eval. No source changes; chat.md gained a 'Latency benchmark harness' subsection pointing at backend/tests/eval/latency/."
     },
     "memory": {
       "doc": "docs/features/memory.md",
@@ -667,6 +668,31 @@
       "last_updated": "2026-04-26",
       "status": "current"
     },
+    "latency-benchmark": {
+      "doc": "docs/concepts/latency-baseline.md",
+      "type": "concept",
+      "sources": [
+        "backend/tests/eval/latency/__init__.py",
+        "backend/tests/eval/latency/scenarios.py",
+        "backend/tests/eval/latency/harness.py",
+        "backend/tests/eval/latency/runner.py",
+        "backend/tests/eval/latency/gate.py",
+        "backend/tests/eval/latency/run_bench.py",
+        "backend/tests/eval/latency/test_scenarios.py",
+        "backend/tests/eval/latency/test_harness.py",
+        "backend/tests/eval/latency/test_runner.py",
+        "backend/tests/eval/latency/test_gate.py",
+        "backend/tests/eval/latency/test_latency_floor.py"
+      ],
+      "depends_on": [
+        "local-models",
+        "chat"
+      ],
+      "last_updated": "2026-04-28",
+      "status": "current",
+      "_note_2026_04_28b": "Amendment 2 to ADR 011 fixed three harness gaps surfaced by the first 14B grid: (1) reference scenarios were duplicated per Ollama model — split scenarios in run_grid so reference runs once per grid; (2) models not pulled in Ollama errored 5× per scenario — added _probe_pulled_models(base_url) hitting GET /api/tags once at run start, absent models record a single skip_reason cell instead; (3) no per-cell sample response text in baseline JSON, forcing curl-based investigation of wrong-shape outputs — aggregate() now captures first non-errored response_text truncated to 500 chars into a new sample_response_text field. Schema additions are additive (skip_reason: Optional[str], sample_response_text: str), schema_version stays at 1. Floor test updated to allow skipped cells. Three new unit tests cover the fixes.",
+      "_note_2026_04_28": "ADR 011 latency benchmark harness — sibling to ADR 010's conversation eval. Captures TTFT / decode_tps / total_ms per (model, scenario, seed) cell on the actual ICP hardware (single-machine first: Apple M5 Pro 24 GB). Five v1 scenarios (warm-short, prefill-4k, prefill-16k, decode-throughput, chat-realistic-shallow) + one Anthropic reference shot for the explicit competitor benchmark. Streaming Ollama HTTP /api/chat client captures TTFT from first content delta and decode_tps from done-event eval_count/eval_duration (model-self-reported, excludes HTTP overhead). Bootstrap-CI gate on paired-cell metric diffs (LOWER_IS_BETTER for TTFT/total_ms, HIGHER_IS_BETTER for decode_tps), same statistical floor as conversations/gate.py. CLI run_bench.py supports --scope nightly|pr; PR mode is the floor-gate subset (~5-10 min) for fast checks, nightly is the full grid (~45-90 min on M5 Pro 24 GB) for canonical baseline capture. Stable-key JSON output committed to baselines/, anchored by machine_info (model_label, ram_gb, ollama_version, knob_stack); diffs across baselines surface which knob produced which effect. Opt-in floor test JARVIS_LATENCY_BENCH=1 mirrors test_baseline_floor.py discipline; skips silently until baseline-0 is captured. 28 unit tests covering scenario shape determinism, streaming-timing logic with stubbed httpx, percentile aggregation, machine-info capture, and bootstrap-CI verdict logic across all four cases (improvement/regression/equivalent/insufficient_data). No production-path changes — pure dev infra. Substrate landed in this chunk; baseline-0 capture + knob-loop chunks (flash_attention, kv_cache_q8, prefix_caching verify, speculative decoding) follow per ADR 011 migration path."
+    },
     "api-key-management": {
       "doc": "docs/features/api-key-management.md",
       "type": "feature",
@@ -715,11 +741,12 @@
       "depends_on": [
         "chat",
         "api-key-management",
-        "workspace-onboarding"
+        "workspace-onboarding",
+        "latency-benchmark"
       ],
       "last_updated": "2026-04-28",
       "status": "current",
-      "_note_2026_04_28": "Catalog correctness pass: fixed Qwen3 native contexts (32K not 40K/256K), Devstral native (256K not 384K), renamed Gemma 4 27B (nonexistent) to Gemma 4 26B-A4B; added Qwen3-14B, Qwen3-30B-A3B-Instruct-2507, Qwen3-4B-Instruct-2507, Granite 4.0 H-Micro/H-Tiny/H-Small. All entries with unverified Ollama tags carry internal=True (filtered from user picker until tags are verified against ollama.com/library) — user-pickable list is the 6 original entries with verified tags. Each internal entry carries a TODO: verify Ollama tag comment. Tool_mode taxonomy renamed: native→native_qwen3, json_fallback→adapted, limited→excluded_from_tools. Added probe_runtime_load() + GET /api/local/runtime/load — pure-Python (psutil + Ollama /api/ps), macOS branch graduates to Tauri-native after ADR 003. Catalog gained `bytes_per_kv_token` + `attention_arch` (transformer|mamba|swa, Literal-typed); `effective_footprint_bytes(entry, ctx_len)` is the helper that feeds the future memory-pressure auto-downgrade (the actual user problem: free RAM drops, model + KV cache no longer fits, swap to a smaller one rather than OOM). Rolled back this same chunk: InferenceRouter skeleton, ProfilePack 9-vertical taxonomy, slot_class field, KEEP_ALIVE_BY_SLOT policy table, route audit on every done event. Reason: the per-request classifier and multi-slot dispatch were over-engineered for the actual problem (single chat model + memory-pressure downgrade); the load-bearing pieces (catalog correctness, runtime probe, footprint helper, atomic config IO, licensing) survive. ADRs 004/005 amended with the rollback note."
+      "_note_2026_04_28": "Catalog correctness pass: fixed Qwen3 native contexts (32K not 40K/256K), Devstral native (256K not 384K), renamed Gemma 4 27B (nonexistent) to Gemma 4 26B-A4B; added Qwen3-14B, Qwen3-30B-A3B-Instruct-2507, Qwen3-4B-Instruct-2507, Granite 4.0 H-Micro/H-Tiny/H-Small. All entries with unverified Ollama tags carry internal=True (filtered from user picker until tags are verified against ollama.com/library) — user-pickable list is the 6 original entries with verified tags. Each internal entry carries a TODO: verify Ollama tag comment. Tool_mode taxonomy renamed: native→native_qwen3, json_fallback→adapted, limited→excluded_from_tools. Added probe_runtime_load() + GET /api/local/runtime/load — pure-Python (psutil + Ollama /api/ps), macOS branch graduates to Tauri-native after ADR 003. Catalog gained `bytes_per_kv_token` + `attention_arch` (transformer|mamba|swa, Literal-typed); `effective_footprint_bytes(entry, ctx_len)` is the helper that feeds the future memory-pressure auto-downgrade (the actual user problem: free RAM drops, model + KV cache no longer fits, swap to a smaller one rather than OOM). Rolled back this same chunk: InferenceRouter skeleton, ProfilePack 9-vertical taxonomy, slot_class field, KEEP_ALIVE_BY_SLOT policy table, route audit on every done event. Reason: the per-request classifier and multi-slot dispatch were over-engineered for the actual problem (single chat model + memory-pressure downgrade); the load-bearing pieces (catalog correctness, runtime probe, footprint helper, atomic config IO, licensing) survive. ADRs 004/005 amended with the rollback note. Cross-link added to latency-benchmark (ADR 011) — sibling harness captures TTFT / decode_tps / total_ms baselines per (model, scenario) on the actual ICP hardware (M5 Pro 24 GB first), gates future optimization knobs (flash_attention, kv_cache_q8, prefix caching, speculative decoding) under a bootstrap CI. local-models.md gained a 'Latency baseline' subsection."
     },
     "licensing": {
       "doc": "docs/features/licensing.md",

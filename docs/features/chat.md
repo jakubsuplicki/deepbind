@@ -76,6 +76,10 @@ The conversation-replay eval harness lives at [`backend/tests/eval/conversations
 
 Neither file is in the production path; the runner is dev infra that the engineer invokes locally before merging compaction-affecting changes.
 
+### Latency benchmark harness
+
+A sibling harness at [`backend/tests/eval/latency/`](../../backend/tests/eval/latency/) measures user-perceived chat latency (TTFT, decode tokens/sec, end-to-end wall clock) on the actual ICP hardware. Same discipline as the conversation harness — committed JSON baselines, opt-in pre-merge gate, bootstrap-CI verdict — applied to the speed axis instead of answer-quality. Runs the streaming Ollama HTTP `/api/chat` endpoint with `temperature: 0` and a fixed seed, captures TTFT from the first non-empty content delta, and reads `eval_count / eval_duration` from the `done` event for honest decode throughput. One Anthropic Claude Sonnet reference scenario provides the explicit "are we faster than the cloud option?" benchmark; skips silently when no API key. CLI: `python -m tests.eval.latency.run_bench`. See [`docs/concepts/latency-baseline.md`](../concepts/latency-baseline.md) and [ADR 011](../architecture/decisions/011-latency-benchmark-harness.md).
+
 ### Error handling in ClaudeService
 
 All Anthropic SDK exceptions are caught and converted to `StreamEvent(type="error")` with user-readable messages. Rate limits, 529 overload responses, 401 authentication failures, and generic 5xx errors each get distinct copy. The frontend detects whether an error message is retryable (matches "try again", "overloaded", "rate limit", or "reconnect") and shows a Retry button if so.
