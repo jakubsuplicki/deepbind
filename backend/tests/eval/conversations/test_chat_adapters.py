@@ -43,8 +43,8 @@ def test_anthropic_chat_satisfies_chat_callable_protocol():
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
 
-def test_ollama_default_model_matches_adr_008_pinned_chat_slot():
-    """ADR 008 pins Qwen3-30B-A3B as the v1 chat slot."""
+def test_ollama_default_model_is_v1_canonical_chat():
+    """The eval pins Qwen3-30B-A3B as the v1 canonical chat model."""
     chat = OllamaChat()
     assert "qwen3" in chat.model.lower()
     assert "30b" in chat.model.lower() or "a3b" in chat.model.lower()

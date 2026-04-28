@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-27 (initial), amended 2026-04-28 (eval-side `retrieval-substitution-v1` landed; production wiring pending)
-**Related:** [ADR 004](004-inference-router-architecture.md) · [ADR 008](008-conversation-pinned-chat-model.md) · [`docs/features/retrieval.md`](../../features/retrieval.md) · [`docs/features/sessions.md`](../../features/sessions.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §5
+**Related:** [`docs/features/retrieval.md`](../../features/retrieval.md) · [`docs/features/sessions.md`](../../features/sessions.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §5
 
 ## Context
 
@@ -33,7 +33,7 @@ This makes a different compaction strategy possible than the standard summarizat
 3. **Token counting must use the model's actual tokenizer.** Character approximation breaks across languages and models. HuggingFace tokenizers are available for every model in the strict-OSI catalog.
 4. **Effective context, not advertised context, defines the budget.** Default to `min(native, RULER_safe_estimate)` — typically ~32K for the Qwen3 family.
 5. **Recent turns are the place small-model attention is weakest.** [Product-direction §5](../../research/product-direction-v1-v2.md) is explicit. Compaction must protect the recent window aggressively, not strip it.
-6. **Compaction cannot fire mid-stream or mid-tool-loop.** Same atomicity policy as [ADR 008](008-conversation-pinned-chat-model.md).
+6. **Compaction cannot fire mid-stream or mid-tool-loop.** Compaction runs only at turn boundaries — never during a streaming response or inside a tool-call loop.
 
 ## Decision
 
@@ -58,13 +58,13 @@ The chat router computes `system_prompt_tokens + history_tokens + new_message_to
 
 ### Proactive trigger at 70% of effective budget
 
-Compaction fires when projected tokens exceed 70% of the effective ceiling. The threshold is a configurable parameter per profile (`ProfilePack.context_compaction_threshold`), with reasonable defaults; users on heavy long-context work can lower it.
+Compaction fires when projected tokens exceed 70% of the effective ceiling. The threshold is a configurable parameter with a reasonable default; users on heavy long-context work can lower it.
 
 70% is initial-best-guess and should be tuned with the [`eval-baseline`](../../concepts/eval-baseline.md) harness once compaction is wired.
 
 ### Recent verbatim window
 
-The last N user/assistant turn pairs are never compacted. N defaults to 8 (configurable per profile via `ProfilePack.context_recent_n`). The recent window protects the conversation's working memory and the place small-model attention adherence is most fragile.
+The last N user/assistant turn pairs are never compacted. N defaults to 8 (configurable). The recent window protects the conversation's working memory and the place small-model attention adherence is most fragile.
 
 ### System-prompt budget enforcement
 
@@ -76,11 +76,11 @@ The last N user/assistant turn pairs are never compacted. N defaults to 8 (confi
 
 ### Atomicity
 
-Compaction is **locked during a tool-call loop and during a stream.** Same in-flight lock as [ADR 008](008-conversation-pinned-chat-model.md). It runs only at safe boundaries — between turns, before the next request is dispatched.
+Compaction is **locked during a tool-call loop and during a stream.** It runs only at safe boundaries — between turns, before the next request is dispatched.
 
 ### Cross-model swap interaction
 
-When a manual model swap happens ([ADR 008](008-conversation-pinned-chat-model.md)), the new model gets the **compacted** history, not the full pre-compaction history. The compacted view is the canonical active context; the swap doesn't undo compaction.
+When a manual model swap (or future memory-pressure auto-downgrade) happens, the new model gets the **compacted** history, not the full pre-compaction history. The compacted view is the canonical active context; the swap doesn't undo compaction.
 
 ### UI surface
 
@@ -90,11 +90,11 @@ The conversation UI shows which turns are **in active context** vs **in vault, r
 - **Re-include manually** — promote a vault turn back into active context.
 - **See what was compacted** — turn-level summary visible when expanded.
 
-This is the conversation analog of the runtime-model panel ([ADR 004](004-inference-router-architecture.md)) — context state is visible, not magic.
+Context state is visible, not magic — the user sees what the model "saw" at each turn.
 
 ### Audit trail
 
-Every compaction event writes to the session row: `{timestamp, turns_dropped, summary_used: bool, recent_window_size, effective_ctx_at_event}`. Compliance buyers can see what the model "saw" at each turn alongside the per-turn `model_id` from [ADR 008](008-conversation-pinned-chat-model.md).
+Every compaction event writes to the session row: `{timestamp, turns_dropped, summary_used: bool, recent_window_size, effective_ctx_at_event}`. Compliance buyers can see what the model "saw" at each turn alongside the per-turn `model_id`.
 
 ## Alternatives considered
 
@@ -132,7 +132,7 @@ Saves the plumbing-model dependency. Disturbs the chat model's attention with su
 - Summary-fallback's quality varies with the plumbing model. Granite 4 H-Micro is small; its summary quality on conversation-style input is unmeasured in the research record.
 
 ### What this changes about existing code
-- [`ModelCatalogEntry`](../../../backend/services/ollama_service.py#L113) gains `effective_context_tokens`, `tokenizer_id`, and (per [ADR 004](004-inference-router-architecture.md)) `bytes_per_kv_token`, `attention_arch`, `slot_class`.
+- [`ModelCatalogEntry`](../../../backend/services/ollama_service.py#L113) gains `effective_context_tokens`, `tokenizer_id`. (`bytes_per_kv_token` and `attention_arch` already shipped for the future memory-pressure auto-downgrade.)
 - New `backend/services/token_counting.py` (or extension of an existing service) wrapping HuggingFace tokenizers.
 - New `backend/services/compaction_service.py` — the compaction policy logic. Called from chat router before dispatch.
 - [`chat.py:_handle_message`](../../../backend/routers/chat.py#L286) calls compaction at the per-turn boundary (never mid-stream, never mid-tool-loop).
@@ -140,7 +140,7 @@ Saves the plumbing-model dependency. Disturbs the chat model's attention with su
 - [`context_builder`](../../../backend/services/context_builder.py) enforces a total system-prompt budget against `effective_context_tokens`, in addition to the existing per-note caps.
 - [`retrieval`](../../features/retrieval.md) gains a "find earlier turn" entry point (re-uses the same retrieval pipeline with a session-scoped filter).
 - New conversation UI elements: in-active-context indicator, pin-turn affordance, re-include affordance, compaction expand-summary view.
-- [`ProfilePack`](../decisions/005-profile-driven-model-stacks.md) gains `context_recent_n`, `context_compaction_threshold`, `context_perf_mode_default`.
+- Compaction config (`context_recent_n`, `context_compaction_threshold`) lives in `app/config.json`.
 
 ## Implementation status (2026-04-28)
 

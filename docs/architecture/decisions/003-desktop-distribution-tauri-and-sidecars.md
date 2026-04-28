@@ -50,18 +50,18 @@ The `ollama` binary ships inside the app bundle (Mac `.app/Contents/Resources/`,
 
 Uninstall removes that directory.
 
-**Coexistence with a system-installed Ollama.** Developer laptops often already run Ollama on `:11434`. The bundled sidecar binds a non-default loopback port (e.g. `:11435`) so port collision is impossible. We do not attempt to reuse the system instance — version drift, model-storage co-mingling, and lifecycle ownership all argue against it. The runtime UI panel ([ADR 004](004-inference-router-architecture.md)) surfaces a one-line note when a system Ollama is detected on `:11434`, so the user understands why GPU/VRAM may show contention.
+**Coexistence with a system-installed Ollama.** Developer laptops often already run Ollama on `:11434`. The bundled sidecar binds a non-default loopback port (e.g. `:11435`) so port collision is impossible. We do not attempt to reuse the system instance — version drift, model-storage co-mingling, and lifecycle ownership all argue against it. The runtime UI surfaces a one-line note when a system Ollama is detected on `:11434`, so the user understands why GPU/VRAM may show contention.
 
 **Attribution.** Ollama is MIT-licensed; redistribution inside a commercial product is explicitly permitted, but MIT requires attribution in distributed binary form. The Ollama LICENSE plus all transitive third-party notices ship in `Resources/LICENSES/` (macOS) / `licenses\` next to the install root (Windows), and are linked from a Help → Open-Source Notices menu item.
 
 ### First-launch model fetch (the one outbound call we accept at install time)
 
-Profile + hardware tier determines a stack manifest (see [ADR 005](005-profile-driven-model-stacks.md)). The manifest specifies model blobs by **pinned URL with SHA-256 verification**, signed by us (Ed25519 over the manifest contents). On first launch, after profile selection, the app:
+Hardware tier + onboarding selections determine which model blobs to fetch. The install manifest specifies blobs by **pinned URL with SHA-256 verification**, signed by us (Ed25519 over the manifest contents). On first launch the app:
 
 1. Verifies the manifest signature locally.
 2. Pulls each blob from the pinned URL.
 3. Verifies SHA-256 of each blob before activating it.
-4. Surfaces the fetch as an explicit "downloading models for [profile] on [tier]" UX step the user authorizes once.
+4. Surfaces the fetch as an explicit "downloading models for [tier]" UX step the user authorizes once.
 
 Where Ollama provides the pull mechanism (`/api/pull`), we use it but verify the result against our manifest's SHA, not Ollama's. Ollama tags drift; SHAs do not.
 
@@ -120,7 +120,7 @@ For true air-gap customers (ITAR seats, classified programs), an offline install
 
 1. **Signing infrastructure stand-up.** The cert decisions are made (driver #5); what's open is the operational stand-up: managed-signing-service vendor selection (DigiCert KeyLocker vs SSL.com eSigner) for Windows EV, and self-hosted macOS notarization runner with stored Apple Developer ID credentials. Must complete before the first notarized build target lands.
 2. **Auto-update mechanism choice.** Sparkle (Mac) is the default; Squirrel vs MSIX-via-winget for Windows is a judgment call once we have the first Windows build. Signed delta updates with rollback are required (a bad update on a compliance workstation is an outage). Updating the bundled Ollama binary travels with the rest of the bundle.
-3. **GPU/Metal/CUDA detection surface.** Ollama handles this internally; the runtime UI panel ([ADR 004](004-inference-router-architecture.md)) should surface accelerator presence so the user understands their hardware floor, and the system-Ollama coexistence note (see Ollama distribution decision) lives here too.
+3. **GPU/Metal/CUDA detection surface.** Ollama handles this internally; the runtime UI should surface accelerator presence so the user understands their hardware floor, and the system-Ollama coexistence note (see Ollama distribution decision) lives here too.
 4. **First-launch model-fetch resumability.** Half-pulled blobs on a flaky connection should resume rather than restart. Tracked as a UX requirement on the model-fetch surface.
 5. **Manifest-signing key custody hardening.** Initial cadence + KMS choice are recorded in the decision body; a future ADR covers dual-signature / threshold custody if a regulated customer requires it.
 6. **Future: `llama.cpp` direct integration** to remove the second sidecar and unlock first-class MLX. Out of scope for v1; revisit when v2 platform work is scheduled.

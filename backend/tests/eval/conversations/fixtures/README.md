@@ -14,7 +14,7 @@ Each fixture is a JSON file:
   "schema_version": 1,                     // bumped on breaking schema changes
   "description": "...",                    // why this fixture exists, what it stresses
   "tags": ["long-conv", "tool-recall"],    // for filter / report grouping
-  "profile": "mechanical-process-engineer",// ADR 005 profile this fixture targets
+  "profile": "mechanical-process-engineer",// vertical tag this fixture targets
 
   "preconditions": {
     "workspace_fixture": "reference_workspace",  // SQLite + Markdown bootstrap

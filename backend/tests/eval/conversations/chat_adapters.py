@@ -42,7 +42,7 @@ import httpx
 
 
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-DEFAULT_OLLAMA_MODEL = "qwen3:30b-a3b"  # ADR 008's pinned chat slot
+DEFAULT_OLLAMA_MODEL = "qwen3:30b-a3b"  # v1 canonical chat model
 DEFAULT_OLLAMA_TIMEOUT_S = 600.0  # 10 minutes per turn — generous for slow hardware
 # Ollama's default num_ctx is 2K-4K depending on version, which our 30-turn
 # fixtures blow past on the first call (500 Internal Server Error). 16K is
@@ -209,10 +209,9 @@ class OllamaChat:
     num_ctx: Optional[int] = DEFAULT_OLLAMA_NUM_CTX  # None = let Ollama default
     # Qwen3 has /think and /no_think directives. By default models like
     # Qwen3-30B-A3B run with thinking ON, generating hundreds of tokens of
-    # internal monologue before the actual answer. ADR 008 pins the v1
-    # chat slot to /no_think — production runs without thinking for latency
-    # reasons. The eval mirrors production: True by default. Set False if
-    # you specifically want to A/B test thinking on/off.
+    # internal monologue before the actual answer. v1 production runs without
+    # thinking for latency reasons; the eval mirrors that with True by default.
+    # Set False if you specifically want to A/B test thinking on/off.
     disable_thinking: bool = True
 
     @property
@@ -243,7 +242,7 @@ class OllamaChat:
         # mechanism is the top-level "think" boolean on the request body.
         # Empirically: think:false reduces a "say hi" turn from ~10s to
         # ~500ms on Qwen3-14B (no thinking-token decode). Default off
-        # matches ADR 008's pinned chat-slot policy.
+        # matches v1 canonical chat-model policy.
         if self.disable_thinking:
             payload["think"] = False
 

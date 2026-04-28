@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-27 (initial), amended 2026-04-28 (first-run findings + depth-pressure fixtures + retrieval-substitution-v1 implemented)
-**Related:** [ADR 008](008-conversation-pinned-chat-model.md) · [ADR 009](009-context-overflow-compaction.md) · [`docs/concepts/eval-baseline.md`](../../concepts/eval-baseline.md) · [`docs/research/models/model-research-3.md`](../../research/models/model-research-3.md) · [`docs/research/models/model-research-4.md`](../../research/models/model-research-4.md)
+**Related:** [ADR 009](009-context-overflow-compaction.md) · [`docs/concepts/eval-baseline.md`](../../concepts/eval-baseline.md) · [`docs/research/models/model-research-3.md`](../../research/models/model-research-3.md) · [`docs/research/models/model-research-4.md`](../../research/models/model-research-4.md)
 
 ## Context
 
@@ -79,7 +79,7 @@ The same interface ships in production (`backend/services/chat/context_strategy.
 
 ### Pinned chat model
 
-The eval pins **Qwen3-30B-A3B (May 2025 hybrid base)** at Q4_K_M with `/no_think` directive — the v1 canonical chat slot per ADR 008's D12. Every cross-strategy comparison runs against this single model. Without the pin, deltas conflate "strategy worked" with "model was slightly different."
+The eval pins **Qwen3-30B-A3B (May 2025 hybrid base)** at Q4_K_M with `/no_think` directive — the v1 canonical chat model. Every cross-strategy comparison runs against this single model. Without the pin, deltas conflate "strategy worked" with "model was slightly different."
 
 **Downgrade-ladder sweep** is a secondary run (lower frequency — once per release, not per PR) covering Qwen3-14B and Qwen3-8B against the same fixtures. Catches the case where compaction works on the 30B-A3B but degrades on the smaller fallbacks.
 
@@ -252,7 +252,7 @@ Rejected. Absolute scoring is dramatically less reliable than pairwise across th
 ### Positive
 - The fork from ADR 009 ("does retrieval-first beat naive truncation, or just match full-history?") becomes answerable before code lands.
 - Every future compaction or retrieval-substitution change has a frozen comparison point.
-- Strategy abstraction in production (`ContextStrategy`) is small, justifiable, and useful beyond eval — per-profile compaction policy lands cleanly later (ADR 005 follow-up).
+- Strategy abstraction in production (`ContextStrategy`) is small, justifiable, and useful beyond eval — different compaction policies for different workloads can attach later without re-shaping the chat path.
 - The eval runs entirely on the local Apache-2.0 stack we ship; no hosted-API dependency creeps in.
 - Determinism kit forces explicit treatment of every randomness source — useful in production debugging too.
 
@@ -293,7 +293,7 @@ The first full grid (5 strategies × 15 fixtures × 3 seeds = 225 model calls) r
 
 ### Issue 1 — Qwen3 thinking-mode leak survives `think: false`
 
-The eval harness sends `think: false` at the top level of the Ollama chat request to disable Qwen3's chain-of-thought decode (per ADR 008's `/no_think` posture for the v1 chat slot). On Ollama 0.18.0 this only partially honors the request: the model still emits the chain-of-thought, Ollama strips the opening `<think>` tag but leaves the prose plus the closing `</think>`, then concatenates the real answer. All 255 turns of the first run had a `</think>` in the response body.
+The eval harness sends `think: false` at the top level of the Ollama chat request to disable Qwen3's chain-of-thought decode (`/no_think` posture for the v1 chat model). On Ollama 0.18.0 this only partially honors the request: the model still emits the chain-of-thought, Ollama strips the opening `<think>` tag but leaves the prose plus the closing `</think>`, then concatenates the real answer. All 255 turns of the first run had a `</think>` in the response body.
 
 The scorer regexes over the full response. Chain-of-thought routinely names rejected candidates ("the user wants `finalize_invoice`, not `rollback_to_draft`") that match `must_not_contain` patterns — producing false-positive `CONFABULATION` severities even on fixtures where the final answer was correct. Confabulation rate on the raw run was 35.6% across full-context strategies; after stripping chain-of-thought it dropped to 8.9%. The 26.7-pp gap was scoring artifact, not model behavior.
 
@@ -352,7 +352,7 @@ Both pre-conditions for a meaningful re-run are now in place; the model run itse
 
 1. **Fixture-schema versioning.** Add `schema_version` to fixture JSON and to baselines. Re-recording protocol when tool surface or expected-facts schema changes.
 2. **Local-judge upgrade trigger.** Define the criteria for swapping the default hosted judge to a local model: (a) Tier C dev hardware in place; (b) hosted-judge cost or rate-limit becoming material at the harness's run cadence; (c) a customer-facing reason to claim "the eval is fully local" (none expected, but worth recording). Until at least one of those is true, hosted-default is correct.
-3. **Per-profile fixture shards.** ADR 005 profiles (legal, engineering, medical) have different conversation patterns. Once profile-specific behavior diverges, fixtures fork by profile. Out of scope for v1 launch; the original ten are profile-agnostic, and the depth-pressure additions tag a profile (`legal`, `engineering`, `generic`) but are still cross-profile in spirit.
+3. **Per-vertical fixture shards.** Legal / engineering / medical workloads have different conversation patterns. Once vertical-specific behavior diverges, fixtures fork by vertical. Out of scope for v1 launch; the original ten are cross-vertical, and the depth-pressure additions tag a vertical (`legal`, `engineering`, `generic`) but are still cross-vertical in spirit.
 4. **CI integration for the floor test.** Currently opt-in via env var. Once the reference workspace and judge model are reliably available on a dedicated eval runner, promote to required-on-merge for retrieval/compaction-affecting paths.
 5. **Token-cost regression budget.** The floor test gates latency; an analogous gate on tokens-into-judge per run would catch eval-cost runaway. Add once we have a few full-grid runs to set a budget.
 6. **Confabulation rate as a first-class metric.** `must_not_contain` already exists; aggregating into a per-strategy "confabulation rate" surface in the output JSON makes the negative signal as visible as the positive one.

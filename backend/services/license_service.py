@@ -1,7 +1,6 @@
 """License verification — Ed25519-signed offline license file (ADR 006).
 
-Scaffold scope (2026-04-28). Per ADR 006 + ADR 004's "Buildable today" /
-"Blocked by upstream ADRs" split, this module implements the *crypto layer*:
+Scaffold scope (2026-04-28). Per ADR 006, this module implements the *crypto layer*:
 Ed25519 sign/verify and the LicenseClaims schema. The crypto layer is
 platform-independent — it works the same whether the app ships under a Tauri
 shell or a dev-mode browser, so it can land before ADR 003 without locking in

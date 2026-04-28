@@ -396,7 +396,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Override the provider's default model. For Ollama, defaults "
-            "to 'qwen3:30b-a3b' (ADR 008's pinned chat slot)."
+            "to 'qwen3:30b-a3b' (the v1 canonical chat model)."
         ),
     )
     p.add_argument(

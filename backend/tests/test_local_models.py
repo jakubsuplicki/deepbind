@@ -411,9 +411,9 @@ class TestModelCatalog:
     def test_qwen3_30b_a3b_instruct_2507_present(self):
         from services.ollama_service import get_model_by_id
 
-        # Required by ADR 008 as the v1 chat-pinned slot. Currently internal
-        # because the Ollama tag is unverified — the dispatcher (ADR 004) is
-        # the consumer until the tag verifies, then it flips to user-pickable.
+        # v1 canonical chat model. Currently internal because the Ollama tag
+        # is unverified; flips to user-pickable when the tag verifies against
+        # the live registry.
         m = get_model_by_id("qwen3-30b-a3b-instruct-2507")
         assert m is not None
         assert m.preset == "best-local"

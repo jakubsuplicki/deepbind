@@ -81,9 +81,8 @@ Even a non-inference admin portal (seat management, telemetry dashboards) breaks
 - The strict-OSI license filter aligns with this decision (no licensing-tax procurement reviews).
 
 ### Negative
-- Hardware floor excludes some buyers (no fallback to cloud for laptops that can't run a 14B model). Mitigated by the [profile-driven model stack](005-profile-driven-model-stacks.md) and downgrade ladder, but unavoidable below Tier-A hardware.
+- Hardware floor excludes some buyers (no fallback to cloud for laptops that can't run a 14B model). Mitigated by smaller-model alternatives at install + the future memory-pressure auto-downgrade for in-session pressure, but unavoidable below Tier-A hardware.
 - Loses access to frontier model capability. A 30B-A3B local stack is not GPT-5. The wedge is "good enough locally, sovereign," not "best in class."
-- Engineering depth shifts to inference router + dispatcher + profile manifest work that a cloud-by-default product wouldn't need (filed as ADRs 004 / 005).
 
 ### What this changes about existing code
 - [`backend/routers/chat.py`](../../../backend/routers/chat.py) `_make_llm()` — current default is Claude. Default must invert to local. Cloud paths gated behind the (future) cloud-toggle and the existing privacy gate.

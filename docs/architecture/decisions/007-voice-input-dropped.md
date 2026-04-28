@@ -81,11 +81,11 @@ Solves the bundle-size question but doubles the SKU complexity and marketing sur
 - [`docs/features/voice.md`](../../features/voice.md) updates to note v1 status: TTS active, STT feature-flagged off.
 - [`overview.md`](../../overview.md) updates the "Voice — Web Speech API" line to clarify TTS-only.
 - [`docs/.registry.json`](../../.registry.json) entry for `voice` updates `last_updated` and the feature description.
-- TTS slot in every `ProfilePack` ([ADR 005](005-profile-driven-model-stacks.md)) is Kokoro-82M.
+- TTS in every install is Kokoro-82M.
 
 ## Open follow-ups (non-blocking)
 
 1. **Marketing copy sweep.** Voice-first phrasing across [`overview.md`](../../overview.md), [`JARVIS-PLAN.md`](../../JARVIS-PLAN.md), onboarding strings, README, and any pitch-deck artifacts. Replace with the new positioning.
-2. **TTS UX defaults per profile.** Should the patent-prosecutor profile default to TTS off? Probably yes for litigation contexts where audio leakage is sensitive. Per-profile defaults captured in [ADR 005](005-profile-driven-model-stacks.md) `ProfilePack.ui_strings` / settings.
+2. **TTS UX defaults for sensitive contexts.** Should installs targeted at litigation contexts default TTS off? Probably yes (audio leakage risk). Defer the default-off mechanism until the install-preset shape stabilises.
 3. **v1.5+ voice-input reactivation criteria.** Document what evidence would justify reactivation — a candidate list: (a) a customer interview signal that voice is actually requested; (b) an ASR model in the strict-OSI catalog with Polish-quality parity; (c) a Tier-B+ default stack with headroom for the additional model.
 4. **Browser-native dictation surface.** Until and unless STT reactivates, document in user-facing help that OS-level dictation works in any text input.

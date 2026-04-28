@@ -129,15 +129,15 @@ class ModelCatalogEntry(BaseModel):
     best_for: List[str]
     native_tools: bool
     internal: bool = False  # True for plumbing/classifier slots not exposed in the user-facing chat picker
-    # ADR 004 §"KV-aware footprint accounting" fields. Effective footprint at
-    # request time = weights + bytes_per_kv_token × ctx_len_now. The values
-    # are approximate, derived from architectural intuition for ADR 004 §"KV-aware
-    # footprint accounting"; they're refined as measurement data lands. The
-    # ratios across architectures (mamba << swa < transformer) are the
-    # load-bearing signal, not the absolute numbers.
+    # KV-aware footprint accounting: effective footprint at request time =
+    # weights + bytes_per_kv_token × ctx_len_now. These fields feed
+    # `effective_footprint_bytes()` which is the predicate the future
+    # memory-pressure auto-downgrade uses to ask "does this still fit?".
+    # Values are approximate (architectural intuition + research-1 §"KV-cache
+    # discipline"); the ratios across architectures (mamba << swa < transformer)
+    # are the load-bearing signal, not the absolute numbers.
     bytes_per_kv_token: int = 4096  # transformer default; mamba/swa override below
     attention_arch: Literal["transformer", "mamba", "swa"] = "transformer"
-    slot_class: str = "conversational"  # "conversational" | "long_context" | "reasoning" | "code" | "best_local" | "plumbing" | "embedding" | "vision"
 
 
 class ModelRecommendation(BaseModel):
@@ -206,10 +206,10 @@ class LoadedOllamaModel(BaseModel):
 class RuntimeLoad(BaseModel):
     """A snapshot of how loaded the local inference runtime currently is.
 
-    Buildable today per ADR 004 §"Buildable today" — pure-Python via psutil and
-    Ollama's `/api/ps`. The future InferenceRouter (ADR 004) consumes this to
-    decide whether a `route(request)` decision can fit in the current footprint
-    or requires unloading another slot first.
+    Pure-Python via psutil and Ollama's `/api/ps`. Consumed by the future
+    memory-pressure auto-downgrade: when free RAM drops below the headroom
+    needed for the current model + KV cache, swap to a smaller model that fits
+    rather than letting Ollama OOM or thrash swap.
 
     On Apple Silicon, `gpu_vram_total_gb` and `gpu_vram_used_gb` are None because
     GPU memory is shared with system RAM (unified memory) — callers infer the
@@ -252,7 +252,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=False,
         bytes_per_kv_token=2048,
         attention_arch="transformer",
-        slot_class="conversational",
     ),
     ModelCatalogEntry(
         id="qwen3-4b",
@@ -273,7 +272,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=False,
         bytes_per_kv_token=3072,
         attention_arch="transformer",
-        slot_class="conversational",
     ),
     ModelCatalogEntry(
         id="qwen3-8b",
@@ -294,7 +292,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=True,
         bytes_per_kv_token=4096,
         attention_arch="transformer",
-        slot_class="conversational",
     ),
     ModelCatalogEntry(
         id="ministral-3-8b",
@@ -315,7 +312,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=False,
         bytes_per_kv_token=3072,
         attention_arch="transformer",
-        slot_class="long_context",
     ),
     ModelCatalogEntry(
         id="gemma4-e4b",
@@ -336,7 +332,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=True,
         bytes_per_kv_token=1024,
         attention_arch="swa",
-        slot_class="reasoning",
     ),
     ModelCatalogEntry(
         id="devstral-small-2-24b",
@@ -357,16 +352,14 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=True,
         bytes_per_kv_token=5120,
         attention_arch="transformer",
-        slot_class="code",
     ),
     # ──────────────────────────────────────────────────────────────────────
-    # Entries below are present in the catalog universe (consumed by the
-    # future InferenceRouter, ADR 004) but carry `internal=True` because their
-    # Ollama registry tags have NOT been verified against `ollama.com/library/<name>`.
-    # The user-facing chat picker filters them out so a stale-tag pull doesn't
-    # 404 on the customer. Promotion to user-pickable requires verifying the
-    # tag via `ollama pull <tag>` against the live registry, then flipping
-    # `internal=False`.
+    # Entries below carry `internal=True` because their Ollama registry tags
+    # have NOT been verified against `ollama.com/library/<name>`. The user-
+    # facing chat picker filters them out (`build_catalog(include_internal=False)`)
+    # so a stale-tag pull doesn't 404 on the customer. Promotion to user-pickable
+    # requires verifying the tag via `ollama pull <tag>` against the live registry,
+    # then flipping `internal=False`.
     # ──────────────────────────────────────────────────────────────────────
     ModelCatalogEntry(
         # TODO: verify Ollama tag — was previously `gemma4:26b` with the wrong
@@ -392,7 +385,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=1536,
         attention_arch="swa",
-        slot_class="best_local",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — Qwen3 -2507 split fine-tunes use various
@@ -416,7 +408,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=3072,
         attention_arch="transformer",
-        slot_class="long_context",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — `qwen3:14b` is plausible but unverified.
@@ -439,11 +430,10 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=5120,
         attention_arch="transformer",
-        slot_class="conversational",
     ),
     ModelCatalogEntry(
-        # TODO: verify Ollama tag — required by ADR 008 as the v1 chat-pinned
-        # slot. Common Ollama abbreviations: `:30b-a3b`, `:30b-instruct`, etc.
+        # TODO: verify Ollama tag — v1 canonical chat model. Common Ollama
+        # abbreviations: `:30b-a3b`, `:30b-instruct`, etc.
         id="qwen3-30b-a3b-instruct-2507",
         preset="best-local",
         ollama_model="qwen3:30b-a3b-instruct-2507",
@@ -457,13 +447,12 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         min_disk_gb=26,
         cpu_friendly=False,
         gpu_preferred=True,
-        strengths=["MoE 30B/3B-active", "256K native", "tool calling", "ADR 008 pinned chat slot"],
+        strengths=["MoE 30B/3B-active", "256K native", "tool calling", "v1 canonical chat model"],
         best_for=["best local chat", "long conversations", "tools"],
         native_tools=True,
         internal=True,
         bytes_per_kv_token=4096,
         attention_arch="transformer",
-        slot_class="best_local",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — IBM Granite 4.0 tag conventions vary
@@ -487,7 +476,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=256,
         attention_arch="mamba",
-        slot_class="plumbing",
     ),
     ModelCatalogEntry(
         id="granite-4-h-tiny",
@@ -509,7 +497,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=512,
         attention_arch="mamba",
-        slot_class="plumbing",
     ),
     ModelCatalogEntry(
         id="granite-4-h-small",
@@ -531,7 +518,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=1024,
         attention_arch="mamba",
-        slot_class="plumbing",
     ),
 ]
 
@@ -542,7 +528,7 @@ _CATALOG_BY_ID: Dict[str, ModelCatalogEntry] = {m.id: m for m in MODEL_CATALOG}
 def _tool_mode_for(entry: ModelCatalogEntry) -> str:
     """Derive tool_mode from catalog entry flags.
 
-    Tool-mode taxonomy (renamed 2026-04-28 per ADR 004's "Tool-format hardening"):
+    Tool-mode taxonomy:
       - native_qwen3: model exposes native function-calling in Qwen3 family format
         (the format the dispatcher's adapter standardises on)
       - adapted: tool calls are adapted via JSON-mode prompting through LiteLLM
@@ -578,12 +564,12 @@ def get_model_by_litellm(litellm_model: str) -> Optional[ModelCatalogEntry]:
 
 
 def effective_footprint_bytes(entry: ModelCatalogEntry, ctx_len_now: int) -> int:
-    """Per ADR 004 §"KV-aware footprint accounting".
+    """Effective footprint = weights + bytes_per_kv_token × ctx_len_now.
 
-    Effective footprint = weights + bytes_per_kv_token × ctx_len_now. The
-    InferenceRouter's `can_load(model)` uses this rather than `download_size_gb`
-    alone — a long Jira-ingest can balloon the chat-model footprint mid-session
-    and a weights-only check would underestimate the swap risk.
+    Used by the future memory-pressure auto-downgrade to ask "does this still
+    fit in available RAM?" — a long Jira-ingest can balloon the chat-model
+    footprint mid-session and a weights-only check would underestimate the
+    swap risk.
     """
     weights = int(entry.download_size_gb * (1024 ** 3))
     return weights + entry.bytes_per_kv_token * max(0, ctx_len_now)
@@ -768,12 +754,10 @@ async def _list_loaded_ollama_models(base_url: str) -> Tuple[bool, List[LoadedOl
 async def probe_runtime_load(base_url: str = DEFAULT_OLLAMA_BASE_URL) -> RuntimeLoad:
     """Snapshot the current runtime load — RAM/swap/GPU + Ollama-loaded models.
 
-    Pure-Python scaffold per ADR 004 §"Buildable today". Future production form
-    will replace the macOS branch with a Tauri-side native helper that reads
-    memory pressure / VM stats via the OS APIs (see ADR 003 dependency in ADR
-    004's phasing). Until then, psutil is good enough to give the dispatcher a
-    correct-shaped signal — it'll just be slightly noisier than the eventual
-    native version on Apple Silicon.
+    Pure-Python today. The macOS branch graduates to a Tauri-side native
+    helper after ADR 003 lands — `vm_stat` parsing is brittle across macOS
+    versions. Until then, psutil gives a correct-shaped signal, just slightly
+    noisier than the eventual native version on Apple Silicon.
     """
     base_url = _normalize_and_validate_ollama_base_url(base_url)
 
@@ -1021,9 +1005,10 @@ async def build_catalog(
 ) -> List[ModelRecommendation]:
     """Build the model catalog with recommendations.
 
-    By default, plumbing/classifier entries (internal=True) are filtered out so
-    the user-facing chat picker only sees pickable chat models. The future
-    InferenceRouter (ADR 004) sets include_internal=True to see all slots.
+    By default, internal entries (unverified Ollama tags) are filtered out so
+    the user-facing chat picker only sees pickable chat models. Callers that
+    need the full catalog universe (e.g. for footprint planning) pass
+    `include_internal=True`.
     """
     installed = await list_installed_models(base_url)
     installed_names = [m.get("name", "").lower() for m in installed]
@@ -1105,69 +1090,17 @@ async def delete_model(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL) -> b
 # ── Model Warm-up ────────────────────────────────────────────────────────────
 
 
-# Per ADR 004 §"`keep_alive` policy table" — the per-slot policy mapping. The
-# router and `warm_up_model` both consume this; production behavior preservation
-# is that the conversational slot stays at "30m" (today's hard-coded value).
-#
-# Semantics (Ollama API): a string value is a duration (e.g. "30m", "1h"); the
-# magic value `-1` keeps the model resident indefinitely; `0s` evicts on idle.
-KEEP_ALIVE_BY_SLOT: Dict[str, str] = {
-    # Always-resident slots: never auto-evict. Embeddings and plumbing are
-    # latency-critical and cheap to hold.
-    "embedding": "-1",
-    "plumbing": "-1",
-    # Default chat / reasoning / long-context slots: keep loaded for half an
-    # hour after last use, then evict to free unified memory.
-    "conversational": "30m",
-    "reasoning": "30m",
-    "long_context": "30m",
-    "best_local": "30m",
-    # On-demand slots: evict aggressively after idle. The router will reload
-    # them on the next request that matches their class.
-    "code": "5m",
-    "vision": "5m",
-}
-
-DEFAULT_KEEP_ALIVE = "30m"  # Fallback for unknown slots / non-catalog models
+# Single keep-alive value — keep loaded for half an hour after last use, then
+# evict. Matches today's single-active-model semantics. A future memory-pressure
+# auto-downgrade (consuming `probe_runtime_load()` + `effective_footprint_bytes()`)
+# may want a shorter keep-alive on overflow events, but that's a runtime
+# decision, not a static policy table.
+DEFAULT_KEEP_ALIVE = "30m"
 
 
-def keep_alive_for_slot(slot_class: Optional[str]) -> str:
-    """Look up the per-slot keep_alive policy. Returns DEFAULT_KEEP_ALIVE for
-    an unknown slot — the dispatcher should never fail just because the slot
-    class isn't in the policy table; surface a warning at the caller if the
-    operator wants stricter enforcement.
-    """
-    if not slot_class:
-        return DEFAULT_KEEP_ALIVE
-    return KEEP_ALIVE_BY_SLOT.get(slot_class, DEFAULT_KEEP_ALIVE)
-
-
-async def warm_up_model(
-    model: str,
-    base_url: str = DEFAULT_OLLAMA_BASE_URL,
-    *,
-    slot_class: Optional[str] = None,
-) -> bool:
-    """Send a tiny prompt to keep model loaded in Ollama memory.
-
-    `slot_class` selects the per-slot keep_alive policy. When omitted, the
-    catalog is consulted (if `model` matches a catalog entry by ollama_model)
-    and the entry's `slot_class` is used. Falls back to DEFAULT_KEEP_ALIVE
-    for non-catalog models.
-    """
+async def warm_up_model(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL) -> bool:
+    """Send a tiny prompt to keep model loaded in Ollama memory."""
     base_url = _normalize_and_validate_ollama_base_url(base_url)
-
-    if slot_class is None:
-        # Look up catalog entry by ollama_model name to derive the slot class.
-        # This matters for ADR 004's policy: a code-slot model should evict
-        # in 5m, not stay resident for 30m.
-        for entry in MODEL_CATALOG:
-            if entry.ollama_model == model:
-                slot_class = entry.slot_class
-                break
-
-    keep_alive = keep_alive_for_slot(slot_class)
-
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
             resp = await client.post(
@@ -1176,7 +1109,7 @@ async def warm_up_model(
                     "model": model,
                     "messages": [{"role": "user", "content": "hi"}],
                     "stream": False,
-                    "keep_alive": keep_alive,
+                    "keep_alive": DEFAULT_KEEP_ALIVE,
                 },
             )
             return resp.status_code == 200
@@ -1275,8 +1208,7 @@ def set_active_local_model(
     """Write the active local model to workspace config.json atomically.
 
     Uses `locked_config_update` from `services._config_io` so concurrent
-    writers (e.g. `set_active_profile` running at the same time) don't drop
-    each other's updates via a read-modify-write race.
+    writers don't drop each other's updates via a read-modify-write race.
     """
     from config import get_settings
     from services._config_io import locked_config_update

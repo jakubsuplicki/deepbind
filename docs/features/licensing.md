@@ -17,7 +17,7 @@ Ed25519-signed offline license file ([ADR 006](../architecture/decisions/006-off
 
 ## Status: scaffold
 
-Today's implementation is the **crypto layer only**. Per ADR 006 + ADR 004's "Buildable today" / "Blocked by upstream ADRs" split, the integration pieces that depend on Tauri ([ADR 003](../architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md)) are deliberately **not** in this scaffold:
+Today's implementation is the **crypto layer only**. The integration pieces that depend on Tauri ([ADR 003](../architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md)) are deliberately **not** in this scaffold:
 
 | In scaffold (this module) | Deferred (Tauri-side after ADR 003) |
 |---|---|
@@ -117,4 +117,3 @@ Defensive details:
 - [ADR 006 — Ed25519-signed offline license](../architecture/decisions/006-offline-signed-license.md) — the architecture this scaffold implements one layer of.
 - [ADR 002 — Pure local product shape](../architecture/decisions/002-pure-local-product-shape.md) — the no-cloud constraint that rules out a vendor licensing-as-a-service.
 - [ADR 003 — Desktop distribution: Tauri shell + PyInstaller backend + Ollama sidecar](../architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md) — the prerequisite for the deferred integration pieces above.
-- [ADR 005 — Profile-driven model stacks](../architecture/decisions/005-profile-driven-model-stacks.md) — the `allowed_profiles` field gates which `ProfilePack`s a customer can load.

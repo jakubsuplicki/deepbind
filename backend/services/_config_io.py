@@ -1,9 +1,8 @@
 """Shared `app/config.json` IO helpers — atomic writes + lost-update protection.
 
-Multiple writers touch this file: `set_active_profile()` (profile_service),
-`set_active_local_model()` and `clear_active_local_model()` (ollama_service).
-Each does read-modify-write of the entire config. Two correctness concerns
-that both writers share:
+Used by `set_active_local_model()` and `clear_active_local_model()` in
+`ollama_service`. Each does read-modify-write of the entire config. Two
+correctness concerns the writers share:
 
 1. **Crash atomicity** — a process crash mid-write must not leave a truncated
    `config.json`. `atomic_write_json()` writes to a temp file, fsyncs the
@@ -106,8 +105,8 @@ def locked_config_update(config_path: Path) -> Iterator[Dict[str, Any]]:
 
     The file is read inside the lock, the caller mutates the yielded dict,
     and an atomic write happens on context exit — but only if the dict
-    actually changed. Skip-on-unchanged keeps mtime stable so the
-    `get_active_profile()` mtime cache doesn't invalidate on no-op writes.
+    actually changed. Skip-on-unchanged keeps mtime stable for any future
+    mtime-based caches reading the same file.
 
     Exceptions inside the block abort the write and re-raise — the file is
     unchanged, the lock is released cleanly.

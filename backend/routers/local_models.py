@@ -56,9 +56,11 @@ async def get_runtime_load(
 ) -> RuntimeLoad:
     """Snapshot the current runtime load (RAM/swap/GPU + Ollama-loaded models).
 
-    Consumed by the future InferenceRouter (ADR 004) to make routing decisions.
-    Pure-Python scaffold today; graduates to a Tauri-side native helper after
-    ADR 003 lands. See `probe_runtime_load()` for the degradation note.
+    Pure-Python today (psutil + Ollama /api/ps). Consumed by the future
+    memory-pressure auto-downgrade — when free RAM drops below the headroom
+    needed for the loaded model + KV cache, swap to a smaller model that fits
+    rather than letting Ollama OOM or thrash swap. macOS branch graduates to
+    a Tauri-side native helper after ADR 003 lands.
     """
     return await probe_runtime_load(base_url)
 

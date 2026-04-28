@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-27 (initial), amended 2026-04-28 (crypto-layer scaffold + signing CLI landed)
-**Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) · [ADR 005](005-profile-driven-model-stacks.md) · [`docs/research/deep-dive-licensing-architecture.md`](../../research/deep-dive-licensing-architecture.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §6, §11.4
+**Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) · [`docs/research/deep-dive-licensing-architecture.md`](../../research/deep-dive-licensing-architecture.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §6, §11.4
 
 ## Implementation status (2026-04-28)
 
@@ -25,7 +25,7 @@ What is **deferred to post-[ADR 003](003-desktop-distribution-tauri-and-sidecars
 - `.deepfileslic` UTI / file-extension association per §"Delivery UX" — registered by the platform installer.
 - Service-layer entitlement gates per §"What this changes about existing code" — wired onto the verify primitive once the gated feature surfaces exist.
 
-The crypto layer is platform-independent: Ed25519 sign/verify works identically regardless of which shell ships the binary. Building it before [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) lands does not lock in any platform decision and gives the Tauri-side integration a typed primitive to consume. Building the deferred pieces in pure Python first would create production-grade fragile platform code we'd have to maintain forever — exactly the trap [ADR 004](004-inference-router-architecture.md)'s phasing section flags for `vm_stat`-based memory probes on macOS.
+The crypto layer is platform-independent: Ed25519 sign/verify works identically regardless of which shell ships the binary. Building it before [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) lands does not lock in any platform decision and gives the Tauri-side integration a typed primitive to consume. Building the deferred pieces in pure Python first would create production-grade fragile platform code we'd have to maintain forever (the same trap that applies to `vm_stat`-based memory probes on macOS — pure-Python today, native helper after Tauri).
 
 ## Context
 
@@ -46,7 +46,7 @@ The licensing posture is a **corollary of [ADR 002](002-pure-local-product-shape
 3. **Cross-buyer common primitive.** Whatever the wrapper, the verification primitive must be identical for engineering and legal buyers.
 4. **Tamper resistance proportional to threat.** Bulk sharing inside a legitimate customer is the realistic leak; cracking is not. The deterrent is the embedded customer name and revocation through expiry, not anti-RE.
 5. **Forward-compatible with a self-hostable seat appliance.** Firms wanting centralized control should be able to add it later without re-cutting existing licenses.
-6. **Forward-compatible with per-vertical SKUs.** The license file must be able to scope which `ProfilePacks` ([ADR 005](005-profile-driven-model-stacks.md)) the customer is entitled to, even though v1 doesn't use this.
+6. **Forward-compatible with per-vertical SKUs.** The license file must be able to scope which install presets / model bundles the customer is entitled to, even though v1 doesn't use this. The `allowed_profiles` field is preserved in `LicenseClaims` for whatever install-footprint scoping mechanism replaces v1's "single-bundle" default.
 
 ## Decision
 
@@ -191,7 +191,7 @@ Works for low-piracy buyer bases. Engineering and legal procurement *expect* a l
 - Service-layer entitlement gates (not UI gates) on every paid feature surface.
 - New `frontend/app/pages/license.vue` (or settings section) — paste-a-key UX, license expiry banner, customer-name display.
 - `app/config.json` does **not** carry the license — license file is its own artifact, separately backed up and version-controlled by the customer if they wish.
-- Onboarding flow ([ADR 005](005-profile-driven-model-stacks.md)) gains a license-paste step ahead of profile pick. Existing dev / pre-license installs continue to work via a development-build flag that the production-signed builds do not honor.
+- Onboarding flow gains a license-paste step ahead of model fetch. Existing dev / pre-license installs continue to work via a development-build flag that the production-signed builds do not honor.
 
 ## Open follow-ups (non-blocking)
 

@@ -21,7 +21,7 @@ sources:
 	- frontend/app/pages/settings.vue
 	- frontend/app/types/index.ts
 	- frontend/tests/composables/useLocalModelsIntegration.test.ts
-depends_on: [chat, api-key-management, workspace-onboarding, inference-router, profiles]
+depends_on: [chat, api-key-management, workspace-onboarding]
 last_reviewed: 2026-04-28
 last_updated: 2026-04-28
 ---
@@ -34,7 +34,7 @@ Run Jarvis with on-device AI via Ollama — no API key required.
 
 The local models feature adds support for running Jarvis with locally-hosted LLMs via Ollama. It provides hardware detection, a curated catalog of model presets with hardware-based recommendations, model download with streaming progress, seamless integration with the existing multi-provider chat pipeline via LiteLLM, tool calling mode detection per model, runtime health monitoring with reconnection flow, and slow response indicators for local inference.
 
-The catalog is split into two layers: **user-pickable chat models** (6 entries with verified Ollama tags) and **internal entries** (7 entries — Qwen3-2507 split fine-tunes, Qwen3-14B, Gemma 4 26B-A4B, Granite 4.0 H-Micro/H-Tiny/H-Small — all carry `internal=True` because their Ollama registry tags are unverified). The user-facing endpoint filters internal entries out so a stale-tag pull never 404s the customer; the future InferenceRouter ([ADR 004](../architecture/decisions/004-inference-router-architecture.md)) consumes them via `build_catalog(include_internal=True)`. Each internal entry carries a `TODO: verify Ollama tag` comment marking the verification gap; promotion to user-pickable requires `ollama pull <tag>` against the live registry, then flipping `internal=False`.
+The catalog is split into two layers: **user-pickable chat models** (6 entries with verified Ollama tags) and **internal entries** (7 entries — Qwen3-2507 split fine-tunes, Qwen3-14B, Gemma 4 26B-A4B, Granite 4.0 H-Micro/H-Tiny/H-Small — all carry `internal=True` because their Ollama registry tags are unverified). The user-facing endpoint filters internal entries out so a stale-tag pull never 404s the customer; callers that need the full universe (e.g. footprint planning) pass `build_catalog(include_internal=True)`. Each internal entry carries a `TODO: verify Ollama tag` comment marking the verification gap; promotion to user-pickable requires `ollama pull <tag>` against the live registry, then flipping `internal=False`.
 
 ## How It Works
 
@@ -48,9 +48,9 @@ The catalog is split into two layers: **user-pickable chat models** (6 entries w
 
 ### Runtime Load Probe
 
-`probe_runtime_load()` snapshots the current local-runtime load — RAM/swap via `psutil`, GPU VRAM (best-effort: NVIDIA via `nvidia-smi`, Apple Silicon reports unified memory via the RAM signals only), and the list of models currently resident in Ollama via `GET /api/ps`. The future InferenceRouter ([ADR 004](../architecture/decisions/004-inference-router-architecture.md)) consumes this snapshot to decide whether a new request can fit in the current footprint or requires unloading another slot first.
+`probe_runtime_load()` snapshots the current local-runtime load — RAM/swap via `psutil`, GPU VRAM (best-effort: NVIDIA via `nvidia-smi`, Apple Silicon reports unified memory via the RAM signals only), and the list of models currently resident in Ollama via `GET /api/ps`. Consumed by the future memory-pressure auto-downgrade — when free RAM drops below the headroom needed for the loaded model + its KV cache, swap to a smaller model that fits rather than letting Ollama OOM or thrash swap.
 
-Today's implementation is a pure-Python scaffold per ADR 004 §"Buildable today". Per the same ADR's §"Blocked by upstream ADRs", the macOS branch graduates to a Tauri-side native helper after [ADR 003](../architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md) lands — `vm_stat` parsing via psutil is brittle across macOS versions and the M5 + macOS 26 + Ollama segfault is a recent reminder that platform quirks bite. The Python scaffold gives the right *shape* (consumers can wire to it) without locking in fragile platform code.
+Today's implementation is pure-Python; the macOS branch graduates to a Tauri-side native helper after [ADR 003](../architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md) lands — `vm_stat` parsing via psutil is brittle across macOS versions and the M5 + macOS 26 + Ollama segfault is a recent reminder that platform quirks bite. The Python version gives the right *shape* (consumers can wire to it) without locking in fragile platform code.
 
 Exposed at `GET /api/local/runtime/load`. Response shape: `RuntimeLoad` with `total_ram_gb`, `available_ram_gb`, `used_ram_gb`, `ram_pct`, `swap_total_gb`, `swap_used_gb`, `swap_pct`, `gpu_vendor`, `gpu_vram_total_gb`, `gpu_vram_used_gb`, `loaded_models[]` (each `LoadedOllamaModel` with `name`, `size`, `size_vram`, `expires_at`), `ollama_reachable`, `timestamp_utc`. When Ollama is unreachable the system signals still populate; only `loaded_models` and `ollama_reachable` reflect the runtime gap.
 
@@ -86,36 +86,27 @@ The catalog covers the spectrum from weak laptops to workstations across eight p
 | Best Local | gemma4:26b-a4b | 15 GB | 256K | 24–48 GB | 26B-A4B MoE (renamed from incorrect "Gemma 4 27B") — tag unverified |
 | Long Docs | qwen3:4b-instruct-2507 | 2.6 GB | 256K | 12–24 GB | 256K *native* sibling of qwen3:4b — tag unverified |
 | Balanced | qwen3:14b | 9.0 GB | 32K | 24–32 GB | best dense Qwen3 for 24 GB unified memory — tag unverified |
-| Best Local | qwen3:30b-a3b-instruct-2507 | 18 GB | 256K | 24–48 GB | ADR 008 v1 chat-pinned slot — tag unverified |
+| Best Local | qwen3:30b-a3b-instruct-2507 | 18 GB | 256K | 24–48 GB | v1 canonical chat model — tag unverified |
 | Plumbing | granite4:h-micro | 2.0 GB | 32K | 8–16 GB | always-on classifier (ISO-42001 certified) — tag unverified |
 | Plumbing | granite4:h-tiny | 4.0 GB | 128K | 12–24 GB | dispatcher mid-tier — tag unverified |
 | Plumbing | granite4:h-small | 18 GB | 128K | 32–48 GB | dispatcher top-tier (tool-capable) — tag unverified |
 
 Each internal entry carries a `TODO: verify Ollama tag` comment in [`ollama_service.py`](../../backend/services/ollama_service.py). Promotion to user-pickable requires verifying the tag against `https://ollama.com/library/<name>`, then flipping `internal=False`.
 
-Internal entries are present in `MODEL_CATALOG` but excluded from `build_catalog()` unless the caller passes `include_internal=True`. The [InferenceRouter](inference-router.md) ([ADR 004](../architecture/decisions/004-inference-router-architecture.md)) is the consumer.
+Internal entries are present in `MODEL_CATALOG` but excluded from `build_catalog()` unless the caller passes `include_internal=True`.
 
 ### KV-aware footprint accounting
 
-Per ADR 004 §"KV-aware footprint accounting", every catalog entry carries:
+Two catalog fields feed the future memory-pressure auto-downgrade — when free RAM drops below the headroom needed for the loaded model + its KV cache, swap to a smaller model that fits rather than letting Ollama OOM or thrash swap.
 
-- `bytes_per_kv_token: int` — approximate per-token KV cache cost, derived from architectural intuition for ADR 004 §"KV-aware footprint accounting". Granite 4 hybrid-mamba models report ~256–1024 bytes/token (state-space cache is fixed-size); Gemma 4 SWA models ~1024–1536 bytes/token (only the sliding window is stored); transformer Qwen3 / Devstral land at 2048–5120 bytes/token. The ratios across architectures (mamba << swa < transformer) are the load-bearing signal; absolute numbers are refined as measurement data lands.
-- `attention_arch: Literal["transformer", "mamba", "swa"]` — Literal-typed so a typo in a catalog entry fails at construction. Drives the architectural footprint difference.
-- `slot_class: str` — which stack slot the model fills (see [ProfilePack](profiles.md)). The router's `dispatch()` reads this to fill the audit decision; the keep_alive policy table reads it to decide eviction cadence.
+- `bytes_per_kv_token: int` — approximate per-token KV cache cost. Granite 4 hybrid-mamba models report ~256–1024 bytes/token (state-space cache is fixed-size); Gemma 4 SWA models ~1024–1536 bytes/token (only the sliding window is stored); transformer Qwen3 / Devstral land at 2048–5120 bytes/token. The ratios across architectures (mamba << swa < transformer) are the load-bearing signal; absolute numbers are refined as measurement data lands.
+- `attention_arch: Literal["transformer", "mamba", "swa"]` — Literal-typed so a typo in a catalog entry fails at construction.
 
-`effective_footprint_bytes(entry, ctx_len_now) → int` computes `weights + bytes_per_kv_token × ctx_len_now` and is the predicate the router will use for `can_load(model)` checks once the production-grade memory-pressure signals land (ADR 003 gate).
+`effective_footprint_bytes(entry, ctx_len_now) → int` computes `weights + bytes_per_kv_token × ctx_len_now`. This is the predicate the auto-downgrade will use to ask "does this still fit in available RAM?" — a long Jira-ingest can balloon the chat-model footprint mid-session and a weights-only check would underestimate the swap risk.
 
-### Per-slot keep_alive policy
+### keep_alive
 
-`KEEP_ALIVE_BY_SLOT` (in [`ollama_service.py`](../../backend/services/ollama_service.py)) maps slot class to Ollama `keep_alive` semantics per ADR 004 §"`keep_alive` policy table":
-
-| Slot class | keep_alive | Rationale |
-|---|---|---|
-| `embedding` / `plumbing` | `-1` (forever) | Always-resident; latency-critical, cheap to hold |
-| `conversational` / `reasoning` / `long_context` / `best_local` | `30m` | Behavior preservation — today's hard-coded value |
-| `code` / `vision` | `5m` | On-demand; evict aggressively to free unified memory |
-
-`warm_up_model()` consumes this policy: when called without an explicit `slot_class`, it looks up the catalog entry by `ollama_model` and uses the entry's `slot_class`. Falls back to `DEFAULT_KEEP_ALIVE = "30m"` for non-catalog models.
+Ollama keeps a model resident for `DEFAULT_KEEP_ALIVE = "30m"` after last use. `warm_up_model()` sends a tiny prompt with this keep_alive value to keep a freshly-selected model loaded. A future overflow-event handler may shorten this dynamically when the auto-downgrade fires; today's value is a single static default.
 
 ### Recommendation Engine
 
@@ -128,10 +119,10 @@ Per ADR 004 §"KV-aware footprint accounting", every catalog entry carries:
 
 ### Tool Calling Mode
 
-Each model gets a `tool_mode` classification (renamed 2026-04-28 per ADR 004's "Tool-format hardening"):
+Each model gets a `tool_mode` classification:
 - **`native_qwen3`** — model exposes native function-calling in the Qwen3 family format (e.g. qwen3:8b, qwen3:14b, qwen3:30b-a3b-instruct-2507, gemma4 variants, devstral). The dispatcher's adapter standardises on this format.
 - **`adapted`** — tool calls are adapted via JSON-mode prompting through LiteLLM (e.g. qwen3:4b, ministral-3:8b).
-- **`excluded_from_tools`** — very small models (< 2 GB) that don't reliably tool-call; the future router excludes them from tool-using request classes (e.g. qwen3:1.7b).
+- **`excluded_from_tools`** — very small models (< 2 GB) that don't reliably tool-call (e.g. qwen3:1.7b).
 
 `_tool_mode_for()` derives tool_mode from the catalog entry's `native_tools` flag and `download_size_gb`.
 
@@ -157,9 +148,7 @@ Old taxonomy → new taxonomy mapping (for any external integrations that still 
 
 ### Chat Integration
 
-`_make_llm()` in `chat.py` routes through the [InferenceRouter](inference-router.md) (ADR 004) — for `provider == "ollama"`, the router resolves the user-selected model against the catalog and produces a `DispatchDecision`; `_llm_from_decision()` then constructs an `LLMService` with `api_base` set to the Ollama URL and a 1800s timeout (vs 120s for cloud). No API key is required — the sentinel value `"ollama"` satisfies LiteLLM's non-empty requirement.
-
-The chat WS `done` event includes a `route` field with the routing decision's audit dict (`provider`, `model_id`, `request_class`, `slot_class`, `reason`). Frontends consume this to render which slot served the turn.
+`_make_llm()` in `chat.py` routes `provider == "ollama"` to `LLMService` with `api_base` set to the Ollama URL and a 1800s timeout (vs 120s for cloud). No API key is required — the sentinel value `"ollama"` satisfies LiteLLM's non-empty requirement. The privacy gate (`assert_provider_allowed`) runs at the top of `_make_llm` so blocked providers raise `PrivacyBlockedError` before LLM construction.
 
 ## Key Files
 
@@ -169,7 +158,7 @@ The chat WS `done` event includes a `route` field with the routing decision's au
 | [local_models.py](../../backend/routers/local_models.py) | REST API endpoints for local model management |
 | [llm_service.py](../../backend/services/llm_service.py) | LLMConfig extended with `api_base` and `timeout`; model resolution for ollama |
 | [chat.py](../../backend/routers/chat.py) | `_make_llm()` handles ollama provider; `base_url` passed through WS messages |
-| [test_local_models.py](../../backend/tests/test_local_models.py) | 45 tests covering scoring, probes, config, routing |
+| [test_local_models.py](../../backend/tests/test_local_models.py) | 70 tests covering scoring, probes, config, routing |
 | [useLocalModels.ts](../../frontend/app/composables/useLocalModels.ts) | Frontend composable: hardware/runtime/catalog state, pull SSE, model selection |
 | [OllamaStatus.vue](../../frontend/app/components/OllamaStatus.vue) | Runtime status card (not installed / not running / running) with hardware info |
 | [LocalModelCard.vue](../../frontend/app/components/LocalModelCard.vue) | Model recommendation card with compatibility badge, tool mode badge, download/use actions |
@@ -184,7 +173,7 @@ The chat WS `done` event includes a `route` field with the routing decision's au
 |----------|--------|-------------|
 | `/api/local/hardware` | GET | Hardware profile (RAM, disk, CPU, GPU, tier) |
 | `/api/local/runtime` | GET | Ollama status (installed, running, version) |
-| `/api/local/runtime/load` | GET | Runtime load snapshot (RAM/swap/GPU + Ollama-loaded models) — consumed by ADR 004 dispatcher |
+| `/api/local/runtime/load` | GET | Runtime load snapshot (RAM/swap/GPU + Ollama-loaded models) — feeds the future memory-pressure auto-downgrade |
 | `/api/local/models/catalog` | GET | Model catalog with recommendations |
 | `/api/local/models/installed` | GET | Models downloaded in Ollama |
 | `/api/local/models/pull` | POST | Download model (SSE progress stream) |
