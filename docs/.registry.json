@@ -78,7 +78,8 @@
         "preferences-settings"
       ],
       "last_updated": "2026-04-28",
-      "status": "current"
+      "status": "current",
+      "_note_2026_04_28": "ADR 004 (inference router) phasing section added; no source changes."
     },
     "memory": {
       "doc": "docs/features/memory.md",
