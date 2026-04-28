@@ -725,12 +725,14 @@
       "type": "feature",
       "sources": [
         "backend/services/license_service.py",
-        "backend/tests/test_license_service.py"
+        "backend/scripts/sign_license.py",
+        "backend/tests/test_license_service.py",
+        "backend/tests/test_sign_license.py"
       ],
       "depends_on": [],
       "last_updated": "2026-04-28",
       "status": "scaffold",
-      "_note_2026_04_28": "Crypto layer scaffold per ADR 006: Ed25519 sign/verify primitive, LicenseClaims schema, wire format (sig_b64.payload_b64). Per code review: feature_flags narrowed to dict[str, bool] (rejects garbage at construction time); _canonical_json constructed from explicit field references (no model_dump dependency, foreclosing pydantic-upgrade signature drift); naive expires_at rejected (not silently fixed up); cryptography pinned to ==47.0.0. 23 tests covering round-trip / expiry / tamper-rejection / malformed-input / canonical-JSON contract / timezone enforcement / feature_flags typing. Deferred to post-ADR-003 (Tauri shell): on-disk file path resolution, OS-protected monotonic-state record (Keychain/DPAPI/libsecret), build-epoch floor, .deepfileslic UTI registration, service-layer entitlement gates. Crypto layer is platform-independent — works the same regardless of shell."
+      "_note_2026_04_28": "Crypto layer scaffold per ADR 006: Ed25519 sign/verify primitive, LicenseClaims schema, wire format (sig_b64.payload_b64). Per code review: feature_flags narrowed to dict[str, bool] (rejects garbage at construction time); _canonical_json constructed from explicit field references (no model_dump dependency, foreclosing pydantic-upgrade signature drift); naive expires_at rejected (not silently fixed up); cryptography pinned to ==47.0.0. 23 tests covering round-trip / expiry / tamper-rejection / malformed-input / canonical-JSON contract / timezone enforcement / feature_flags typing. Signing CLI (backend/scripts/sign_license.py) with subcommands generate-keypair / sign / verify — closes the loop on the crypto scaffold so a license can be produced end-to-end on the offline signing host. Code-review hardening (2026-04-28): distinct verify exit codes per the operator contract — 0 valid, 1 signature/tampered, 2 expired (claims still parseable for renewal UI), 3 input error (missing files, malformed JSON, wrong-length keys, refused overwrite); 17 CLI tests cover keygen perms / refuse-to-overwrite / overwrite flag / round-trip / malformed inputs / each exit-code branch. Deferred to post-ADR-003 (Tauri shell): on-disk file path resolution, OS-protected monotonic-state record (Keychain/DPAPI/libsecret), build-epoch floor, .deepfileslic UTI registration, service-layer entitlement gates. Crypto layer is platform-independent — works the same regardless of shell."
     },
     "cross-source-linking": {
       "doc": "docs/features/cross-source-linking.md",

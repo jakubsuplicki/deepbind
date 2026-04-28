@@ -4,6 +4,7 @@ status: scaffold
 type: feature
 sources:
 	- backend/services/license_service.py
+	- backend/scripts/sign_license.py
 	- backend/tests/test_license_service.py
 depends_on: []
 last_reviewed: 2026-04-28
@@ -67,12 +68,41 @@ Returns a `VerificationResult` with `valid: bool`, `claims: LicenseClaims | None
 
 An expired license fails `valid` but **still parses claims**. The UI consumer needs the customer name and `license_id` to render a renewal prompt — losing the claims on expiry would force a "blank renewal screen" UX. `result.expired` is set so the consumer can distinguish expiry from signature failure.
 
+### Signing CLI
+
+[`scripts/sign_license.py`](../../backend/scripts/sign_license.py) is the offline signing tool that runs on the **private signing service** side — never bundled with the shipping app. Three subcommands:
+
+```bash
+# One-time keypair generation (keep private.key offline).
+python -m scripts.sign_license generate-keypair --out-dir ./keys
+
+# Per-customer: sign a claims.json into a serialized license.
+python -m scripts.sign_license sign \
+    --claims customer-acme.json \
+    --private-key ./keys/private.key \
+    --out customer-acme.lic
+
+# Round-trip check before delivery.
+python -m scripts.sign_license verify \
+    --license customer-acme.lic \
+    --public-key ./keys/public.key
+```
+
+Per ADR 006 §"Activation flow", the public key bytes (32 raw) are embedded in the production binary at compile time — `public.key` from this CLI is the input to that embedding step. The private key never leaves the signing service host.
+
+Defensive details:
+- Key files are written with `0o600` permissions on POSIX (best-effort; silently skipped on Windows).
+- `--overwrite` is required to replace existing keypair / license files. Defaults to refusing rather than silently clobbering an in-use private key.
+- Distinct exit codes per code-review hardening (2026-04-28): `0` valid · `1` signature/tampered · `2` expired (claims still parseable for renewal UI) · `3` input error (missing files, malformed JSON, wrong-length keys, refused overwrite). Operators scripting renewal flows can branch on the difference between "expired" and "tampered" without parsing stderr.
+
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | [license_service.py](../../backend/services/license_service.py) | Crypto primitive: keypair generation, sign, verify, serialize, canonical-JSON |
-| [test_license_service.py](../../backend/tests/test_license_service.py) | 16 tests: round-trip, expiry, tamper-rejection, malformed-input, key-mismatch, canonical-JSON field-order independence |
+| [scripts/sign_license.py](../../backend/scripts/sign_license.py) | Offline signing CLI: `generate-keypair` / `sign` / `verify` subcommands |
+| [test_license_service.py](../../backend/tests/test_license_service.py) | 23 tests: round-trip, expiry, tamper-rejection, malformed-input, key-mismatch, canonical-JSON field-order independence, timezone enforcement, feature_flags typing |
+| [test_sign_license.py](../../backend/tests/test_sign_license.py) | 17 tests covering the CLI: keypair generation (32-byte output, 0o600 perms, refuse-to-overwrite, --overwrite flag), sign (round-trip, missing file, malformed JSON, schema failure, wrong-length key, refuse-to-overwrite), verify exit codes (0/1/2/3 split for valid/tampered/expired/input-error) |
 
 ## Gotchas
 

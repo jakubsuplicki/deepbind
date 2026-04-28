@@ -1,7 +1,7 @@
 # ADR 006 — Ed25519-signed offline license, no vendor admin portal
 
 **Status:** Accepted
-**Date:** 2026-04-27 (initial), amended 2026-04-28 (crypto-layer scaffold landed)
+**Date:** 2026-04-27 (initial), amended 2026-04-28 (crypto-layer scaffold + signing CLI landed)
 **Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) · [ADR 005](005-profile-driven-model-stacks.md) · [`docs/research/deep-dive-licensing-architecture.md`](../../research/deep-dive-licensing-architecture.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §6, §11.4
 
 ## Implementation status (2026-04-28)
@@ -14,6 +14,8 @@ The **crypto layer** is implemented as a scaffold at [`backend/services/license_
 - `_canonical_json` constructed from explicit field references rather than `claims.model_dump()`. This forecloses the failure mode where a pydantic upgrade or a new optional field silently changes serialization and existing licenses stop verifying. Adding a field to `LicenseClaims` requires an explicit reviewed update to `_canonical_json` — a deliberate friction point on a load-bearing contract.
 - Naive `expires_at` is rejected (`reason="expires_at must be timezone-aware (UTC)"`) rather than being silently fixed up to UTC. The signing service must always produce `Z` or `+00:00`; a naive timestamp surfaces the contract violation immediately instead of hiding it.
 - `cryptography` dependency pinned to `==47.0.0` (was `>=41.0`). The crypto primitive is load-bearing enough that a future install drifting to a different version than CI tested is not acceptable.
+
+**Signing CLI (2026-04-28):** [`backend/scripts/sign_license.py`](../../../backend/scripts/sign_license.py) is the offline signing tool that runs on the **private signing service** side — never bundled with the shipping app. Three subcommands: `generate-keypair` (writes 32-byte raw private/public to a directory with `0o600` permissions), `sign` (reads a `claims.json`, signs with the private key, emits the `signature_b64.payload_b64` wire format to stdout or `--out`), and `verify` (round-trip check before delivery). Refuses to overwrite existing key/license files unless `--overwrite` is passed — defaults to refusing rather than silently clobbering an in-use private key. Closes the loop on the crypto scaffold so a license can be produced end-to-end on the offline signing host without depending on Tauri-side packaging.
 
 What is **deferred to post-[ADR 003](003-desktop-distribution-tauri-and-sidecars.md)** (Tauri shell):
 
