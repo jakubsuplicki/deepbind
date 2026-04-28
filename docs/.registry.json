@@ -80,7 +80,7 @@
       ],
       "last_updated": "2026-04-28",
       "status": "current",
-      "_note_2026_04_28": "Cross-link added to the latency-benchmark concept (ADR 011) — sibling harness measures user-perceived chat latency (TTFT / decode_tps / total_ms) against the same chat path under the same discipline as the conversation eval. No source changes; chat.md gained a 'Latency benchmark harness' subsection pointing at backend/tests/eval/latency/."
+      "_note_2026_04_28": "Cross-link added to the latency-benchmark concept (ADR 011) — sibling harness measures user-perceived chat latency (TTFT / decode_tps / total_ms) against the same chat path under the same discipline as the conversation eval. No source changes; chat.md gained a 'Latency benchmark harness' subsection pointing at backend/tests/eval/latency/. Evening update: the eval-pinned canonical chat model swapped from qwen3:30b-a3b to qwen3:14b after the latency benchmark surfaced a chain-of-thought leak on Ollama 0.18.0 — see ADR 010 Issue 4. Chat router default in DEFAULT_MODELS['ollama'] is unaffected (already qwen3:8b on the production fallback). The static-canonical-model choice itself is being replaced by the install-time chat-model-probe per ADR 012; 'Canonical chat model' subsection added to chat.md describing the bridge state."
     },
     "memory": {
       "doc": "docs/features/memory.md",

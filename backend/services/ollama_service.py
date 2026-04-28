@@ -432,13 +432,23 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         attention_arch="transformer",
     ),
     ModelCatalogEntry(
-        # TODO: verify Ollama tag — v1 canonical chat model. Common Ollama
-        # abbreviations: `:30b-a3b`, `:30b-instruct`, etc.
+        # Verified absent on Ollama 0.18.0 (2026-04-28): `ollama pull qwen3:30b-a3b-instruct-2507`
+        # returns "pull model manifest: file does not exist". Ollama's official
+        # qwen3 library doesn't include the Instruct-2507 variant under that
+        # tag; HuggingFace mirror exists at hf.co/Qwen/Qwen3-30B-A3B-Instruct-2507-GGUF
+        # and Ollama can pull from HF via `ollama pull hf.co/...` syntax.
+        # Kept internal=True (and excluded from user picker) until either:
+        # (a) the official Ollama library adds the tag, or
+        # (b) the catalog grows a separate `pull_url` field for HF mirrors and
+        #     the canonical-chat-model probe (ADR 012) supports HF-pulled tags.
+        # This entry was originally added as the v1 canonical chat-model
+        # candidate; the canonical role is now Qwen3-14B per ADR 010 §"Issue 4"
+        # until per-machine selection (ADR 012) lands.
         id="qwen3-30b-a3b-instruct-2507",
         preset="best-local",
         ollama_model="qwen3:30b-a3b-instruct-2507",
         litellm_model="ollama_chat/qwen3:30b-a3b-instruct-2507",
-        label="Qwen3 30B-A3B Instruct 2507",
+        label="Qwen3 30B-A3B Instruct 2507 (unavailable on Ollama 0.18.0)",
         download_size_gb=18.0,
         context_window="256K",
         context_tokens=262144,
@@ -447,7 +457,7 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         min_disk_gb=26,
         cpu_friendly=False,
         gpu_preferred=True,
-        strengths=["MoE 30B/3B-active", "256K native", "tool calling", "v1 canonical chat model"],
+        strengths=["MoE 30B/3B-active", "256K native", "tool calling", "candidate v1 chat model"],
         best_for=["best local chat", "long conversations", "tools"],
         native_tools=True,
         internal=True,

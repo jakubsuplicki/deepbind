@@ -44,10 +44,20 @@ def test_anthropic_chat_satisfies_chat_callable_protocol():
 
 
 def test_ollama_default_model_is_v1_canonical_chat():
-    """The eval pins Qwen3-30B-A3B as the v1 canonical chat model."""
+    """The eval pins Qwen3-14B as the v1 canonical chat model.
+
+    Was Qwen3-30B-A3B until ADR 010 §"Issue 4" found that ``think: false``
+    on Ollama 0.18.0 doesn't suppress chain-of-thought emission for that
+    model — the model wastes its decode budget on internal monologue and
+    produces 8x worse perceived latency on realistic conversations. 14B
+    honors ``think: false`` correctly, fits comfortably in 24 GB unified
+    memory, and benchmarked 1.8s p95 vs 14.6s p95 on chat-realistic-shallow.
+    Per-machine canonical selection (ADR 012) replaces this hard-coded
+    default with a probe-driven pick at install time.
+    """
     chat = OllamaChat()
     assert "qwen3" in chat.model.lower()
-    assert "30b" in chat.model.lower() or "a3b" in chat.model.lower()
+    assert "14b" in chat.model.lower()
 
 
 def test_ollama_default_base_url_is_localhost_loopback():

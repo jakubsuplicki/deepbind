@@ -42,7 +42,15 @@ import httpx
 
 
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-DEFAULT_OLLAMA_MODEL = "qwen3:30b-a3b"  # v1 canonical chat model
+DEFAULT_OLLAMA_MODEL = "qwen3:14b"  # v1 canonical chat model — see ADR 010 §"Issue 4"
+# Was qwen3:30b-a3b until 2026-04-28; latency benchmark (ADR 011) discovered the
+# 30B-A3B leaks chain-of-thought tokens despite think:false on Ollama 0.18.0,
+# producing thinking prose instead of answers under tight num_predict caps and
+# wasting decode budget under realistic caps. Qwen3-14B honors think:false
+# correctly, fits comfortably in 24 GB unified memory (~9 GB weights vs ~17 GB),
+# and benchmarked 8x faster on chat-realistic-shallow (1.8s p95 vs 14.6s p95).
+# Per-machine canonical selection is ADR 012's chat-model self-test, which
+# replaces this static default with a probe-driven pick at install time.
 DEFAULT_OLLAMA_TIMEOUT_S = 600.0  # 10 minutes per turn — generous for slow hardware
 # Ollama's default num_ctx is 2K-4K depending on version, which our 30-turn
 # fixtures blow past on the first call (500 Internal Server Error). 16K is

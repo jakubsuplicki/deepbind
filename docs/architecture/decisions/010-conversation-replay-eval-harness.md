@@ -287,6 +287,53 @@ After the harness lands and the launch fixtures are baselined, the comparison th
 
 Naming this gate explicitly is the point of the ADR. The numbers decide; the developer doesn't.
 
+## Issue 4 (2026-04-28 evening) — Qwen3-30B-A3B think:false leak; canonical chat model swap to Qwen3-14B
+
+The latency benchmark harness ([ADR 011](011-latency-benchmark-harness.md)) ran its first PR-scope baseline on M5 Pro 24 GB and surfaced a finding that invalidates the original "Qwen3-30B-A3B is the v1 canonical chat model" pinning above:
+
+**On Ollama 0.18.0 (the version pinned by Issue 1's regression note), `think: false` does not suppress chain-of-thought emission for `qwen3:30b-a3b`.** Direct reproduction:
+
+```bash
+curl -s http://127.0.0.1:11434/api/chat -d '{
+  "model": "qwen3:30b-a3b",
+  "messages": [{"role": "user", "content": "Say hi in one word."}],
+  "stream": false, "think": false,
+  "options": {"num_predict": 8}
+}' → content: "Okay, the user asked me to say"
+```
+
+The model burns 8 tokens of decode budget on internal monologue and never reaches the answer. `_strip_thinking` is a no-op when `</think>` doesn't appear (because the cap stopped generation first). The same prompt against `qwen3:14b` and `qwen3:1.7b` produces clean `"Hi."` in 3 tokens.
+
+A `stop=["<think>"]` workaround was tested and fails because Ollama 0.18.0 already strips the opening `<think>` tag from the stream — there's no literal text to match.
+
+**Latency impact.** PR-scope benchmarks on the same machine, same scenarios:
+
+| Scenario | Metric | qwen3:30b-a3b | qwen3:14b | Δ |
+|---|---|---:|---:|---:|
+| warm-short | total p95 | 1177 ms | 299 ms | **−75%** |
+| chat-realistic-shallow | TPS p50 | 5.5 | 14.0 | **+155%** |
+| chat-realistic-shallow | total p95 | 14.6 s | **1.8 s** | **−87%** |
+
+The realistic-chat scenario going from 14.6 s to 1.8 s is not an optimization — it's a fix for a broken UX where users were watching the model "think out loud" before answering.
+
+**Hardware-fit secondary win.** Qwen3-14B Q4_K_M is ~9 GB versus 30B-A3B's ~17 GB. On a 24 GB Apple Silicon machine the 30B-A3B leaves ~1 GB headroom (catastrophic — any other app spike triggers swap or OOM); 14B leaves ~15 GB headroom. This is the memory-pressure problem `effective_footprint_bytes()` was scaffolded for, manifesting at install time.
+
+### Amendment
+
+The canonical chat model pinning above ("Qwen3-30B-A3B (May 2025 hybrid base) at Q4_K_M with `/no_think` directive") is **superseded by Qwen3-14B at Q4_K_M** for v1 eval pinning. Specifically:
+
+- [`backend/tests/eval/conversations/chat_adapters.py`](../../../backend/tests/eval/conversations/chat_adapters.py) `DEFAULT_OLLAMA_MODEL = "qwen3:14b"`.
+- [`backend/tests/eval/latency/run_bench.py`](../../../backend/tests/eval/latency/run_bench.py) `DEFAULT_MODELS_PR = ("qwen3:14b",)`, nightly drops 30B-A3B.
+- The "Pinned chat model" section above stands as the original intent; this amendment overrides it for the Ollama 0.18.0 era.
+
+### Forward-compatible fix
+
+The static "single canonical chat model" choice is the wrong shape long-term — different users have different Ollama versions, OS major versions, hardware, and RAM. Whether `think: false` works for a given model is environment-specific, not globally decidable. **[ADR 012](012-chat-model-self-test.md)** files the architectural answer: a self-test that runs on the user's machine at install (or on demand) and probes correctness + hardware-fit + speed for each candidate model, picking the best fit per environment. The 14B default in this amendment is the conservative bridge until the probe lands.
+
+### Conversation-eval baselines invalidated
+
+The first-baseline-run results below (15 fixtures × 5 strategies × 3 seeds against `qwen3:30b-a3b`) **measured a fundamentally broken model output** — the chain-of-thought leak means scored responses include thinking-prose noise that the strip caught for full responses but not for failure-mode samples. Those baselines are preserved for historical reference but should not be used as the comparison floor for any future strategy diff. The next conversation-eval grid runs against `qwen3:14b` and is the new canonical baseline.
+
 ## First baseline run (2026-04-28) — findings & amendments
 
 The first full grid (5 strategies × 15 fixtures × 3 seeds = 225 model calls) ran against `qwen3:30b-a3b` Q4_K_M on Apple Silicon (Ollama 0.18.0; v0.21.x crashes on Apple M5 + macOS 26 with a llama.cpp-runner segfault — pinned to v0.18.0 until upstream fixes the regression). Two issues showed up that the harness did not anticipate at design time, and one substantive finding emerged from the run.

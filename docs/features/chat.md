@@ -80,6 +80,12 @@ Neither file is in the production path; the runner is dev infra that the enginee
 
 A sibling harness at [`backend/tests/eval/latency/`](../../backend/tests/eval/latency/) measures user-perceived chat latency (TTFT, decode tokens/sec, end-to-end wall clock) on the actual ICP hardware. Same discipline as the conversation harness — committed JSON baselines, opt-in pre-merge gate, bootstrap-CI verdict — applied to the speed axis instead of answer-quality. Runs the streaming Ollama HTTP `/api/chat` endpoint with `temperature: 0` and a fixed seed, captures TTFT from the first non-empty content delta, and reads `eval_count / eval_duration` from the `done` event for honest decode throughput. One Anthropic Claude Sonnet reference scenario provides the explicit "are we faster than the cloud option?" benchmark; skips silently when no API key. CLI: `python -m tests.eval.latency.run_bench`. See [`docs/concepts/latency-baseline.md`](../concepts/latency-baseline.md) and [ADR 011](../architecture/decisions/011-latency-benchmark-harness.md).
 
+### Canonical chat model — Qwen3-14B (until per-machine probe lands)
+
+The eval-pinned canonical chat model is currently `qwen3:14b`. This was changed from `qwen3:30b-a3b` on 2026-04-28 after the latency benchmark surfaced a chain-of-thought leak on Ollama 0.18.0 — the 30B-A3B emits internal monologue despite `think: false`, producing 8× worse perceived latency on realistic chat. See [ADR 010 Issue 4](../architecture/decisions/010-conversation-replay-eval-harness.md#issue-4-2026-04-28-evening--qwen3-30b-a3b-thinkfalse-leak-canonical-chat-model-swap-to-qwen3-14b) for the full reproduction.
+
+The "single hard-coded canonical model" choice is the wrong shape long-term — different customer environments have different `think: false` behavior, hardware tiers, and RAM budgets. [ADR 012](../architecture/decisions/012-chat-model-self-test.md) files the install-time self-test that replaces this static choice with a per-machine probe-driven pick. Implementation: [`backend/services/chat_model_probe.py`](../../backend/services/chat_model_probe.py).
+
 ### Error handling in ClaudeService
 
 All Anthropic SDK exceptions are caught and converted to `StreamEvent(type="error")` with user-readable messages. Rate limits, 529 overload responses, 401 authentication failures, and generic 5xx errors each get distinct copy. The frontend detects whether an error message is retryable (matches "try again", "overloaded", "rate limit", or "reconnect") and shows a Retry button if so.

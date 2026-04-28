@@ -5,7 +5,7 @@ Usage from the project's backend dir::
     .venv/bin/python -m tests.eval.conversations.run_eval \\
         --strategies full-history,naive-truncate-4,naive-truncate-8,naive-truncate-12 \\
         --provider ollama \\
-        --model qwen3:30b-a3b \\
+        --model qwen3:14b \\
         --seeds 1,2,3 \\
         --fixtures-dir tests/eval/conversations/fixtures \\
         --out tests/eval/conversations/baselines/run.json
@@ -396,7 +396,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Override the provider's default model. For Ollama, defaults "
-            "to 'qwen3:30b-a3b' (the v1 canonical chat model)."
+            "to 'qwen3:14b' (the v1 canonical chat model — was 30b-a3b until "
+            "ADR 010 amended for thinking-leak on Ollama 0.18.0; see ADR 012 "
+            "for per-machine self-test that replaces this default)."
         ),
     )
     p.add_argument(
