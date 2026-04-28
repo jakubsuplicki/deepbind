@@ -1,8 +1,29 @@
 # ADR 006 — Ed25519-signed offline license, no vendor admin portal
 
 **Status:** Accepted
-**Date:** 2026-04-27
-**Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 005](005-profile-driven-model-stacks.md) · [`docs/research/deep-dive-licensing-architecture.md`](../../research/deep-dive-licensing-architecture.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §6, §11.4
+**Date:** 2026-04-27 (initial), amended 2026-04-28 (crypto-layer scaffold landed)
+**Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) · [ADR 005](005-profile-driven-model-stacks.md) · [`docs/research/deep-dive-licensing-architecture.md`](../../research/deep-dive-licensing-architecture.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §6, §11.4
+
+## Implementation status (2026-04-28)
+
+The **crypto layer** is implemented as a scaffold at [`backend/services/license_service.py`](../../../backend/services/license_service.py) — Ed25519 sign/verify, the `LicenseClaims` schema per §"Primitive" below, the `signature_b64.payload_b64` wire format, and a `now=` override on `verify_license` that pins the contract for the future Tauri-side keystore-backed clock-rollback defense. 23 tests cover round-trip, expiry-with-claims-still-parsed, signature/payload/key tampering, malformed input, canonical-JSON contract stability, timezone-awareness enforcement, and `feature_flags` typing. See the [licensing feature doc](../../features/licensing.md) for the API surface and gotchas.
+
+**Code-review hardening (2026-04-28):**
+
+- `feature_flags` narrowed from `dict` (anything goes) to `dict[str, bool]` matching this ADR's example shape. Pydantic rejects non-bool values at construction time so a buggy signing service can't ship licenses with garbage that consumers later have to handle defensively. If non-bool flags ever become required, expand the value type via an explicit union — do not relax to `dict[str, Any]`.
+- `_canonical_json` constructed from explicit field references rather than `claims.model_dump()`. This forecloses the failure mode where a pydantic upgrade or a new optional field silently changes serialization and existing licenses stop verifying. Adding a field to `LicenseClaims` requires an explicit reviewed update to `_canonical_json` — a deliberate friction point on a load-bearing contract.
+- Naive `expires_at` is rejected (`reason="expires_at must be timezone-aware (UTC)"`) rather than being silently fixed up to UTC. The signing service must always produce `Z` or `+00:00`; a naive timestamp surfaces the contract violation immediately instead of hiding it.
+- `cryptography` dependency pinned to `==47.0.0` (was `>=41.0`). The crypto primitive is load-bearing enough that a future install drifting to a different version than CI tested is not acceptable.
+
+What is **deferred to post-[ADR 003](003-desktop-distribution-tauri-and-sidecars.md)** (Tauri shell):
+
+- On-disk file path resolution at `~/Library/Application Support/Jarvis/license.json` (macOS) / `%APPDATA%\Jarvis\license.json` (Windows). Belongs to the Tauri shell that owns the app sandbox.
+- OS-protected monotonic-state record per §"Clock-tampering defense" (macOS Keychain / Windows DPAPI / libsecret via the Tauri `keyring` plugin).
+- Compile-time build-epoch floor — embedded at build time in the production binary.
+- `.deepfileslic` UTI / file-extension association per §"Delivery UX" — registered by the platform installer.
+- Service-layer entitlement gates per §"What this changes about existing code" — wired onto the verify primitive once the gated feature surfaces exist.
+
+The crypto layer is platform-independent: Ed25519 sign/verify works identically regardless of which shell ships the binary. Building it before [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) lands does not lock in any platform decision and gives the Tauri-side integration a typed primitive to consume. Building the deferred pieces in pure Python first would create production-grade fragile platform code we'd have to maintain forever — exactly the trap [ADR 004](004-inference-router-architecture.md)'s phasing section flags for `vm_stat`-based memory probes on macOS.
 
 ## Context
 
