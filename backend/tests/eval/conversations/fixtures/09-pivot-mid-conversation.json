@@ -1,0 +1,37 @@
+{
+  "id": "pivot-mid-conversation",
+  "schema_version": 1,
+  "description": "First half of conversation discusses Kubernetes pod scheduling. User explicitly pivots to an unrelated topic (Italy vacation planning). Late turn asks an Italy-related question. Tests whether compaction lets old-topic content bleed into the new-topic answer — the failure mode is the assistant referencing kubernetes terms in a vacation recommendation.",
+  "tags": ["topic-pivot", "context-bleed", "developer"],
+  "profile": "developer-devops",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Got a pod stuck in Pending state on our prod cluster. kubectl describe shows '0/8 nodes available: 5 Insufficient memory, 3 node(s) had taint {dedicated: gpu}, that the pod didn't tolerate'. Eight-node cluster, three of them are GPU nodes. The pod doesn't need a GPU — it's a regular workload."},
+    {"role": "assistant_scripted", "content": "Two separate problems stacked. (1) Five non-GPU nodes are out of memory — that's the real capacity issue. (2) Three GPU nodes are tainted with `dedicated=gpu:NoSchedule`, which is correct posture but means the regular workload can't fall back there. Without adding a toleration, you're effectively running on a 5-node cluster from this workload's perspective. What's the memory request on the pod, and what's the per-node free?"},
+    {"role": "user", "content": "Pod requests 4Gi memory. Nodes are 16Gi each, kubectl top shows them at roughly 11–13Gi used."},
+    {"role": "assistant_scripted", "content": "So requested-vs-used divergence is doing what it usually does — actual usage 11–13Gi but the scheduler reasons over requests, which are presumably summing to >12Gi per node already. Three options: (a) raise cluster capacity (cheap but ducks the question); (b) audit existing workloads for over-requested memory and right-size them; (c) lower this pod's memory request if 4Gi is conservative. The right answer is usually (b) — over-provisioned requests are the most common cause of phantom 'Insufficient memory' on healthy clusters."},
+    {"role": "user", "content": "Yeah option (b). What's a clean way to spot over-requested workloads?"},
+    {"role": "assistant_scripted", "content": "Goldilocks (Fairwinds, open-source) is the standard tool — it deploys VPA in recommendation mode and gives you a dashboard of recommended-vs-current requests per workload. Run it for a week to capture peak load, then walk the top offenders. Alternative: Prometheus + the `kube_pod_container_resource_requests` and `container_memory_working_set_bytes` metrics, joined to compute request-vs-actual ratio. Goldilocks wraps that and adds the UI."},
+    {"role": "user", "content": "Will look at Goldilocks. One more — should I add the GPU-node toleration to this regular workload as a fallback, or is that bad form?"},
+    {"role": "assistant_scripted", "content": "Bad form. The taint exists to prevent exactly this — non-GPU workloads colonizing GPU nodes and then GPU workloads fail to schedule when needed. The right move is to size non-GPU capacity correctly and let the taint do its job. If you genuinely have variable load that occasionally needs to spill to GPU nodes, the cluster-autoscaler pattern — add nodes — beats the toleration shortcut every time."},
+    {"role": "user", "content": "Fair. OK totally different topic — I'm planning a vacation to Italy in October. First time. Thinking 5–7 days. Better to base out of Rome or Florence?"},
+    {"role": "assistant_scripted", "content": "Depends on what you want. Rome: bigger, more layered (ancient, Renaissance, Baroque, modern), better food range, easier evening atmosphere, slightly more chaos. Florence: smaller, walkable end-to-end, denser concentration of Renaissance art, easier as a base for Tuscany day-trips (Siena, San Gimignano, Chianti wine country). For a first-time 5–7 day trip, Florence often wins on signal-to-noise — you spend less time commuting and more time looking at things. Rome rewards a longer trip."},
+    {"role": "user", "content": "Solo trip. I like museums and walking. Don't drink much. Italian food is the main draw."},
+    {"role": "assistant_scripted", "content": "That profile leans Florence harder. Walkable, museums (Uffizi, Accademia, Bargello, Pitti) are concentrated, and the food scene is more accessible solo than Rome's — fewer big-ticket dining rooms, more neighborhood trattorias where a solo traveler isn't an awkward seat. Add 1–2 day-trips: Bologna for food (40 min train), Lucca for the walls and a quieter feel. Skip Pisa unless you specifically want the tower."},
+    {"role": "user", "content": "Bologna sounds great. For a 5-day trip — Florence base, Bologna and Lucca as day trips, what's the one Florence neighborhood you'd stay in?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "neighborhood_recommendation", "match": "regex", "pattern": "(?i)(Oltrarno|Santo\\s+Spirito|Santa\\s+Croce|San\\s+Niccol|San\\s+Frediano|Duomo|Centro)"},
+        {"id": "florence_context", "match": "regex", "pattern": "(?i)(Florence|Firenze)"}
+      ],
+      "must_not_contain": [
+        {"id": "no_kubernetes", "match": "regex", "pattern": "(?i)(kubernetes|k8s|kubectl|pod|cluster|toleration|taint|node|GPU|memory\\s+request|workload)"},
+        {"id": "no_devops", "match": "regex", "pattern": "(?i)(autoscal|prometheus|goldilocks|VPA|namespace)"}
+      ]
+    }
+  ]
+}

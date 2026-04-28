@@ -1,0 +1,11 @@
+{
+  "fixture_id": "code-domain-debugging",
+  "mocks": [
+    {
+      "tool_name": "read_note",
+      "match": {"args": {"path": "backend/services/billing/invoice_processor.py"}},
+      "response": "# backend/services/billing/invoice_processor.py\n\nfrom decimal import Decimal\nfrom typing import Iterable\n\nfrom services.billing.models import LineItem, Invoice\n\n\ndef _compute_line_subtotal(item: LineItem) -> Decimal:\n    return item.unit_price * item.quantity\n\n\ndef _apply_line_discount(item: LineItem, subtotal: Decimal) -> Decimal:\n    if item.discount_pct is None:\n        return subtotal\n    return subtotal * (Decimal(1) - item.discount_pct / Decimal(100))\n\n\ndef compute_invoice_total(items: Iterable[LineItem]) -> Decimal:\n    total = Decimal(0)\n    for item in items:\n        sub = _compute_line_subtotal(item)\n        total += _apply_line_discount(item, sub)\n    return total\n\n\ndef finalize_invoice(invoice: Invoice) -> Invoice:\n    invoice.total = compute_invoice_total(invoice.items)\n    invoice.status = 'finalized'\n    return invoice\n\n\ndef rollback_to_draft(invoice: Invoice) -> Invoice:\n    invoice.status = 'draft'\n    invoice.total = Decimal(0)\n    return invoice\n"
+    }
+  ],
+  "on_unmocked_call": "fail_loudly"
+}

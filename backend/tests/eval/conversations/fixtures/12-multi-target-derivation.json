@@ -1,0 +1,44 @@
+{
+  "id": "multi-target-derivation",
+  "schema_version": 1,
+  "description": "Three sequential assistant_target turns, each building on the previous one (Re computation → friction factor lookup → pressure-drop calculation). Tests whether compaction breaks reasoning chains across multiple target turns — a failure here means the model gave the right answer to turn 1 but couldn't propagate it to turns 2 and 3 because compaction dropped the working values.",
+  "tags": ["multi-target", "derivation-chain", "engineering"],
+  "profile": "mechanical-process-engineer",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Quick fluid-flow problem. Water at 20 °C flowing through a 4-inch schedule-40 carbon steel pipe. ID is 102.3 mm. Volumetric flow 0.05 m³/s. Density 998 kg/m³, viscosity 0.001 Pa·s. What's the Reynolds number?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "re_value", "match": "regex", "pattern": "6\\.[0-3]\\s*[×x*]\\s*10[\\^⁵5]|6[1-3]\\d{4}|620\\s*000|620,000|620000"}
+      ],
+      "must_not_contain": [
+        {"id": "no_laminar_claim", "match": "regex", "pattern": "(?i)(?:flow|regime)\\s+is\\s+laminar"}
+      ]
+    },
+    {"role": "user", "content": "Now from the Moody chart: with Re from above and ε/D = 4.5e-4 for commercial carbon steel, what's the Darcy friction factor?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "f_value", "match": "regex", "pattern": "(?i)(0\\.01[6-9]|0\\.0[12]\\d?)"}
+      ],
+      "must_not_contain": [
+        {"id": "no_laminar_factor", "match": "regex", "pattern": "(?i)64\\s*/\\s*Re"}
+      ]
+    },
+    {"role": "user", "content": "Now use Darcy–Weisbach to compute the pressure drop over 100 m of that pipe with the friction factor you just gave."},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "delta_p_referenced_correct_f", "match": "regex", "pattern": "(?i)(0\\.01[6-9]|0\\.0[12]\\d?)"},
+        {"id": "delta_p_velocity_referenced", "match": "regex", "pattern": "(?i)(velocity|V)\\s*[=≈~]\\s*[56]\\.\\d"}
+      ],
+      "must_not_contain": [
+        {"id": "no_wrong_friction_used", "match": "regex", "pattern": "(?i)(?:using|with)\\s+f\\s*[=≈~]\\s*0\\.0[4-9]"}
+      ]
+    }
+  ]
+}

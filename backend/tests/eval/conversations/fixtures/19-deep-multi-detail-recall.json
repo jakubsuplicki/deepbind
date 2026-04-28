@@ -1,0 +1,60 @@
+{
+  "id": "deep-multi-detail-recall",
+  "schema_version": 1,
+  "description": "User states two distinct details (client name + contract deadline) at turns 0 and 2; 17 user turns of unrelated chat follow; final question asks the assistant to recall both. Tests joint-recall depth pressure: a strategy can sometimes recover one buried fact by guessing, but two specific facts simultaneously is much harder. Fails under naive-truncate-16; passes under full-history.",
+  "tags": ["depth-pressure", "multi-detail-recall", "long-conv"],
+  "profile": "legal",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Front-loading two important details I'll come back to: I'm working on a commercial-lease dispute for the client Northwind Trading Ltd, and the court deadline for filing the response is 17 June 2026. Mostly random other stuff first."},
+    {"role": "assistant_scripted", "content": "Logged — Northwind Trading Ltd, response deadline 17 June 2026. Noted. What's first?"},
+    {"role": "user", "content": "Random — best film soundtrack of the last decade?"},
+    {"role": "assistant_scripted", "content": "Mica Levi's *Under the Skin* is a strong contender. Jonny Greenwood's *Phantom Thread* if you want something stranger. Hildur Guðnadóttir's *Joker* did unusual work for a mainstream film."},
+    {"role": "user", "content": "Mica Levi, will revisit. Question — best way to read more long-form journalism without bookmark sprawl?"},
+    {"role": "assistant_scripted", "content": "Pocket or Readwise Reader — both let you queue and tag. Readwise Reader is the more powerful option if you want highlights to flow into Notion or Obsidian later."},
+    {"role": "user", "content": "Readwise Reader. Cooking — quickest weeknight pasta that isn't tomato-based?"},
+    {"role": "assistant_scripted", "content": "Cacio e pepe in 12 minutes if you have decent pecorino and pepper. Aglio e olio in 10 if you have garlic and olive oil. Both fail if you skimp on pasta water for the emulsion."},
+    {"role": "user", "content": "Cacio e pepe always. Travel — Lisbon or Porto for a long weekend?"},
+    {"role": "assistant_scripted", "content": "Porto if it's your first; smaller, more concentrated, the wine cellars are unique. Lisbon if you want more variety and don't mind walking hills. Porto is the better single-weekend pick."},
+    {"role": "user", "content": "Porto, useful. Random — what's the proper temperature for white wine, actually?"},
+    {"role": "assistant_scripted", "content": "Most white wines are over-chilled. 8–10°C for full whites (white Burgundy, oaked Chardonnay), 10–12°C for crisp whites (Sauvignon Blanc, Picpoul), 6–8°C for sparkling. Aim for 'cool but not painful to hold'."},
+    {"role": "user", "content": "Useful framing. Office — single tweak that improves Zoom call presence?"},
+    {"role": "assistant_scripted", "content": "Camera at eye level, not laptop level. Tilting your laptop screen up to look at the camera is the difference between 'engaged' and 'looking at someone's nostrils'. Books or a stand."},
+    {"role": "user", "content": "Will fix. Tools — best digital pen for iPad note-taking?"},
+    {"role": "assistant_scripted", "content": "Apple Pencil 2 (or USB-C version for the Air) is the only realistic answer. The third-party options drift in calibration after a few months."},
+    {"role": "user", "content": "Apple Pencil. Quick — espresso machine descaling, white vinegar or proper descaler?"},
+    {"role": "assistant_scripted", "content": "Proper descaler. Vinegar can damage rubber seals over time and the smell takes weeks to fully leave the boiler. Urnex Cleancaf or the manufacturer's own descaler — annoying to buy, easy to use."},
+    {"role": "user", "content": "Will buy proper. Reading — book on stoicism that isn't the obvious ones?"},
+    {"role": "assistant_scripted", "content": "Skip Meditations and the recent self-help wave. Try Pierre Hadot's *Philosophy as a Way of Life* — it places stoicism in the context of ancient practice rather than modern productivity."},
+    {"role": "user", "content": "Hadot — noted. Hardware — best small Bluetooth speaker for kitchen use?"},
+    {"role": "assistant_scripted", "content": "Bose SoundLink Flex if you want it survive splash and a knock. JBL Flip 6 for a slightly cheaper alternative. The Sonos Roam is great if you also have a Sonos system; otherwise it's overkill."},
+    {"role": "user", "content": "Bose Flex. Cooking — a stock recipe that's actually worth the time?"},
+    {"role": "assistant_scripted", "content": "Roast chicken stock: roast a chicken carcass plus aromatics at 200°C for 30 minutes, then simmer 4 hours. The roast step is what makes the difference between supermarket-stock-tier and restaurant-tier."},
+    {"role": "user", "content": "Will try. Drinks — best mocktail for a non-drinker at a wedding?"},
+    {"role": "assistant_scripted", "content": "Lyre's Spirits + a decent tonic, with cucumber. Or Seedlip Garden 108 if you want something more herbal. The trick is the tonic — boring tonic ruins both."},
+    {"role": "user", "content": "Lyre's, noted. Music — earphones for the gym under £150 that don't fall out?"},
+    {"role": "assistant_scripted", "content": "Sony WF-1000XM5 if you want premium and ANC for treadmill running. Beats Fit Pro have wing tips and stay put for any movement. Avoid AirPods Pro for serious gym use — they slip during heavy lifts."},
+    {"role": "user", "content": "Beats Fit Pro. Quick — a houseplant for a bathroom with no natural light?"},
+    {"role": "assistant_scripted", "content": "ZZ plant is the most tolerant. Snake plant (sansevieria) is second. Both survive weeks of low light and irregular watering — bathroom-tier neglect is fine."},
+    {"role": "user", "content": "ZZ plant. Reading — the best biography of a 20th-century scientist?"},
+    {"role": "assistant_scripted", "content": "*The Strangest Man* by Graham Farmelo (Dirac), *Genius* by James Gleick (Feynman), or *Rosalind Franklin* by Brenda Maddox. Three different shapes of genius profiled with care."},
+    {"role": "user", "content": "Farmelo, noted. Quick one — a card game for two adults, plays in 15 minutes, more strategic than rummy?"},
+    {"role": "assistant_scripted", "content": "Lost Cities, 7 Wonders Duel, or Patchwork. All three are designed for two players (rather than retro-fitted) and each plays in roughly 15–20 minutes. 7 Wonders Duel has the highest ceiling."},
+    {"role": "user", "content": "OK back to the case. Quickly — for the matter I mentioned at the start, can you remind me of both the client name and the filing deadline? Need to write them on the file cover."},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "client_name", "match": "regex", "pattern": "(?i)Northwind\\s+Trading"},
+        {"id": "deadline_date", "match": "regex", "pattern": "(?i)(17\\s*June\\s*2026|17[-/.]06[-/.]2026|2026[-/.]06[-/.]17)"}
+      ],
+      "must_not_contain": [
+        {"id": "no_other_client", "match": "regex", "pattern": "(?i)\\b(Acme|Initech|Globex|Stark|Wayne|Wonka|Soylent)\\s+(?:Corp|Ltd|LLC|Inc)\\b"},
+        {"id": "no_other_month", "match": "regex", "pattern": "(?i)17\\s*(?:January|February|March|April|May|July|August|September|October|November|December)\\s*2026"},
+        {"id": "no_other_day_june", "match": "regex", "pattern": "(?i)(?:[1-9]|1[0-6]|1[8-9]|2[0-9]|30)\\s*June\\s*2026"}
+      ]
+    }
+  ]
+}

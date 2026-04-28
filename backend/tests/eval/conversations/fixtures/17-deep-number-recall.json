@@ -1,0 +1,60 @@
+{
+  "id": "deep-number-recall",
+  "schema_version": 1,
+  "description": "User states a specific budget figure (£47,500) at turn 0, then 18 user turns of unrelated chat follow, then asks at the end for the figure. Designed to fail under naive-truncate-16 and pass under full-history. Numerical recall is harder than name recall because the model can't lean on word-shape associations.",
+  "tags": ["depth-pressure", "number-recall", "long-conv"],
+  "profile": "generic",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Setting context for a few questions today — I'm scoping a kitchen renovation and the contractor's first quote came in at £47,500. Mention it now so we don't have to rehash later if I bring it up. Mostly random other stuff first though."},
+    {"role": "assistant_scripted", "content": "Got it — kitchen reno, contractor at £47,500. Noted. What's first?"},
+    {"role": "user", "content": "Actually random — what's a good lightweight backpack for hand-luggage flying, around 35L?"},
+    {"role": "assistant_scripted", "content": "Aer Travel Pack 3 if you want premium, Osprey Farpoint 40 for budget, Peak Design Travel 30L if you want camera-friendly compartments."},
+    {"role": "user", "content": "Aer noted. Coffee — how do I make oat milk foam properly without a pro machine?"},
+    {"role": "assistant_scripted", "content": "Use barista-edition oat milk (Oatly Barista is standard), heat to 60–65°C, then a handheld milk frother for 20–30 seconds. Standard oat milk won't foam — the barista versions add a stabilizer."},
+    {"role": "user", "content": "Oatly Barista, helpful. Sleep — magnesium glycinate, worth it?"},
+    {"role": "assistant_scripted", "content": "Mixed evidence. Some people respond well, especially if dietary intake is low. Glycinate form is gentler on the gut than oxide. Try 200–400mg an hour before bed for two weeks; if nothing changes, it's not your bottleneck."},
+    {"role": "user", "content": "Will try. Movie — if I liked Arrival what should I watch?"},
+    {"role": "assistant_scripted", "content": "*Annihilation* (2018), *Ex Machina*, *Children of Men* if you want the same emotional register. Older: *Solaris* (Tarkovsky version, only if you have patience)."},
+    {"role": "user", "content": "Annihilation, will rewatch. What's a good way to learn touch-typing again as an adult?"},
+    {"role": "assistant_scripted", "content": "Keybr.com adapts to your weak letters; 15 minutes daily for two weeks resets most muscle-memory issues. Don't look at the keyboard — that's the only rule."},
+    {"role": "user", "content": "Keybr it is. Hiking — a single boot recommendation for muddy UK trails?"},
+    {"role": "assistant_scripted", "content": "Salomon X Ultra 4 GTX for the all-rounder, Scarpa Terra GTX if you want something stiffer. Both grip mud well; both annoy you on hot dry trails."},
+    {"role": "user", "content": "Salomon, noted. Garden question — easiest herb to grow indoors with low light?"},
+    {"role": "assistant_scripted", "content": "Mint and chives are the most forgiving in low light. Basil wants more light than people give it. Parsley is patient but slow."},
+    {"role": "user", "content": "Mint then. What's a fair price for a Sunday roast for two in central London?"},
+    {"role": "assistant_scripted", "content": "Mid-range £30–40 per head, premium £50–70. The Camberwell Arms or Blacklock are reliable in that band; Hawksmoor sits at the upper end."},
+    {"role": "user", "content": "Blacklock, sounds good. Coding — Vim or VSCode for someone returning to programming after years?"},
+    {"role": "assistant_scripted", "content": "VSCode. Vim has higher ceiling but the setup tax is real and the LSP-tooling story is now better in VSCode. You can always graduate to Neovim later if you find VSCode limiting."},
+    {"role": "user", "content": "VSCode. Wine — a reliable bottle under £15 for a casual dinner?"},
+    {"role": "assistant_scripted", "content": "Côtes du Rhône village wines hit that band well, or a Garnacha from Spain. The Wine Society's house claret is a long-standing safe pick."},
+    {"role": "user", "content": "Côtes du Rhône, will pick up. What's a quick stretch routine for someone who sits at a desk all day?"},
+    {"role": "assistant_scripted", "content": "Five moves, five minutes: thoracic spine rotation, hip flexor lunge, doorway pec stretch, forward fold, and chin tucks. Daily beats heroic."},
+    {"role": "user", "content": "Will try. Music — a working playlist that isn't lo-fi-beats slop?"},
+    {"role": "assistant_scripted", "content": "Brian Eno's *Music for Airports*, Nils Frahm's *Spaces*, or any of Hania Rani's recent piano work. All have texture without lyrics pulling attention."},
+    {"role": "user", "content": "Hania Rani, noted. Clothing — a single pair of jeans worth investing in?"},
+    {"role": "assistant_scripted", "content": "A.P.C. Petit Standard is the perennial pick — raw denim, fades in well, holds up for years. Levi's 501 if you don't want to pay for the brand premium."},
+    {"role": "user", "content": "A.P.C. Quick — the difference between matcha and ceremonial-grade matcha?"},
+    {"role": "assistant_scripted", "content": "Ceremonial grade is from the youngest spring leaves, stone-ground, meant for whisking with water. Culinary grade is older, coarser, fine for lattes and baking. If you whisk, pay for ceremonial; otherwise culinary is fine."},
+    {"role": "user", "content": "Ceremonial it is. Bike — what's a reasonable commuter bike for under £700?"},
+    {"role": "assistant_scripted", "content": "Triban RC500 or RC520 (Decathlon) is the budget benchmark. If you want a flat bar, the B'Twin Riverside 500 is fine. Anything from a Halfords Apollo line — skip, you'll regret it within a year."},
+    {"role": "user", "content": "Triban noted. Thermos — a flask that actually keeps coffee hot for 8+ hours?"},
+    {"role": "assistant_scripted", "content": "Zojirushi SM-SA48 is the gold standard. Stanley Classic if you want something rugged and dishwasher-tolerant. Cheap thermoses lose 30°C in three hours; the Zojirushi loses maybe 5–10."},
+    {"role": "user", "content": "Zojirushi, will look. Last one — best way to back up a laptop without thinking about it?"},
+    {"role": "assistant_scripted", "content": "Time Machine on macOS to a 2 TB SSD plus Backblaze for off-site. Set both up once and ignore. The hardest part is buying the SSD; the rest is automatic."},
+    {"role": "user", "content": "OK back to actual planning. What was the contractor quote I mentioned at the start? I want to write it down before I forget it."},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "exact_amount", "match": "regex", "pattern": "£?\\s*47[,.\\s]?500"}
+      ],
+      "must_not_contain": [
+        {"id": "no_round_amount", "match": "regex", "pattern": "£?\\s*(?:45|50|40|55)[,.\\s]?000\\b"},
+        {"id": "no_alt_currency", "match": "regex", "pattern": "(?i)(?:\\$|USD|EUR|€)\\s*47[,.\\s]?500"}
+      ]
+    }
+  ]
+}

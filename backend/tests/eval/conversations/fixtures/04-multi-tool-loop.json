@@ -1,0 +1,68 @@
+{
+  "id": "multi-tool-loop",
+  "schema_version": 1,
+  "description": "Single complex multi-round tool-loop (search + 3 reads + synthesis), then a follow-up turn that references the synthesis. Tests whether compaction preserves multi-step tool reasoning intact when the user follows up.",
+  "tags": ["tool-loop", "multi-round", "synthesis"],
+  "profile": "generic",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": "04-multi-tool-loop.tools.json"
+  },
+  "turns": [
+    {"role": "user", "content": "Find all my notes about the Whitfield contract and tell me which document specifies the longest renewal window."},
+    {
+      "role": "assistant_scripted",
+      "content": "[tool_call:search_notes query=Whitfield contract renewal]",
+      "expected_tool_calls": [{"name": "search_notes", "args": {"query": "Whitfield contract renewal"}}]
+    },
+    {
+      "role": "tool_result",
+      "tool_name": "search_notes",
+      "content": "Results (3):\n1. clients/whitfield/master-agreement.md — \"Master Services Agreement, Whitfield Industries…\" (relevance 0.91)\n2. clients/whitfield/addendum-2024.md — \"Addendum No. 2 to Master Services Agreement…\" (relevance 0.88)\n3. clients/whitfield/renewal-letter.md — \"Letter re: contractual notice obligations…\" (relevance 0.74)"
+    },
+    {
+      "role": "assistant_scripted",
+      "content": "[tool_call:read_note path=clients/whitfield/master-agreement.md]",
+      "expected_tool_calls": [{"name": "read_note", "args": {"path": "clients/whitfield/master-agreement.md"}}]
+    },
+    {
+      "role": "tool_result",
+      "tool_name": "read_note",
+      "content": "# Master Services Agreement — Whitfield Industries\n\n## §7.2 Term and Renewal\nThe initial term is three (3) years from the Effective Date. Either party may terminate at the end of the initial term by providing written notice not less than sixty (60) days prior to the renewal date. Absent such notice, the agreement renews automatically for successive one-year terms."
+    },
+    {
+      "role": "assistant_scripted",
+      "content": "[tool_call:read_note path=clients/whitfield/addendum-2024.md]",
+      "expected_tool_calls": [{"name": "read_note", "args": {"path": "clients/whitfield/addendum-2024.md"}}]
+    },
+    {
+      "role": "tool_result",
+      "tool_name": "read_note",
+      "content": "# Addendum No. 2 — Whitfield Industries MSA\n\nDated: 2024-09-15.\n\n§3. The renewal-notice window in §7.2 of the Master Services Agreement is amended from sixty (60) days to ninety (90) days. All other terms of §7.2 remain in effect."
+    },
+    {
+      "role": "assistant_scripted",
+      "content": "[tool_call:read_note path=clients/whitfield/renewal-letter.md]",
+      "expected_tool_calls": [{"name": "read_note", "args": {"path": "clients/whitfield/renewal-letter.md"}}]
+    },
+    {
+      "role": "tool_result",
+      "tool_name": "read_note",
+      "content": "# Letter — Whitfield contractual notice obligations\n\nFrom: Whitfield in-house counsel\nDate: 2024-12-03\n\nReminder regarding internal policy: any non-renewal letter must be approved by the Whitfield CFO at least thirty (30) days prior to dispatch. This is an internal-controls obligation, not a contract term."
+    },
+    {"role": "assistant_scripted", "content": "Three documents reviewed. The longest renewal window in the actual contract is 90 days, set in Addendum No. 2 (2024-09-15), which amended the original 60-day window in §7.2 of the Master Services Agreement. The renewal-letter.md document mentions a 30-day internal-policy step at Whitfield's side, but that's an internal control, not a contract term — don't confuse it with the renewal window."},
+    {"role": "user", "content": "Right. And which file did the 90-day window come from again?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "addendum_file", "match": "regex", "pattern": "(?i)addendum(-2024|\\s+No\\.\\s*2|\\s+2024)"},
+        {"id": "ninety_days", "match": "regex", "pattern": "(?i)90[-\\s]*day|ninety[-\\s]*day"}
+      ],
+      "must_not_contain": [
+        {"id": "no_master_attribution", "match": "regex", "pattern": "(?i)(came\\s+from|in)\\s+the\\s+master[\\s-]agreement"},
+        {"id": "no_letter_attribution", "match": "regex", "pattern": "(?i)(came\\s+from|in)\\s+the\\s+(renewal[\\s-]letter|letter)"},
+        {"id": "no_30_day", "match": "regex", "pattern": "30[-\\s]*day.*renewal"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "id": "fifty-turn-marathon",
+  "schema_version": 1,
+  "description": "50-turn casual conversation crossing multiple threads (work, hobby, travel, commitments). At turn 49 the user asks Jarvis to recall a specific commitment mentioned at turn 5 (sending a draft to a colleague by Friday). Tests whether compaction preserves a commitment buried under 40+ turns of unrelated chat. Stresses compaction harder than the 30-turn 'long-conv-shallow' fixture.",
+  "tags": ["very-long-conv", "commitment-recall", "multi-thread"],
+  "profile": "generic",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Morning. Three things on the agenda today: prep for the 10am client call, draft the response to Marcus, and figure out lunch."},
+    {"role": "assistant_scripted", "content": "Got it. Want to start with the client-call prep, or draft Marcus's response while it's fresh?"},
+    {"role": "user", "content": "Marcus first — he's blocking on it."},
+    {"role": "assistant_scripted", "content": "What did Marcus ask for? I can help draft once I know the ask."},
+    {"role": "user", "content": "He needs the second-draft proposal by Friday this week. I told him I'd send it by end of day Thursday so he has time to review before our Monday sync."},
+    {"role": "assistant_scripted", "content": "Noted — proposal v2 to Marcus by end-of-day Thursday. Want me to help structure it now or remind you to come back to it?"},
+    {"role": "user", "content": "Structure now. The Monday version had three sections: scope, timeline, pricing. Marcus pushed back on pricing."},
+    {"role": "assistant_scripted", "content": "What was his pushback — too high, wrong structure, or unclear on what's included?"},
+    {"role": "user", "content": "Said the per-seat number didn't match what we'd agreed verbally — he had it at $180/seat, our doc said $220."},
+    {"role": "assistant_scripted", "content": "Did you confirm with anyone on your side what the right number is? Otherwise the v2 needs to either match the verbal $180 or explain the move to $220."},
+    {"role": "user", "content": "Right. I'll check with Tomek before sending. OK pivot — client call. They're a logistics firm in Wrocław, Series A, ~80 staff."},
+    {"role": "assistant_scripted", "content": "What's the call about? Discovery, demo, or contract negotiation?"},
+    {"role": "user", "content": "Discovery. They reached out via the website."},
+    {"role": "assistant_scripted", "content": "For a Series-A logistics firm at 80 staff, the standard discovery cuts: where's the data living today, what reporting tooling, how many people would actually use the product, and what's the buying authority. Want me to flesh out questions in any of those?"},
+    {"role": "user", "content": "Reporting tooling for sure — that's where most of the friction shows up for them."},
+    {"role": "assistant_scripted", "content": "Three questions to ask: (1) What's the current 'where do I look to answer X?' for ops vs finance? (2) How long does the weekly report cycle actually take, end to end? (3) Who has been frustrated enough to ask for a different system, and what specifically?"},
+    {"role": "user", "content": "Useful. OK I'll loop back to Marcus in a sec. Lunch question — should I do the Vietnamese place again or try the new Georgian spot?"},
+    {"role": "assistant_scripted", "content": "Vietnamese is reliable; Georgian is novelty. Depends if you want zero risk before a discovery call."},
+    {"role": "user", "content": "Vietnamese. Pho with brisket."},
+    {"role": "assistant_scripted", "content": "Solid pick."},
+    {"role": "user", "content": "Question — for the proposal, do you think 30/60/90 day onboarding plan helps the pricing pushback, or muddies it?"},
+    {"role": "assistant_scripted", "content": "Helps if pricing pushback is really about value-justification. Muddies if it's purely about the per-seat number — adding scope to argue down a unit price reads as defensive. Marcus's specific complaint was a number-doesn't-match issue, not a value issue, so I'd skip the 30/60/90 in v2 and address the number directly."},
+    {"role": "user", "content": "Fair. OK random — what's a good wedding gift for an engineer-couple? Both software people."},
+    {"role": "assistant_scripted", "content": "Mechanical keyboard split for one of them, a high-quality espresso setup for both, or a print of something specific they like (a chip-floorplan of a CPU they care about, framed). Avoid generic-engineering-themed Etsy stuff."},
+    {"role": "user", "content": "Espresso setup sounds right — they both work from home. How much should I budget?"},
+    {"role": "assistant_scripted", "content": "$300–500 lands on a competent dual-boiler with a basic grinder; $700–1000 is the level where it stops being a compromise. If they're already coffee people, ask the partner-of-the-couple-you-know-better what gear they have, otherwise you risk duplicating."},
+    {"role": "user", "content": "Will do. OK back to work mode. Where were we on the proposal?"},
+    {"role": "assistant_scripted", "content": "We had: proposal v2 to Marcus, three sections (scope/timeline/pricing), pricing pushback to address by either matching $180 or explaining $220, and you said you'd confirm with Tomek before sending."},
+    {"role": "user", "content": "Right. I'll ping Tomek in Slack now and come back to this after the client call."},
+    {"role": "assistant_scripted", "content": "Sounds good. Anything you want me to hold onto for after?"},
+    {"role": "user", "content": "The discovery questions — keep those handy."},
+    {"role": "assistant_scripted", "content": "Got them. Three reporting-tooling questions ready when you come back."},
+    {"role": "user", "content": "Question on something else — I want to start running again. How do I structure a comeback after 6 months off?"},
+    {"role": "assistant_scripted", "content": "Run-walk for the first 2–3 weeks, increase duration before pace, no more than 10% volume increase per week. Two sessions a week to start, build to three. Don't add hills or speed work for the first month — comeback injuries are almost always volume-related."},
+    {"role": "user", "content": "Distance to aim for in a first session?"},
+    {"role": "assistant_scripted", "content": "20–30 minutes total time, mostly walking with 2–3 short running intervals (60–90 seconds each). Forget pace; focus on finishing without limping the next day."},
+    {"role": "user", "content": "OK. I'll start tomorrow morning."},
+    {"role": "assistant_scripted", "content": "Good. Set out the kit tonight — friction at 6am is real."},
+    {"role": "user", "content": "True. Random — recommendation for a beginner sourdough cookbook?"},
+    {"role": "assistant_scripted", "content": "*Flour Water Salt Yeast* by Ken Forkish for the 'I want to understand what's happening' route, *Tartine Bread* by Chad Robertson for the 'I want to make the iconic loaf' route. Skip the Instagram-style 'easy sourdough' books — they teach you to bake one specific bread, not how bread works."},
+    {"role": "user", "content": "Ken Forkish then."},
+    {"role": "assistant_scripted", "content": "Solid pick. Plan for two weekends to build a starter."},
+    {"role": "user", "content": "OK back to work. Client call in 20 min. Anything else I should review for them?"},
+    {"role": "assistant_scripted", "content": "Pull up their LinkedIn page and skim the leadership team — reporting-tooling questions land better when you've registered who's likely making the buying call. Series A logistics firm at 80 staff usually means a COO or VP-Operations is the budget owner."},
+    {"role": "user", "content": "Good call. Did that for the last one."},
+    {"role": "assistant_scripted", "content": "Habit beats prep. Good luck on the call."},
+    {"role": "user", "content": "Thanks. OK before I go — quick sanity check, what's the commitment I have to Marcus this week again? Want to make sure I have it locked before the call eats my afternoon."},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "deliverable", "match": "regex", "pattern": "(?i)(proposal|draft)"},
+        {"id": "marcus", "match": "regex", "pattern": "(?i)Marcus"},
+        {"id": "deadline_thursday_or_friday", "match": "regex", "pattern": "(?i)(Thursday|end\\s+of\\s+day\\s+Thursday|by\\s+Friday)"}
+      ],
+      "must_not_contain": [
+        {"id": "no_wrong_recipient", "match": "regex", "pattern": "(?i)(Tomek|the\\s+client|the\\s+logistics\\s+firm|Wroc[lł]aw)"},
+        {"id": "no_wrong_topic", "match": "regex", "pattern": "(?i)(running|sourdough|coffee|wedding|espresso|Vietnamese|pho)"},
+        {"id": "no_made_up_day", "match": "regex", "pattern": "(?i)(Monday|Tuesday|Wednesday|Saturday|Sunday)\\s+(this|next|by)"}
+      ]
+    }
+  ]
+}

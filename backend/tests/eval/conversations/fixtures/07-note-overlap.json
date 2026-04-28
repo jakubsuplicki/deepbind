@@ -1,0 +1,42 @@
+{
+  "id": "note-overlap",
+  "schema_version": 1,
+  "description": "User asks the assistant to read a clinical-trial note via tool call, then discusses the trial. Late turn asks for a specific fact. Tests retrieval-from-vault vs retrieval-from-history disambiguation: the fact appears both in the original tool result (turn 3) and in the assistant's discussion (turn 4). A correct strategy must surface the authoritative source, not a paraphrase.",
+  "tags": ["vault-vs-history", "retrieval-disambiguation", "pharma"],
+  "profile": "pharma-medical",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": "07-note-overlap.tools.json"
+  },
+  "turns": [
+    {"role": "user", "content": "Read the protocol summary at trials/cardio-trial-2024.md and let's go over it."},
+    {
+      "role": "assistant_scripted",
+      "content": "[tool_call:read_note path=trials/cardio-trial-2024.md]",
+      "expected_tool_calls": [{"name": "read_note", "args": {"path": "trials/cardio-trial-2024.md"}}]
+    },
+    {
+      "role": "tool_result",
+      "tool_name": "read_note",
+      "content": "# Cardio Trial 2024 — Protocol Summary\n\n**Sponsor:** Internal R&D\n**IND number:** 154,892\n**Phase:** IIb\n**Indication:** chronic heart failure with reduced ejection fraction (HFrEF), NYHA Class II–III\n\n## Primary endpoint\n30-day all-cause hospitalization rate among adjudicated HFrEF events, measured from randomization.\n\n## Secondary endpoints\n- 90-day cardiovascular mortality\n- Change from baseline in NT-proBNP at week 12\n- Change from baseline in 6-minute walk distance at week 12\n- Patient-reported KCCQ score at weeks 4, 12, 24\n\n## Sample size\n1,840 patients, 1:1 randomization (stratified by NYHA class and prior hospitalization).\n\n## Statistical plan\nPrimary analysis: Cox proportional hazards, two-sided alpha 0.05. Hierarchical testing for secondary endpoints.\n\n## Key inclusion criteria\n- LVEF ≤ 35% within 6 months\n- NYHA Class II or III\n- Stable guideline-directed medical therapy ≥ 4 weeks\n\n## Key exclusion criteria\n- ACS within 30 days\n- eGFR < 30\n- Active malignancy"
+    },
+    {"role": "assistant_scripted", "content": "Phase IIb in HFrEF, NYHA II–III, 1,840 patients 1:1 randomized. Primary endpoint is 30-day all-cause hospitalization rate adjudicated to HFrEF events. Secondaries: 90-day CV mortality, NT-proBNP and 6MWD at week 12, KCCQ over the first 24 weeks. Hierarchical testing on secondaries. What do you want to dig into?"},
+    {"role": "user", "content": "The hierarchy on secondaries — is the order pre-specified or adaptive?"},
+    {"role": "assistant_scripted", "content": "Pre-specified, by convention. The protocol summary doesn't show the exact order, but in HFrEF Phase IIb the typical pre-specification is mortality first (highest clinical importance, hardest to power), then biomarker (NT-proBNP), then functional (6MWD), then PRO (KCCQ). Worth confirming against the SAP — happy to read that if you have a path for it."},
+    {"role": "user", "content": "Don't have the SAP loaded — leave it. Different question — KCCQ as a PRO secondary, what's the interpretation challenge there?"},
+    {"role": "assistant_scripted", "content": "Two issues. First, KCCQ at multiple timepoints (4, 12, 24 weeks) means you have to pre-specify whether you're testing each timepoint or the AUC/slope, otherwise multiplicity bites you. Second, KCCQ is patient-reported and unblinding events (a patient figuring out whether they're on active therapy due to side effects) skew it more than mortality endpoints. The standard mitigation is to pre-specify a co-primary or sensitivity analysis controlling for unblinding indicators."},
+    {"role": "user", "content": "Yeah we've seen unblinding issues. Quick — remind me what the primary endpoint was, exactly?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "primary_window", "match": "regex", "pattern": "30[-\\s]*day"},
+        {"id": "primary_event_type", "match": "regex", "pattern": "(?i)(all[-\\s]*cause\\s+hospitalization|hospitalization\\s+rate)"},
+        {"id": "primary_population", "match": "regex", "pattern": "(?i)HFrEF"}
+      ],
+      "must_not_contain": [
+        {"id": "no_mortality_as_primary", "match": "regex", "pattern": "(?i)(?:primary[\\s\\S]{0,40}(mortality|death))|((mortality|death)[\\s\\S]{0,40}primary)"},
+        {"id": "no_proBNP_as_primary", "match": "regex", "pattern": "(?i)primary[\\s\\S]{0,40}NT-?proBNP"}
+      ]
+    }
+  ]
+}

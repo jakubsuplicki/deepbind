@@ -1,0 +1,60 @@
+{
+  "id": "deep-name-recall",
+  "schema_version": 1,
+  "description": "User introduces a specific project codename at turn 0, then 17 user turns of unrelated chat follow, then asks at turn 36 to recall the codename. Designed to fail under naive-truncate-16 (the codename's user turn is dropped) while passing under full-history. Pressure-tests depth-of-recall beyond the 16-turn window.",
+  "tags": ["depth-pressure", "name-recall", "long-conv"],
+  "profile": "generic",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Quick context for our chat — I'm leading a small internal project at work codenamed Project Albatross-9. It's a customer-data deduplication initiative. Mostly noting it so we don't have to re-explain context as I bounce between topics."},
+    {"role": "assistant_scripted", "content": "Got it — Project Albatross-9, customer-data dedup. I'll keep the context. What's first?"},
+    {"role": "user", "content": "Random — what's a decent espresso machine under £400? Bought a poor one last year and want to upgrade."},
+    {"role": "assistant_scripted", "content": "Around that budget the Sage Bambino Plus is the strongest pick — fast heat-up, automatic milk steaming. Gaggia Classic Pro is the manual-lever route if you want to learn the craft."},
+    {"role": "user", "content": "Bambino Plus, noted. Switching — recommend a podcast for long drives?"},
+    {"role": "assistant_scripted", "content": "*Conversations with Tyler*, *The Rest is History*, or *Dwarkesh Podcast* depending on whether you want economics, history, or AI/tech."},
+    {"role": "user", "content": "I'll try Dwarkesh. Different topic — best London coffee shop for laptop work?"},
+    {"role": "assistant_scripted", "content": "Workshop Coffee in Marylebone, Prufrock on Leather Lane, or Department of Coffee in Liverpool Street. All have wifi + reasonable noise floor for calls."},
+    {"role": "user", "content": "Prufrock looks good. What's a good gym bag — cheap and durable?"},
+    {"role": "assistant_scripted", "content": "Decathlon's basic 30L is fine and cheap. If you want something nicer, the Aer Gym Duffel 2 holds up well over years."},
+    {"role": "user", "content": "Decathlon for now. OK — any new fiction worth reading? Last book I liked was Klara and the Sun."},
+    {"role": "assistant_scripted", "content": "If you liked Klara: *The Ministry for the Future* (Robinson), *Sea of Tranquility* (Mandel), or *Piranesi* (Clarke). Different registers but similar restraint in the prose."},
+    {"role": "user", "content": "Piranesi — heard of that. Will try. Travel question — three days in Lisbon, what would you prioritise?"},
+    {"role": "assistant_scripted", "content": "Day 1: Alfama walking + Castelo de São Jorge. Day 2: Belém (Jerónimos, the pasteís, MAAT). Day 3: day trip to Sintra. Skip the tram 28 unless you're very early — it's a tourist crush."},
+    {"role": "user", "content": "Useful. Tea recommendation? I've been drinking too much coffee."},
+    {"role": "assistant_scripted", "content": "If you want low caffeine: hojicha or rooibos. If you still want a kick: a decent assam or a sencha. Postcard Teas in Mayfair has the better selection if you're in central London."},
+    {"role": "user", "content": "Hojicha sounds new — will try. What's a good lightweight rain jacket — UK weather?"},
+    {"role": "assistant_scripted", "content": "Patagonia Torrentshell or the Arc'teryx Beta if you want to splurge. For budget the Decathlon Forclaz MT100 is fine for non-extreme weather."},
+    {"role": "user", "content": "Forclaz — perfect. Productivity question — any way to actually quit doomscrolling?"},
+    {"role": "assistant_scripted", "content": "Grayscale mode + remove the apps from the home screen + a 10-minute screen-time alert per app. The friction matters more than willpower. Most people relapse around week 2; ride through it."},
+    {"role": "user", "content": "Grayscale, fair point. What's a good board game for four players, plays in under 90 minutes?"},
+    {"role": "assistant_scripted", "content": "Azul, Wingspan (light), or Splendor for shorter; Ticket to Ride: Europe if you want closer to 90 minutes. All four-player friendly."},
+    {"role": "user", "content": "Azul we already have. Will try Wingspan. Recipe — a good batch lunch I can prep on Sunday?"},
+    {"role": "assistant_scripted", "content": "Mediterranean grain bowl: farro, roasted aubergine + courgette, halloumi, lemon-tahini dressing, fresh herbs. Holds 4 days, doesn't get sad like leafy greens do."},
+    {"role": "user", "content": "Halloumi every time. Last random question — best way to learn basic German in 6 months for a holiday?"},
+    {"role": "assistant_scripted", "content": "Pimsleur for daily commute drills, then Anki for vocab, then a weekly italki tutor for spoken practice. 30 minutes daily beats 3 hours twice a week."},
+    {"role": "user", "content": "Italki — good idea. Music — any albums released in 2026 worth my time?"},
+    {"role": "assistant_scripted", "content": "I can't browse 2026 releases reliably from training data. If you want classics: anything new from Big Thief, Phoebe Bridgers's last project, or the latest Mount Eerie. Curious what you've been listening to lately?"},
+    {"role": "user", "content": "Mostly older stuff. One quick — a good present for a friend who likes obscure non-fiction?"},
+    {"role": "assistant_scripted", "content": "*The Secret of Our Success* by Henrich (cultural evolution), *Seeing Like a State* by Scott (legibility), or *The Dawn of Everything* (Graeber & Wengrow) if they're up for a tome. All obscure-leaning but durable."},
+    {"role": "user", "content": "Henrich, will look. Furniture — a chair recommendation for an 8-hour desk day, under £500?"},
+    {"role": "assistant_scripted", "content": "Herman Miller Sayl secondhand sits around that, or the IKEA Markus new — the latter is the best value-for-money the office-chair market has seen in years."},
+    {"role": "user", "content": "Markus — heard of it. A houseplant that's hard to kill?"},
+    {"role": "assistant_scripted", "content": "Snake plant (sansevieria), ZZ plant, or pothos. All survive being neglected for two weeks straight; pothos is the easiest to propagate."},
+    {"role": "user", "content": "Pothos sounds easiest. Last small one — best Pomodoro timer app on macOS?"},
+    {"role": "assistant_scripted", "content": "Be Focused is the standard. If you want minimal: just use Apple's built-in Clock app's timer with a 25-minute preset. Most apps over-engineer the format."},
+    {"role": "user", "content": "OK that was a lot — let me bring this back. What was the codename of the work project I mentioned right at the start of our chat? Want to make sure I haven't forgotten my own naming."},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "exact_codename", "match": "regex", "pattern": "(?i)Albatross[\\s\\-]?9"}
+      ],
+      "must_not_contain": [
+        {"id": "no_alt_bird", "match": "regex", "pattern": "(?i)\\b(falcon|eagle|hawk|raven|phoenix|cardinal|pelican)\\b"},
+        {"id": "no_alt_number", "match": "regex", "pattern": "Albatross[\\s\\-]?(?:[1-8]|10|11|12)\\b"}
+      ]
+    }
+  ]
+}

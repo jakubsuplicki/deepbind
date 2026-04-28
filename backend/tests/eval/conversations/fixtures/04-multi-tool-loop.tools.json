@@ -1,0 +1,26 @@
+{
+  "fixture_id": "multi-tool-loop",
+  "mocks": [
+    {
+      "tool_name": "search_notes",
+      "match": {"args": {"query": "Whitfield contract renewal"}},
+      "response": "Results (3):\n1. clients/whitfield/master-agreement.md — \"Master Services Agreement, Whitfield Industries…\" (relevance 0.91)\n2. clients/whitfield/addendum-2024.md — \"Addendum No. 2 to Master Services Agreement…\" (relevance 0.88)\n3. clients/whitfield/renewal-letter.md — \"Letter re: contractual notice obligations…\" (relevance 0.74)"
+    },
+    {
+      "tool_name": "read_note",
+      "match": {"args": {"path": "clients/whitfield/master-agreement.md"}},
+      "response": "# Master Services Agreement — Whitfield Industries\n\n## §7.2 Term and Renewal\nThe initial term is three (3) years from the Effective Date. Either party may terminate at the end of the initial term by providing written notice not less than sixty (60) days prior to the renewal date. Absent such notice, the agreement renews automatically for successive one-year terms."
+    },
+    {
+      "tool_name": "read_note",
+      "match": {"args": {"path": "clients/whitfield/addendum-2024.md"}},
+      "response": "# Addendum No. 2 — Whitfield Industries MSA\n\nDated: 2024-09-15.\n\n§3. The renewal-notice window in §7.2 of the Master Services Agreement is amended from sixty (60) days to ninety (90) days. All other terms of §7.2 remain in effect."
+    },
+    {
+      "tool_name": "read_note",
+      "match": {"args": {"path": "clients/whitfield/renewal-letter.md"}},
+      "response": "# Letter — Whitfield contractual notice obligations\n\nFrom: Whitfield in-house counsel\nDate: 2024-12-03\n\nReminder regarding internal policy: any non-renewal letter must be approved by the Whitfield CFO at least thirty (30) days prior to dispatch. This is an internal-controls obligation, not a contract term."
+    }
+  ],
+  "on_unmocked_call": "fail_loudly"
+}

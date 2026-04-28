@@ -1,0 +1,52 @@
+{
+  "id": "long-conv-shallow",
+  "schema_version": 1,
+  "description": "30-turn casual conversation. The user mentions a research project at turn 1 and asks the assistant to recall it at turn 29. Tests whether compaction preserves topic-defining context across a long stretch of unrelated chat.",
+  "tags": ["long-conv", "topic-recall", "shallow-references"],
+  "profile": "generic",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Hey — I'm starting a research project on renewable energy adoption in Poland, focusing on offshore wind in the Baltic. Just brainstorming for now."},
+    {"role": "assistant_scripted", "content": "Got it. Offshore wind in the Baltic is a strong area — Poland's recent capacity auctions are a useful starting point. Want me to draft a research outline, or are you in pure brainstorm mode for now?"},
+    {"role": "user", "content": "Brainstorm mode. By the way — any good lunch ideas? I'm tired of the same wraps."},
+    {"role": "assistant_scripted", "content": "Quick option: a grain bowl with roasted vegetables, halloumi, and tahini. Holds well in a container if you batch it on Sunday."},
+    {"role": "user", "content": "Halloumi yes, will try. What's the weather doing this weekend, do you happen to know?"},
+    {"role": "assistant_scripted", "content": "I don't have live weather data — but if you tell me your city I can help you plan around typical late-April patterns."},
+    {"role": "user", "content": "Kraków. I want to do a hike Saturday."},
+    {"role": "assistant_scripted", "content": "Late April in Kraków is usually mild — 10–18°C, occasional showers. Ojcowski Park or the Tyniec abbey loop are both good day-hike options."},
+    {"role": "user", "content": "Tyniec sounds nice. Switching topics — any productivity book recommendations?"},
+    {"role": "assistant_scripted", "content": "For a fresh angle, *Slow Productivity* by Cal Newport. If you want something denser, *Deep Work* by the same author. *Four Thousand Weeks* by Burkeman is the philosophical counterweight."},
+    {"role": "user", "content": "Have read Deep Work. Will try Slow Productivity."},
+    {"role": "assistant_scripted", "content": "Good pick. The 'do fewer things' chapter is the load-bearing one."},
+    {"role": "user", "content": "Random question — what's a good keyboard for long writing sessions? I'm on a stock Apple keyboard right now."},
+    {"role": "assistant_scripted", "content": "If you want to stay low-profile and quiet: Keychron K3 Pro low-profile. If you want full mechanical: Keychron Q1 with browns or reds. For a splurge, the HHKB Hybrid Type-S."},
+    {"role": "user", "content": "I'll look at the K3 Pro. Do you watch any TV shows currently?"},
+    {"role": "assistant_scripted", "content": "I don't watch anything — but if you want recommendations: *Slow Horses* (spy drama, very tight writing), *The Diplomat* (political), *Severance* season 2 if you liked the first."},
+    {"role": "user", "content": "Slow Horses is great. OK back to work mode. I have a meeting at 3pm — remind me to prep for it in an hour?"},
+    {"role": "assistant_scripted", "content": "I can't run timers, but if you set one in your OS I can help you draft the prep notes when you come back."},
+    {"role": "user", "content": "Fair. What's a good way to take meeting notes — pen vs laptop?"},
+    {"role": "assistant_scripted", "content": "Pen for thinking-heavy meetings, laptop for action-item-heavy ones. Mixed approach: notebook during, type up summary after."},
+    {"role": "user", "content": "I do mostly hybrid. What's a good notebook brand?"},
+    {"role": "assistant_scripted", "content": "Leuchtturm1917 if you want quality and indexing. Muji if you want minimal and cheap. Field Notes for pocket capture."},
+    {"role": "user", "content": "Leuchtturm it is. What's your view on AI in general — getting better or hitting limits?"},
+    {"role": "assistant_scripted", "content": "Pace of capability gains is real but uneven across tasks. Reasoning under uncertainty and long-horizon planning still lag general fluency by a wide margin. The interesting shift in 2026 is local models becoming genuinely production-capable, which changes the deployment economics more than the headline benchmarks suggest."},
+    {"role": "user", "content": "Interesting. OK final lunch question — pierogi place near the Old Town?"},
+    {"role": "assistant_scripted", "content": "Pierogarnia Krakowiacy on Szewska is a reliable pick. Pod Wawelem near the castle is touristy but solid. Glonojad is the vegetarian option."},
+    {"role": "user", "content": "Pierogarnia, perfect. OK actually — what was that research project I mentioned at the start of our chat? Want to make sure I didn't lose track of it."},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "topic_renewable_energy", "match": "regex", "pattern": "(?i)renewable\\s+energy"},
+        {"id": "topic_poland", "match": "regex", "pattern": "(?i)Poland"},
+        {"id": "topic_offshore_or_baltic", "match": "regex", "pattern": "(?i)(offshore|Baltic)"}
+      ],
+      "must_not_contain": [
+        {"id": "no_solar", "match": "regex", "pattern": "(?i)solar"},
+        {"id": "no_nuclear", "match": "regex", "pattern": "(?i)nuclear"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "id": "numerical-correction",
+  "schema_version": 1,
+  "description": "User states a number early ('30 patients enrolled'), then corrects mid-conversation ('actually 42, sorry'). Late turn asks for the count. Tests whether compaction preserves the *correction* or returns the original number — naive truncation that drops the correction turn produces a confidently-wrong answer. The wrong answer (30) is a confabulation guard; the right answer (42) is the expected fact.",
+  "tags": ["correction-recall", "numerical-fidelity", "pharma-medical"],
+  "profile": "pharma-medical",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Reviewing the Phase Ib oncology trial data with you. Enrollment closed last Friday with 30 patients. I want to talk through the safety signal we're seeing."},
+    {"role": "assistant_scripted", "content": "What are you seeing? Walk me through the AEs that are clustering."},
+    {"role": "user", "content": "Three Grade-3 hepatic events in the high-dose cohort, all within the first 28 days. Two resolved with dose hold, one required permanent discontinuation. We don't have a clear pattern on the labs preceding the events."},
+    {"role": "assistant_scripted", "content": "Three out of how many in the high-dose cohort specifically?"},
+    {"role": "user", "content": "Twelve in high-dose. So 25%."},
+    {"role": "assistant_scripted", "content": "That's a meaningful signal at n=12. Did the events cross any of the protocol-defined stopping rules?"},
+    {"role": "user", "content": "Stopping rule for hepatic was ≥30% Grade-3+ in any cohort, so we're under by one event. But the IRC is meeting Friday and may recommend a hold anyway given the pattern."},
+    {"role": "assistant_scripted", "content": "If the IRC recommends a hold, will that be partial (high-dose only) or full?"},
+    {"role": "user", "content": "Probably high-dose only. The mid-dose and low-dose cohorts have been clean."},
+    {"role": "assistant_scripted", "content": "What does the lab-trend analysis show in the 14 days preceding each Grade-3 event? ALT/AST trajectories specifically — looking for whether the events were predictable from the labs versus genuinely abrupt."},
+    {"role": "user", "content": "Two had stable ALT in normal range right up until day 24-26 then jumped sharply. The third had borderline ALT at baseline that drifted up over the first three weeks. So one predictable, two abrupt."},
+    {"role": "assistant_scripted", "content": "The two abrupt ones are the harder defense. If you have to argue for continuing, the predictable case shows monitoring catches it; the two abrupt cases argue for either tighter monitoring intervals or a lower starting dose for high-dose enrollment."},
+    {"role": "user", "content": "Right. Quick correction by the way — I said 30 patients enrolled, that's wrong. Actually 42. Sorry, I was looking at the safety set, not the full ITT. 42 enrolled, 38 dosed, 30 in the safety analysis set."},
+    {"role": "assistant_scripted", "content": "Noted — 42 enrolled total, 38 dosed, 30 in safety. That changes the cohort math somewhat: 12 in high-dose is 28.6% of dosed-population, not 40% of an enrolled-30 figure. The denominator matters for the IRC framing."},
+    {"role": "user", "content": "Yes. And for the statistical power on the secondary endpoints, 38 dosed is what the SAP assumes."},
+    {"role": "assistant_scripted", "content": "Right — make sure the IRC packet uses the dosed-38 denominator for the safety summary, not the enrolled-42, otherwise the rate looks artificially lower."},
+    {"role": "user", "content": "Will do. OK switching gears — for the mid-dose cohort, when do we expect the next interim look?"},
+    {"role": "assistant_scripted", "content": "What's the protocol-defined interim trigger? Calendar-based or event-based?"},
+    {"role": "user", "content": "Event-based — first interim at 8 cycle-1 evaluable patients in mid-dose. We're at 6 right now."},
+    {"role": "assistant_scripted", "content": "Two more cycle-1 evaluables, then the interim looks. Given current enrollment pace, that's probably 3–4 weeks. Worth pre-aligning the IRC chair on the interim readout structure now so the analysis lead isn't scrambling."},
+    {"role": "user", "content": "Right. OK final question for now — for the FDA briefing book in November, what's the headline enrollment number we lead with?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "correct_enrollment", "match": "regex", "pattern": "\\b42\\b"}
+      ],
+      "must_not_contain": [
+        {"id": "no_uncorrected_30", "match": "regex", "pattern": "\\b30\\s*(patients|enrolled)\\b"},
+        {"id": "no_38_as_enrollment", "match": "regex", "pattern": "(?i)enrolled?\\s*(?:was|is)?\\s*38|38\\s*enrolled"}
+      ]
+    }
+  ]
+}

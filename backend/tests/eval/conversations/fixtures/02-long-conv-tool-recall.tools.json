@@ -1,0 +1,11 @@
+{
+  "fixture_id": "long-conv-tool-recall",
+  "mocks": [
+    {
+      "tool_name": "read_note",
+      "match": {"args": {"path": "hartwell/pumps.md"}},
+      "response": "# Hartwell Project — Pump Specifications\n\n## P-101: Main Process Pump (Centrifugal)\n- Manufacturer: Goulds 3196 STX\n- Flow rate: 240 GPM at 75 PSI discharge\n- Motor: 30 HP, 1750 RPM, TEFC\n- NPSH required: 8 ft at design point\n- Suction: 6\", Discharge: 4\"\n- Material: 316 SS casing, Ni-resist impeller\n- Seal: John Crane Type 21, EPDM\n- Installation date: 2023-08-14\n\n## P-102: Backup Pump (centrifugal, smaller)\n- Flow rate: 150 GPM at 60 PSI\n- Motor: 15 HP\n\nSee also: hartwell/p101-curve.md, hartwell/maintenance-log.md"
+    }
+  ],
+  "on_unmocked_call": "fail_loudly"
+}

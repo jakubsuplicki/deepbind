@@ -1,0 +1,11 @@
+{
+  "fixture_id": "note-overlap",
+  "mocks": [
+    {
+      "tool_name": "read_note",
+      "match": {"args": {"path": "trials/cardio-trial-2024.md"}},
+      "response": "# Cardio Trial 2024 — Protocol Summary\n\n**Sponsor:** Internal R&D\n**IND number:** 154,892\n**Phase:** IIb\n**Indication:** chronic heart failure with reduced ejection fraction (HFrEF), NYHA Class II–III\n\n## Primary endpoint\n30-day all-cause hospitalization rate among adjudicated HFrEF events, measured from randomization.\n\n## Secondary endpoints\n- 90-day cardiovascular mortality\n- Change from baseline in NT-proBNP at week 12\n- Change from baseline in 6-minute walk distance at week 12\n- Patient-reported KCCQ score at weeks 4, 12, 24\n\n## Sample size\n1,840 patients, 1:1 randomization (stratified by NYHA class and prior hospitalization).\n\n## Statistical plan\nPrimary analysis: Cox proportional hazards, two-sided alpha 0.05. Hierarchical testing for secondary endpoints.\n\n## Key inclusion criteria\n- LVEF ≤ 35% within 6 months\n- NYHA Class II or III\n- Stable guideline-directed medical therapy ≥ 4 weeks\n\n## Key exclusion criteria\n- ACS within 30 days\n- eGFR < 30\n- Active malignancy"
+    }
+  ],
+  "on_unmocked_call": "fail_loudly"
+}

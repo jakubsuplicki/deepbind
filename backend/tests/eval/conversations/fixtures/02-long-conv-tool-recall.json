@@ -1,0 +1,51 @@
+{
+  "id": "long-conv-tool-recall",
+  "schema_version": 1,
+  "description": "User asks for pump specs at turn 1, triggering a read_note tool call. Mid-conversation drifts into related discussion. At turn 18 the user asks specifically for the flow rate from the original tool result. Tests whether compaction preserves tool outputs that the user might refer back to.",
+  "tags": ["tool-recall", "long-conv", "engineering"],
+  "profile": "mechanical-process-engineer",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": "02-long-conv-tool-recall.tools.json"
+  },
+  "turns": [
+    {"role": "user", "content": "I need the specs on the centrifugal pump from the Hartwell project notes — pull them up."},
+    {
+      "role": "assistant_scripted",
+      "content": "[tool_call:read_note path=hartwell/pumps.md]",
+      "expected_tool_calls": [{"name": "read_note", "args": {"path": "hartwell/pumps.md"}}]
+    },
+    {
+      "role": "tool_result",
+      "tool_name": "read_note",
+      "content": "# Hartwell Project — Pump Specifications\n\n## P-101: Main Process Pump (Centrifugal)\n- Manufacturer: Goulds 3196 STX\n- Flow rate: 240 GPM at 75 PSI discharge\n- Motor: 30 HP, 1750 RPM, TEFC\n- NPSH required: 8 ft at design point\n- Suction: 6\", Discharge: 4\"\n- Material: 316 SS casing, Ni-resist impeller\n- Seal: John Crane Type 21, EPDM\n- Installation date: 2023-08-14\n\n## P-102: Backup Pump (centrifugal, smaller)\n- Flow rate: 150 GPM at 60 PSI\n- Motor: 15 HP\n\nSee also: hartwell/p101-curve.md, hartwell/maintenance-log.md"
+    },
+    {"role": "assistant_scripted", "content": "P-101 is a Goulds 3196 STX, 240 GPM at 75 PSI, 30 HP motor, NPSH required 8 ft. 316 SS casing with a Ni-resist impeller, Type 21 seal. Installed August 2023. P-102 is the smaller backup at 150 GPM. Want me to pull the curve sheet too?"},
+    {"role": "user", "content": "Not yet. What's the rule of thumb for NPSH margin you'd want above the required value?"},
+    {"role": "assistant_scripted", "content": "Common practice: NPSH available should be at least 3 ft (or 1 m) greater than NPSH required, with 5 ft preferred for variable-suction service. API 610 specifies 1 m minimum. For this pump the NPSHr is 8 ft, so you'd want NPSHa ≥ 11 ft, ideally 13."},
+    {"role": "user", "content": "And how does that change with fluid temperature?"},
+    {"role": "assistant_scripted", "content": "NPSHa drops as temperature rises because vapor pressure increases. For water going from 20°C to 80°C, vapor pressure rises from ~0.02 bar to ~0.47 bar — that eats roughly 4–5 m of NPSH margin. Hot service designs typically need a tall suction column or a booster."},
+    {"role": "user", "content": "Got it. What about cavitation symptoms — what should the operator be listening for?"},
+    {"role": "assistant_scripted", "content": "Classic signs: gravelly noise (sounds like the pump is passing rocks), erratic discharge pressure, vibration on the suction side, and over time, pitted impeller vanes. Discharge gauge needle dancing is the early warning."},
+    {"role": "user", "content": "Right. Material question — why Ni-resist for the impeller specifically?"},
+    {"role": "assistant_scripted", "content": "Ni-resist (austenitic cast iron with 14–30% nickel) is chosen for galling resistance, thermal shock tolerance, and good corrosion resistance in mildly aggressive process fluids. Cheaper than 316 SS for the impeller mass while keeping seawater-class corrosion performance. Common in chemical process pumps."},
+    {"role": "user", "content": "Makes sense. What about the seal — Type 21 EPDM, that's a pusher seal right?"},
+    {"role": "assistant_scripted", "content": "Yes — Type 21 is a single-spring pusher mechanical seal, John Crane's workhorse design. EPDM elastomer is good for water and dilute caustic but fails fast on petroleum products. If the service ever shifts to oils, you'd reseal with Viton."},
+    {"role": "user", "content": "Useful. Different question — what's the best way to commission a centrifugal pump after a rebuild?"},
+    {"role": "assistant_scripted", "content": "Standard sequence: vent and prime, verify rotation by bumping the motor with the coupling disconnected, recouple, run uncoupled briefly to confirm seal seating, throttle the discharge valve open to ~25% to start (so motor isn't overloaded on startup), then ramp open while watching amps, suction pressure, discharge pressure, and bearing temps. Hold at design point and log baseline vibration."},
+    {"role": "user", "content": "Good checklist. One more — what's a reasonable bearing temperature limit before you'd shut it down?"},
+    {"role": "assistant_scripted", "content": "API 610 says 82°C (180°F) absolute max for rolling-element bearings, with alarm at 70–75°C. A more useful operational rule is 'ambient + 40°C' as the trip — sustained climb above that means lubrication or alignment is going."},
+    {"role": "user", "content": "OK going back to the very first pump we looked at — what was the flow rate again?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "flow_240_gpm", "match": "regex", "pattern": "240\\s*(GPM|gpm|gallons)"},
+        {"id": "pump_id", "match": "regex", "pattern": "(?i)P-101|main process|Goulds"}
+      ],
+      "must_not_contain": [
+        {"id": "no_150_gpm", "match": "regex", "pattern": "150\\s*GPM"},
+        {"id": "no_made_up_flow", "match": "regex", "pattern": "\\b(180|200|260|300)\\s*GPM"}
+      ]
+    }
+  ]
+}

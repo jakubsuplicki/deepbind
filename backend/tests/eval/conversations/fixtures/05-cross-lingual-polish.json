@@ -1,0 +1,34 @@
+{
+  "id": "cross-lingual-polish",
+  "schema_version": 1,
+  "description": "Conversation conducted entirely in Polish about an appeal deadline. The user states the judgment date at turn 1 and asks for it at turn 11. Tests whether compaction preserves cross-lingual context — a stated weakness of many open-weight models, including Qwen3 prior to the 2026 multilingual updates.",
+  "tags": ["cross-lingual", "polish", "date-recall"],
+  "profile": "litigation-criminal-defense",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Pracuję nad sprawą cywilną. Wyrok zapadł 14 marca 2024 roku, sąd okręgowy w Krakowie, sygnatura I C 1247/23. Klient otrzymał odpis wyroku z uzasadnieniem 28 marca. Chcę sprawdzić, czy termin apelacji jeszcze nie minął."},
+    {"role": "assistant_scripted", "content": "Termin apelacji w postępowaniu cywilnym to dwa tygodnie od doręczenia odpisu wyroku z uzasadnieniem (art. 369 § 1 KPC). Jeśli odpis doręczono 28 marca 2024, termin apelacji upływał 11 kwietnia 2024 — zakładając brak wniosku o przywrócenie terminu i brak wniosku o sporządzenie uzasadnienia, który wpłynąłby na bieg terminu. Czy klient wniósł wcześniej o sporządzenie uzasadnienia?"},
+    {"role": "user", "content": "Tak, wniosek o sporządzenie uzasadnienia został złożony 22 marca, w terminie tygodniowym od ogłoszenia wyroku."},
+    {"role": "assistant_scripted", "content": "Dobrze — wtedy termin apelacji biegnie od dnia doręczenia odpisu wyroku z uzasadnieniem, czyli od 28 marca, i wynosi dwa tygodnie. To daje 11 kwietnia 2024 jako ostatni dzień. Czy mamy już dzisiaj po tej dacie?"},
+    {"role": "user", "content": "Mamy 27 kwietnia 2026. Dwa lata po terminie. Klient teraz mówi, że nigdy nie chciał się odwoływać i pyta o coś innego — możliwość skargi nadzwyczajnej."},
+    {"role": "assistant_scripted", "content": "Skarga nadzwyczajna to środek wyjątkowy — wnoszona przez Prokuratora Generalnego lub Rzecznika Praw Obywatelskich (art. 89 ust. 2 ustawy o SN), nie bezpośrednio przez stronę. Termin to pięć lat od uprawomocnienia się orzeczenia, a w przypadku spraw karnych rok od momentu, gdy strona dowiedziała się o przesłankach. Dla sprawy cywilnej z 2024 roku termin nadal otwarty. Ale kryteria są wąskie — wymaga rażącego naruszenia prawa lub oczywistej sprzeczności z zasadami sprawiedliwości."},
+    {"role": "user", "content": "Rozumiem. Klient uważa, że sąd pominął kluczowy dowód — biegły nie został wezwany mimo wniosku."},
+    {"role": "assistant_scripted", "content": "Nieprzeprowadzenie dowodu z opinii biegłego mimo prawidłowo zgłoszonego wniosku może stanowić naruszenie art. 227 KPC (prawo strony do dowodu) i art. 233 § 1 (swobodna ocena dowodów). Czy w protokole rozprawy jest udokumentowane oddalenie wniosku przez sąd, i jeśli tak — z jakim uzasadnieniem?"},
+    {"role": "user", "content": "Sąd oddalił wniosek jako 'nieistotny dla rozstrzygnięcia sprawy', bez głębszego uzasadnienia. To było na rozprawie 19 lutego 2024."},
+    {"role": "assistant_scripted", "content": "Lakoniczne 'nieistotny dla rozstrzygnięcia' bez merytorycznego uzasadnienia to klasyczny argument apelacyjny — ale apelacji już nie ma. Dla skargi nadzwyczajnej trzeba pokazać, że dowód miałby istotne znaczenie dla wyniku. Do tego musimy wracać do akt sprawy. Czy mamy uzasadnienie wyroku?"},
+    {"role": "user", "content": "Tak, mam je. Ale zanim wejdziemy głębiej — przypomnij mi proszę, kiedy zapadł wyrok, o którym mówimy?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "judgment_date", "match": "regex", "pattern": "(?i)(14\\s*marca\\s*2024|14\\.0?3\\.2024|2024-03-14)"}
+      ],
+      "must_not_contain": [
+        {"id": "no_other_dates", "match": "regex", "pattern": "(?i)(28\\s*marca|22\\s*marca|11\\s*kwietnia|19\\s*lutego)"},
+        {"id": "no_made_up_year", "match": "regex", "pattern": "20(20|21|22|23|25|26)"}
+      ]
+    }
+  ]
+}

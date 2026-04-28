@@ -1,0 +1,42 @@
+{
+  "id": "session-boundary-ambiguity",
+  "schema_version": 1,
+  "description": "Long technical discussion of a chemical-plant explosion cause analysis. Multiple specific findings established across turns 1–11. A short unrelated detour at turns 12–13 places the test point right at the typical compaction trigger boundary. Turn 14 explicitly asks the assistant to recall the primary cause finding using a vague pronoun referent ('what we discussed'). Tests behavior at the compaction boundary itself.",
+  "tags": ["compaction-boundary", "long-conv", "expert-witness", "vague-reference"],
+  "profile": "expert-witness",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "I'm preparing as expert witness on the Lakefront Chemical incident — the December 2023 explosion at the polymer-resin plant. Three fatalities, two serious injuries. Plaintiffs allege operator error; defense is contributing me on root cause. Let's start with the timeline."},
+    {"role": "assistant_scripted", "content": "Tell me what you have on the sequence: pre-event conditions, the cascade, and immediate failures. I'll flag where causal-chain gaps usually open up in this kind of case."},
+    {"role": "user", "content": "Pre-event: reactor R-301 was running a styrene polymerization at 130 °C, normal recipe. Cooling water through the jacket was at design rate. Operator reported a 'sluggish' temperature response on the trend display starting about 03:40, called the shift super at 03:52, runaway began visibly at 04:11, vent panel actuated at 04:18, deflagration at 04:21."},
+    {"role": "assistant_scripted", "content": "The 31-minute interval between the first observed sluggish temperature response and the deflagration is the central interpretive window. Three things to nail down: (1) what was the cooling-water tower's status during that window, (2) what did the operator do between 03:40 and 03:52, and (3) was the vent panel sized for the styrene runaway energy at that fill level. Cooling first — what does the cooling-tower data show?"},
+    {"role": "user", "content": "Cooling tower P-405 had a service-water booster pump that seized at approximately 03:35 — five minutes before the operator first noticed. Maintenance log shows the pump had been on a known watch-list with rising vibration since November. No work order issued. After the seizure, jacket flow dropped by approximately 70%."},
+    {"role": "assistant_scripted", "content": "That's load-bearing. The 03:35 pump seizure precedes the operator's first observation by five minutes, and the 70% jacket-flow loss is more than enough to flip styrene polymerization from controlled to runaway under normal exotherm. Watch-list with known rising vibration plus no work order is a maintenance-system finding that goes deeper than operator response. What's the vibration-monitoring policy at the plant?"},
+    {"role": "user", "content": "Monthly walkdowns by reliability tech. Vibration data was being trended in a CMMS but the threshold for auto-work-order generation had been disabled in May 2023 'temporarily' — never re-enabled. Eight pumps were on the watch-list as of December."},
+    {"role": "assistant_scripted", "content": "Eight pumps watch-listed under a disabled auto-work-order threshold for seven months — that establishes systemic maintenance-program failure independent of the specific operator. If the threshold had been live, P-405 generates a work order in November and the pump is replaced or rebuilt before December. The cause analysis can place the root-cause finding upstream of the operator entirely. What about the operator's response in the 03:40–03:52 window?"},
+    {"role": "user", "content": "Operator was alone on shift. Standard practice was two operators on this unit; the second-shift operator had called in sick at 21:00. Plant filled the slot through the day but at 23:00 the relief operator was reassigned to a different unit due to a separate issue. Lone-operator condition was not flagged to ops management. The operator who was there had 4 years experience but had never seen a runaway condition before."},
+    {"role": "assistant_scripted", "content": "Lone-operator condition and a first-time runaway in the same shift is a second systemic failure layer: staffing process. Plant procedure presumably requires manning level X, the staffing process tolerated a sustained drop to X-1 across two shift handovers without ops-management visibility. Combined with the maintenance finding, you've got two upstream system failures sitting under what plaintiffs are framing as operator error. What was the operator's actual response between 03:40 and 03:52?"},
+    {"role": "user", "content": "He spent the first six minutes checking the temperature controller's setpoint and tuning, suspecting an instrument issue. Then he opened the bypass to see if jacket flow was actually flowing — found it sluggish. Tried to call the shift super; first attempt went to voicemail. Got through on the second attempt at 03:52. By 04:00 he was reading the procedure for runaway intervention, which he had never used."},
+    {"role": "assistant_scripted", "content": "That sequence — instrument-troubleshooting first, then physical verification, then escalation, then procedure consultation — is recognizably standard for someone who has not seen this exact failure before. It is not the same as inattention or negligence. The expert opinion can frame it as an operator response that is consistent with training but inadequate against an unfamiliar runaway, with the inadequacy attributable to training and staffing rather than the operator's exercise of judgment. Have you reviewed the runaway-intervention training records?"},
+    {"role": "user", "content": "Annual classroom training, last completed October 2023. No simulator hands-on. The runaway procedure had been revised in 2022 but the operator's record showed the old version's training, not the revised version's training."},
+    {"role": "assistant_scripted", "content": "Three findings now stack: P-405 maintenance / disabled auto-work-orders, lone-operator staffing failure, training-record gap on the revised procedure. Plaintiffs' 'operator error' theory has to thread through all three to land on the operator. The defense expert opinion writes itself: the operator's response was within his trained competency for a non-runaway condition, and the conditions that placed him in front of an unfamiliar runaway were the result of upstream system failures predating his shift. Do you want to outline the report structure now or push to it?"},
+    {"role": "user", "content": "Hold on, quick formatting question — what's the standard citation format for an expert report's exhibit list, ASTM or just sequential A/B/C?"},
+    {"role": "assistant_scripted", "content": "Sequential A/B/C is the dominant convention for litigation expert reports — federal courts assume it and most state courts follow. ASTM-style numbering (E1188 etc.) is for laboratory testing protocols, not exhibit identifiers. Use 'Ex. A: Photographs of R-301 post-incident', 'Ex. B: Cooling-tower P-405 maintenance log', and so on, in the order they're first referenced in the narrative."},
+    {"role": "user", "content": "OK back to it — going back to what we discussed about the cause analysis, what was the primary upstream finding? Want to make sure I have the framing locked before I start drafting."},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "pump_seizure", "match": "regex", "pattern": "(?i)(pump\\s+seizure|P-405|cooling[-\\s](water|tower).*pump|booster\\s+pump)"},
+        {"id": "cooling_loss", "match": "regex", "pattern": "(?i)(cooling[-\\s]water\\s+loss|jacket\\s+flow|70%)"},
+        {"id": "system_failure_framing", "match": "regex", "pattern": "(?i)(maintenance\\s+(program|system|policy)|disabled\\s+(auto[-\\s])?work[-\\s]order|watch[-\\s]list)"}
+      ],
+      "must_not_contain": [
+        {"id": "no_operator_as_primary", "match": "regex", "pattern": "(?i)(primary[\\s\\S]{0,40}(operator\\s+error|operator\\s+inattention|operator\\s+negligence))"},
+        {"id": "no_invented_cause", "match": "regex", "pattern": "(?i)(static\\s+discharge|electrical\\s+spark|lightning|external\\s+ignition)"}
+      ]
+    }
+  ]
+}

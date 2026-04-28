@@ -1,0 +1,50 @@
+{
+  "id": "code-domain-debugging",
+  "schema_version": 1,
+  "description": "Developer profile. User reads a Python file via tool call early on, discusses architecture for many turns, then asks for the exact name of a function defined at a specific line in the file. Tests whether compaction preserves code-content from a tool result (including specific identifiers) under heavy intervening discussion. A failure mode is the model fabricating a plausible but wrong function name from memory of the discussion.",
+  "tags": ["code-domain", "tool-recall", "identifier-fidelity", "developer"],
+  "profile": "developer-devops",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": "13-code-domain-debugging.tools.json"
+  },
+  "turns": [
+    {"role": "user", "content": "Read backend/services/billing/invoice_processor.py for me — I think the bug is somewhere in the line-item totaling logic."},
+    {
+      "role": "assistant_scripted",
+      "content": "[tool_call:read_note path=backend/services/billing/invoice_processor.py]",
+      "expected_tool_calls": [{"name": "read_note", "args": {"path": "backend/services/billing/invoice_processor.py"}}]
+    },
+    {
+      "role": "tool_result",
+      "tool_name": "read_note",
+      "content": "# backend/services/billing/invoice_processor.py\n\nfrom decimal import Decimal\nfrom typing import Iterable\n\nfrom services.billing.models import LineItem, Invoice\n\n\ndef _compute_line_subtotal(item: LineItem) -> Decimal:\n    return item.unit_price * item.quantity\n\n\ndef _apply_line_discount(item: LineItem, subtotal: Decimal) -> Decimal:\n    if item.discount_pct is None:\n        return subtotal\n    return subtotal * (Decimal(1) - item.discount_pct / Decimal(100))\n\n\ndef compute_invoice_total(items: Iterable[LineItem]) -> Decimal:\n    total = Decimal(0)\n    for item in items:\n        sub = _compute_line_subtotal(item)\n        total += _apply_line_discount(item, sub)\n    return total\n\n\ndef finalize_invoice(invoice: Invoice) -> Invoice:\n    invoice.total = compute_invoice_total(invoice.items)\n    invoice.status = 'finalized'\n    return invoice\n\n\ndef rollback_to_draft(invoice: Invoice) -> Invoice:\n    invoice.status = 'draft'\n    invoice.total = Decimal(0)\n    return invoice\n"
+    },
+    {"role": "assistant_scripted", "content": "Read it. The line-item math looks straightforward — `compute_invoice_total` walks items, computes a subtotal via `_compute_line_subtotal`, then applies a per-line discount via `_apply_line_discount`. Where is the actual symptom showing up?"},
+    {"role": "user", "content": "Customer reports total is $0 even though line items are present. They're seeing it on invoices that are marked 'draft'."},
+    {"role": "assistant_scripted", "content": "If the report is on draft invoices specifically, look at `rollback_to_draft`: it sets `invoice.total = Decimal(0)` unconditionally as part of moving to draft state. If something else in the workflow re-triggers `rollback_to_draft` after the items are added, you'd see total=0 on a draft invoice that visually has line items. Is there a code path where draft invoices get touched post-creation?"},
+    {"role": "user", "content": "Yes — autosave on the form runs through a generic update endpoint. Let me check whether that endpoint calls rollback."},
+    {"role": "assistant_scripted", "content": "Worth checking. Also check whether `finalize_invoice` is gated on something that might silently fail and leave the invoice in draft with total still cleared from a previous rollback."},
+    {"role": "user", "content": "Right. OK while I check, talk me through the discount math — what happens when discount_pct is exactly 0 vs None?"},
+    {"role": "assistant_scripted", "content": "If `discount_pct` is None, `_apply_line_discount` short-circuits and returns the subtotal unchanged. If it's 0, the function multiplies by `Decimal(1) - Decimal(0) / Decimal(100)` which is `Decimal(1)` — same result. Both cases produce the subtotal unchanged. Functionally equivalent, but the early return on None saves the multiplication."},
+    {"role": "user", "content": "Good. What about negative discount_pct?"},
+    {"role": "assistant_scripted", "content": "Currently nothing guards against it — a negative discount_pct would *increase* the subtotal (multiplying by something > 1). That's a separate bug. Worth adding a `if not 0 <= item.discount_pct <= 100: raise ValueError(...)` either at the model layer or at the start of the function."},
+    {"role": "user", "content": "Will add. What about discount_pct of exactly 100?"},
+    {"role": "assistant_scripted", "content": "Returns Decimal(0) — line item is fully discounted, subtotal is zero, total contribution is zero. Behaviorally correct, but typically you'd want a guard or product rule that disallows 100% discounts unless the user has explicit override authority — depends on your product invariants."},
+    {"role": "user", "content": "Yeah we have a separate authorization for that. OK confirmed — the autosave endpoint is calling rollback_to_draft unconditionally. The fix is to make rollback only zero out the total if status was previously 'finalized'."},
+    {"role": "assistant_scripted", "content": "That's a clean conditional fix. Make sure to add a regression test that exercises the autosave-on-draft path specifically; otherwise next refactor reintroduces the bug."},
+    {"role": "user", "content": "Will do. Quick stylistic question — any reason `_apply_line_discount` is named with the leading underscore instead of being public?"},
+    {"role": "assistant_scripted", "content": "Standard Python convention — leading underscore signals 'internal to the module, not part of the public API.' If you want callers in other modules to use it, drop the underscore. If it's only used by `compute_invoice_total`, keep it private."},
+    {"role": "user", "content": "It's only used internally. Keep it. OK going back to the file — what was the exact name of the function that finalizes an invoice (not the totaling helper, the one that wraps everything and sets the status)?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "function_name_finalize", "match": "regex", "pattern": "(?i)\\bfinalize_invoice\\b"}
+      ],
+      "must_not_contain": [
+        {"id": "no_made_up_finalizer", "match": "regex", "pattern": "(?i)\\b(finalize_invoice_total|finalise_invoice|complete_invoice|invoice_finalize|finalizeInvoice)\\b"},
+        {"id": "no_wrong_function_as_answer", "match": "regex", "pattern": "(?i)(?:function|name)[^.]{0,30}\\b(rollback_to_draft|compute_invoice_total|_compute_line_subtotal)\\b"}
+      ]
+    }
+  ]
+}

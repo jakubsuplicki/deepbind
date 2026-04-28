@@ -1,0 +1,62 @@
+{
+  "id": "deep-decision-recall",
+  "schema_version": 1,
+  "description": "User states a tech-stack decision (chose PostgreSQL over MongoDB, with reason) at turn 0; 17 user turns of unrelated chat follow; final question asks the assistant to recall both the choice and the rejected alternative. Fails under naive-truncate-16 because the deciding turn is dropped and the assistant has nothing to anchor on except generic priors.",
+  "tags": ["depth-pressure", "decision-recall", "long-conv"],
+  "profile": "engineering",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Quick context I'll keep coming back to: for the new analytics service I'm building, I've decided to go with PostgreSQL instead of MongoDB. Reason was JSONB plus relational integrity in one engine — didn't want to give up either. Filing this so we don't relitigate. Lots of other stuff to ask first."},
+    {"role": "assistant_scripted", "content": "Logged — analytics service, PostgreSQL chosen over MongoDB, rationale: JSONB + relational integrity. What's first?"},
+    {"role": "user", "content": "Bread — a no-knead recipe that actually works first time?"},
+    {"role": "assistant_scripted", "content": "Jim Lahey's no-knead, the classic. 400g flour, 320g water, 8g salt, 1g yeast. Mix, 18 hours rest, fold, 2 hours proof, hot Dutch oven. The only reliable variable is the long first rest."},
+    {"role": "user", "content": "Will try Lahey. Movie — three good comfort rewatches?"},
+    {"role": "assistant_scripted", "content": "*Princess Mononoke*, *Lost in Translation*, and *The Royal Tenenbaums*. All hold up across many rewatches without becoming wallpaper."},
+    {"role": "user", "content": "Tenenbaums always. Coffee — the right grind size for AeroPress, inverted method?"},
+    {"role": "assistant_scripted", "content": "Medium-fine, slightly finer than table salt. If extraction is sour, go finer; if bitter, go coarser. Inverted method tolerates more grind variance than upright."},
+    {"role": "user", "content": "Useful. Health — best stretch for tight hip flexors after a day of sitting?"},
+    {"role": "assistant_scripted", "content": "Couch stretch (rear foot up on a couch, front knee 90°, hips squared). 90 seconds each side, daily. The 'feels evil' versions are the ones working."},
+    {"role": "user", "content": "Will do. Plant — what's a good outdoor planter that won't rot in winter?"},
+    {"role": "assistant_scripted", "content": "Glazed terracotta or fibre-clay. Avoid plain unglazed terracotta (cracks in frost) and avoid plastic if it'll be UV-exposed long term."},
+    {"role": "user", "content": "Glazed it is. Reading — what's the strongest argument *against* universal basic income?"},
+    {"role": "assistant_scripted", "content": "The substitution argument: UBI substitutes broadly-distributed cash for targeted in-kind support (housing, healthcare). For people in deep need, the targeted version is more efficient per pound. The case is sharpest where housing markets are tight: cash gets bid into rents."},
+    {"role": "user", "content": "Useful framing. Fashion — recommend a single belt that lasts a decade?"},
+    {"role": "assistant_scripted", "content": "An Anson Calder full-grain or a Saddleback leather. £80–£200 range, both age into character rather than degradation."},
+    {"role": "user", "content": "Anson Calder noted. Travel — three days in Tokyo, never been, what would you prioritise?"},
+    {"role": "assistant_scripted", "content": "Day 1: Yanaka + Asakusa for old Tokyo. Day 2: Shimokitazawa + Shibuya for vintage and modern. Day 3: Tsukiji outer market morning + a teamLab installation evening. Don't bother with Mt Fuji unless you have day 4."},
+    {"role": "user", "content": "Tokyo soon. Sleep — earlier-and-lighter dinner vs later-and-richer for sleep quality?"},
+    {"role": "assistant_scripted", "content": "Earlier and lighter, by a wide margin. Late-and-rich raises core temperature during sleep onset, fragments the first sleep cycle, and pushes REM later. Three hours before bed is the conservative cutoff; four for heavy meals."},
+    {"role": "user", "content": "Three hours, fair. Music — a useful classical entry point for someone who only knows pop?"},
+    {"role": "assistant_scripted", "content": "Try Schubert's piano trios, Bach's *Goldberg Variations* (the 1981 Gould recording), and Górecki's Symphony No. 3. Three different doors into the genre — pick the one that hits."},
+    {"role": "user", "content": "Górecki sounds new. Office — best way to manage too many open browser tabs?"},
+    {"role": "assistant_scripted", "content": "Three rules: workspace per project (Arc browser handles this best), close anything older than 48 hours unread, and dump research links to a single read-it-later app instead of leaving them open. The last one is the load-bearing rule."},
+    {"role": "user", "content": "Arc, will try. Fitness — minimum effective squat rack setup for a small flat?"},
+    {"role": "assistant_scripted", "content": "Wall-mount foldable rack (Rogue RML-3W or PRx) plus a 20kg bar plus 100kg of plates. Footprint is essentially a doormat when folded. Anything cheaper risks safety; anything more is gym territory."},
+    {"role": "user", "content": "Foldable rack, noted. Garden — soil mix for tomatoes in containers?"},
+    {"role": "assistant_scripted", "content": "Two parts compost, one part topsoil, one part perlite, plus a slow-release tomato feed at planting. Water deeply less often, never lightly often."},
+    {"role": "user", "content": "Got it. Quick one — best app for tracking books read?"},
+    {"role": "assistant_scripted", "content": "Storygraph if you want stats and recommendations beyond Goodreads's tired interface. Hardcover.app is rising. Both let you import a Goodreads CSV."},
+    {"role": "user", "content": "Storygraph, will switch. Last small one — a single book on negotiation worth reading?"},
+    {"role": "assistant_scripted", "content": "*Never Split the Difference* by Voss is the popular pick; *Getting to Yes* (Fisher & Ury) is the classic. They cover overlapping ground; Voss is more usable on the spot, Fisher is more usable in long negotiations."},
+    {"role": "user", "content": "Voss, noted. Tea — how long should green tea actually steep?"},
+    {"role": "assistant_scripted", "content": "60–90 seconds for sencha-style at 70–80°C. Boiling water plus 3 minutes is what makes green tea taste astringent; the steeping time matters less than the temperature."},
+    {"role": "user", "content": "70–80°C, will measure. Quick one — the difference between a stout and a porter?"},
+    {"role": "assistant_scripted", "content": "Historically the same drink at different strengths; modern usage has drifted so porters are typically lighter and chocolate-noted while stouts lean towards roasted and full-bodied. Plenty of overlap; no firm rule any brewer is bound by."},
+    {"role": "user", "content": "OK back to actual work. For the analytics service decision I mentioned at the very start — what database did I go with, and what did I rule out and why?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "chose_postgres", "match": "regex", "pattern": "(?i)PostgreSQL|postgres"},
+        {"id": "rejected_mongo", "match": "regex", "pattern": "(?i)MongoDB|mongo"},
+        {"id": "reason_jsonb_or_relational", "match": "regex", "pattern": "(?i)(JSONB|relational\\s+integrity)"}
+      ],
+      "must_not_contain": [
+        {"id": "no_alt_db", "match": "regex", "pattern": "(?i)\\b(MySQL|SQLite|Cassandra|DynamoDB|CockroachDB|Redis|Snowflake)\\b"},
+        {"id": "no_inverted_choice", "match": "regex", "pattern": "(?i)chose\\s+MongoDB|went\\s+with\\s+MongoDB|picked\\s+MongoDB"}
+      ]
+    }
+  ]
+}

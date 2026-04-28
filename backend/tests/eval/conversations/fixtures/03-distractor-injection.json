@@ -1,0 +1,36 @@
+{
+  "id": "distractor-injection",
+  "schema_version": 1,
+  "description": "User introduces two patents with similar names and different priority dates. Most of the conversation focuses on the second (coating) patent. Late turn asks for the priority date of the first (bearing) patent. Tests confabulation rate when retrieval might surface the wrong-but-similar earlier turn.",
+  "tags": ["distractor", "confabulation", "patent-prosecutor"],
+  "profile": "patent-prosecutor",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "I've got two related patent applications on my desk today. Application A is about low-friction roller bearings — priority date March 12, 2024, application number 18/612,447. Application B is about low-friction surface coatings — priority date August 8, 2024, application number 18/789,201. Help me track them."},
+    {"role": "assistant_scripted", "content": "Tracked. A: low-friction roller bearings, priority 2024-03-12, 18/612,447. B: low-friction surface coatings, priority 2024-08-08, 18/789,201. Which one are you starting with?"},
+    {"role": "user", "content": "Start with the coating one. Examiner just sent a 102 rejection citing Tanaka 2019."},
+    {"role": "assistant_scripted", "content": "What claims did the examiner map to Tanaka, and which independent claims of the coating application are you trying to preserve?"},
+    {"role": "user", "content": "Independent claims 1 and 14. Tanaka discloses a fluoropolymer coating with similar surface energy values, but the examiner is citing the surface texture, not the chemistry."},
+    {"role": "assistant_scripted", "content": "If Tanaka's anticipation theory rests on texture rather than composition, you've got two angles: (1) argue Tanaka does not inherently disclose the specific surface roughness Ra range claimed, and (2) amend to bring the chemistry-specific limitation that Tanaka lacks into the independent. The second is safer if Tanaka has any plausible texture overlap."},
+    {"role": "user", "content": "We have data showing Ra below 0.05 µm gives the friction reduction, and Tanaka only reports 0.2 µm. So I want to argue that the texture range is critical."},
+    {"role": "assistant_scripted", "content": "That's a clean criticality argument. Cite the data with a Rule 132 declaration if it's not already in the spec. Make sure the declaration ties the unexpected results specifically to the claimed Ra range, not to the broader composition."},
+    {"role": "user", "content": "Already drafted a 132 from our materials scientist. What's a strong response strategy on the obviousness combo with Schmidt 2021?"},
+    {"role": "assistant_scripted", "content": "Schmidt 2021 is the secondary reference? If yes, the standard play is teaching-away or no-motivation-to-combine. If Schmidt is in a different field of use (e.g., medical coatings vs. industrial bearings), MPEP 2141.01(a) gives you analogousness arguments. What's Schmidt's field?"},
+    {"role": "user", "content": "Schmidt is medical — orthopedic implant coatings. Different problem, different chemistry."},
+    {"role": "assistant_scripted", "content": "Good — that's a strong non-analogous-art argument. Frame the problem as industrial wear reduction at high-cycle loading, which is far from biocompatibility-driven medical surfaces. Combine with Tanaka's texture-only disclosure and you've got a layered response."},
+    {"role": "user", "content": "Right. OK quick pivot — what's the priority date on the bearing patent again?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "bearing_priority_date", "match": "regex", "pattern": "(?i)(March\\s+12,?\\s*2024|2024-03-12|3/12/2024|March\\s+12th)"}
+      ],
+      "must_not_contain": [
+        {"id": "no_coating_date", "match": "regex", "pattern": "(?i)August\\s+8|2024-08-08|8/8/2024"},
+        {"id": "no_made_up_date", "match": "regex", "pattern": "(?i)(January|February|April|May|June|July|September|October|November|December)\\s+\\d{1,2},?\\s*2024"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "rapid-context-refill",
+  "schema_version": 1,
+  "description": "User pastes a ~500-word deposition excerpt at turn 1 — a single large content chunk that compaction strategies will be tempted to drop or summarize. Late turn asks for specific facts from the excerpt. Tests whether compaction preserves user-pasted content, which is high-value-per-token but easy to lose to naive truncation.",
+  "tags": ["pasted-content", "fact-recall", "litigation"],
+  "profile": "litigation-criminal-defense",
+  "preconditions": {
+    "workspace_fixture": "reference_workspace",
+    "tool_mocks": null
+  },
+  "turns": [
+    {"role": "user", "content": "Pasted excerpt from the Henderson deposition (defense witness #2):\n\nQ: Mr. Henderson, what time did you arrive at the parking lot of the Riverside Tavern on the night of October 18, 2023?\nA: It was 10:47 PM. I remember because I checked my phone after I parked, before I got out.\n\nQ: And the lighting in the lot at that time?\nA: There was one street lamp working — the one closest to the entrance, on the south side. The other three at the back were out. The whole back third of the lot was dark.\n\nQ: How far were you from where you say you saw Mr. Carver?\nA: Maybe thirty, thirty-five feet. He was near the back, not under any working light.\n\nQ: You testified earlier that you wear corrective lenses. Were you wearing them?\nA: I had my glasses on, yes. I'd just driven there.\n\nQ: When did you first see Mr. Carver?\nA: I'd say within a minute of getting out of my car. I was walking toward the entrance and I saw two figures near the back. One of them I recognized as him — by his jacket and his build, not his face. I couldn't see his face clearly from that distance in the dark.\n\nQ: You couldn't see his face?\nA: Not clearly, no.\n\nQ: But you're confident in your identification?\nA: I'm confident it was him. The jacket, the way he stood.\n\nQ: When did you next see him after that?\nA: He came toward the entrance maybe two minutes later. Walked past me about ten feet away. That's when I saw his face — it was him, no question.\n\nLet's work through this for cross-exam strategy."},
+    {"role": "assistant_scripted", "content": "Strong cross material. The witness's ID has two distinct phases: distance/dark/build-only at first sighting, then close-range/face at second sighting. Best lines of attack: (1) anchor on his own admission he couldn't see the face from 30–35 feet in darkness; (2) probe whether the jacket and 'build' are individuating enough to support more than weak group ID; (3) test the time gap and whether anything changed between first and second sighting. Want me to draft a cross outline?"},
+    {"role": "user", "content": "Yes, but first — what's the strongest single phrase from the deposition for impeachment?"},
+    {"role": "assistant_scripted", "content": "\"I couldn't see his face clearly from that distance in the dark.\" That's the witness's own admission of identification limits at the first sighting, in his own words, with no qualification. Lock him to it before he tries to soften."},
+    {"role": "user", "content": "Right. What about the lighting — three of four lamps out, that's helpful context?"},
+    {"role": "assistant_scripted", "content": "Very helpful. Three out of four working lamps means roughly 25% of designed illumination, concentrated near the entrance. The witness placed Carver 'near the back, not under any working light' — that's two compounding visibility limits stacked: distance and unlit zone. Combined with the witness's own 'in the dark' phrasing, you've got a tight package."},
+    {"role": "user", "content": "Good. Will the jury connect those dots without me spelling it out?"},
+    {"role": "assistant_scripted", "content": "Some will, some won't. The safer move on cross is to lay each fact one at a time without arguing it: 'three lamps out, correct?' — 'thirty-five feet, correct?' — 'no working light over Mr. Carver, correct?' — 'in your own words, the back third was dark, correct?' Then save the synthesis for closing. Trying to argue inside cross telegraphs the move and gives the witness room to qualify."},
+    {"role": "user", "content": "Agreed. Going back to the deposition itself for a second — what time did the witness say he arrived at the parking lot?"},
+    {
+      "role": "assistant_target",
+      "expected_facts": [
+        {"id": "arrival_time", "match": "regex", "pattern": "10:47\\s*(PM|p\\.?m\\.?)?"}
+      ],
+      "must_not_contain": [
+        {"id": "no_other_times", "match": "regex", "pattern": "\\b(10:[0-3]\\d|10:[5-9]\\d|11:\\d\\d|9:\\d\\d)\\s*PM"},
+        {"id": "no_round_time", "match": "regex", "pattern": "(?i)around\\s+1[01]\\s*(PM|p\\.?m\\.?|o'clock)"}
+      ]
+    }
+  ]
+}
