@@ -1,11 +1,11 @@
 ---
 title: Project Overview
-last_reviewed: 2026-04-14
+last_reviewed: 2026-04-28
 ---
 
 ## What this project is
 
-Jarvis is a voice-first personal memory, planning, and knowledge system. It provides a browser-based interface to a local Markdown knowledge base, powered by Claude API for conversational retrieval and planning. All user data stays on disk as Markdown files — SQLite and graph layers are derived indexes that can be rebuilt from scratch.
+Jarvis is a local-first personal memory, planning, and knowledge system. It provides a browser-based interface to a local Markdown knowledge base, powered by Claude API for conversational retrieval and planning. All user data stays on disk as Markdown files — SQLite and graph layers are derived indexes that can be rebuilt from scratch.
 
 ## Architecture
 
