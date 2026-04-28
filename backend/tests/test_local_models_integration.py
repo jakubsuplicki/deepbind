@@ -9,27 +9,27 @@ import pytest
 
 
 class TestToolMode:
-    def test_tool_mode_native(self):
+    def test_tool_mode_native_qwen3(self):
         from services.ollama_service import get_model_by_id, _tool_mode_for
 
         model = get_model_by_id("qwen3-8b")
         assert model.native_tools is True
-        assert _tool_mode_for(model) == "native"
+        assert _tool_mode_for(model) == "native_qwen3"
 
-    def test_tool_mode_json_fallback(self):
+    def test_tool_mode_adapted(self):
         from services.ollama_service import get_model_by_id, _tool_mode_for
 
         model = get_model_by_id("qwen3-4b")
         assert model.native_tools is False
-        assert _tool_mode_for(model) == "json_fallback"
+        assert _tool_mode_for(model) == "adapted"
 
-    def test_tool_mode_limited(self):
+    def test_tool_mode_excluded_from_tools(self):
         from services.ollama_service import get_model_by_id, _tool_mode_for
 
         model = get_model_by_id("qwen3-1.7b")
         assert model.native_tools is False
-        # download_size < 2 GB → limited
-        assert _tool_mode_for(model) == "limited"
+        # download_size < 2 GB → excluded_from_tools
+        assert _tool_mode_for(model) == "excluded_from_tools"
 
     def test_recommendation_includes_tool_mode(self):
         from services.ollama_service import score_model, get_model_by_id, HardwareProfile
@@ -40,9 +40,9 @@ class TestToolMode:
         )
         model = get_model_by_id("qwen3-8b")
         rec = score_model(model, hw, [])
-        assert rec.tool_mode == "native"
+        assert rec.tool_mode == "native_qwen3"
 
-    def test_recommendation_tool_mode_fallback(self):
+    def test_recommendation_tool_mode_adapted(self):
         from services.ollama_service import score_model, get_model_by_id, HardwareProfile
 
         hw = HardwareProfile(
@@ -51,7 +51,7 @@ class TestToolMode:
         )
         model = get_model_by_id("ministral-3-8b")
         rec = score_model(model, hw, [])
-        assert rec.tool_mode == "json_fallback"
+        assert rec.tool_mode == "adapted"
 
 
 # ── Timeout Configuration ───────────────────────────────────────────────────
@@ -152,7 +152,7 @@ class TestTestEndpoint:
             assert result.success is True
             assert "Hello" in result.response_text
             assert result.tokens_per_second == 10.0
-            assert result.tool_mode == "native"  # qwen3:8b has native tools
+            assert result.tool_mode == "native_qwen3"  # qwen3:8b has native tools
 
     @pytest.mark.anyio
     async def test_test_model_ollama_not_running(self):
@@ -172,7 +172,7 @@ class TestTestEndpoint:
 
     @pytest.mark.anyio
     async def test_test_model_returns_tool_mode_for_unknown(self):
-        """Unknown models should get json_fallback."""
+        """Unknown models should get 'adapted'."""
         from services.ollama_service import test_model
 
         mock_resp = MagicMock()
@@ -192,7 +192,7 @@ class TestTestEndpoint:
 
             result = await test_model("some-unknown-model:latest")
             assert result.success is True
-            assert result.tool_mode == "json_fallback"
+            assert result.tool_mode == "adapted"
 
 
 # ── Catalog has tool_mode ────────────────────────────────────────────────────
@@ -212,5 +212,5 @@ class TestCatalogToolMode:
             catalog = await build_catalog(hw)
 
         for rec in catalog:
-            assert rec.tool_mode in ("native", "json_fallback", "limited"), \
+            assert rec.tool_mode in ("native_qwen3", "adapted", "excluded_from_tools"), \
                 f"{rec.model_id} has unexpected tool_mode: {rec.tool_mode}"

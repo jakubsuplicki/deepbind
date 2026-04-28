@@ -15,6 +15,7 @@ import platform
 import shutil
 import subprocess
 import ipaddress
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
@@ -112,12 +113,12 @@ class RuntimeStatus(BaseModel):
 
 class ModelCatalogEntry(BaseModel):
     id: str
-    preset: str  # "fast" | "everyday" | "balanced" | "long-docs" | "reasoning" | "code" | "best-local"
+    preset: str  # "fast" | "everyday" | "balanced" | "long-docs" | "reasoning" | "code" | "best-local" | "plumbing"
     ollama_model: str  # e.g. "qwen3:8b"
     litellm_model: str  # e.g. "ollama_chat/qwen3:8b"
     label: str
     download_size_gb: float
-    context_window: str  # e.g. "40K"
+    context_window: str  # native context (e.g. "32K"). RoPE/YaRN-extended ranges are listed in strengths, not here.
     context_tokens: int
     recommended_ram_min_gb: int
     recommended_ram_max_gb: int
@@ -127,6 +128,7 @@ class ModelCatalogEntry(BaseModel):
     strengths: List[str]
     best_for: List[str]
     native_tools: bool
+    internal: bool = False  # True for plumbing/classifier slots not exposed in the user-facing chat picker
 
 
 class ModelRecommendation(BaseModel):
@@ -141,7 +143,7 @@ class ModelRecommendation(BaseModel):
     best_for: List[str]
     recommended_ram: str  # e.g. "16–32 GB"
     native_tools: bool
-    tool_mode: str = "limited"  # "native" | "json_fallback" | "limited"
+    tool_mode: str = "excluded_from_tools"  # "native_qwen3" | "adapted" | "excluded_from_tools"
     compatibility: str  # "great" | "good" | "warning" | "unsupported"
     score: int  # 0–100
     recommended: bool
@@ -176,8 +178,47 @@ class TestResponse(BaseModel):
     response_text: str = ""
     latency_ms: int = 0
     tokens_per_second: float = 0.0
-    tool_mode: str = ""  # "native" | "json_fallback" | "limited"
+    tool_mode: str = ""  # "native_qwen3" | "adapted" | "excluded_from_tools"
     error: str = ""
+
+
+class LoadedOllamaModel(BaseModel):
+    """A model currently resident in Ollama's process memory (from /api/ps).
+
+    Fields mirror Ollama's response shape. `size_vram` is what counts against
+    the GPU/unified-memory budget; `size` is total weights + KV cache resident.
+    """
+    name: str
+    size: int = 0
+    size_vram: int = 0
+    expires_at: Optional[str] = None
+
+
+class RuntimeLoad(BaseModel):
+    """A snapshot of how loaded the local inference runtime currently is.
+
+    Buildable today per ADR 004 §"Buildable today" — pure-Python via psutil and
+    Ollama's `/api/ps`. The future InferenceRouter (ADR 004) consumes this to
+    decide whether a `route(request)` decision can fit in the current footprint
+    or requires unloading another slot first.
+
+    On Apple Silicon, `gpu_vram_total_gb` and `gpu_vram_used_gb` are None because
+    GPU memory is shared with system RAM (unified memory) — callers infer the
+    available VRAM budget from `available_ram_gb` when `gpu_vendor == "apple"`.
+    """
+    timestamp_utc: str
+    total_ram_gb: float
+    available_ram_gb: float
+    used_ram_gb: float
+    ram_pct: float
+    swap_total_gb: float
+    swap_used_gb: float
+    swap_pct: float
+    gpu_vendor: Optional[str] = None
+    gpu_vram_total_gb: Optional[float] = None
+    gpu_vram_used_gb: Optional[float] = None
+    loaded_models: List[LoadedOllamaModel] = []
+    ollama_reachable: bool = False
 
 
 # ── Model Catalog ────────────────────────────────────────────────────────────
@@ -190,14 +231,14 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         litellm_model="ollama_chat/qwen3:1.7b",
         label="Qwen3 1.7B",
         download_size_gb=1.4,
-        context_window="40K",
-        context_tokens=40960,
+        context_window="32K",
+        context_tokens=32768,
         recommended_ram_min_gb=8,
         recommended_ram_max_gb=16,
         min_disk_gb=4,
         cpu_friendly=True,
         gpu_preferred=False,
-        strengths=["fast", "multilingual", "lightweight"],
+        strengths=["fast", "multilingual", "lightweight", "128K via YaRN"],
         best_for=["quick chat", "weak hardware", "testing"],
         native_tools=False,
     ),
@@ -208,14 +249,14 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         litellm_model="ollama_chat/qwen3:4b",
         label="Qwen3 4B",
         download_size_gb=2.5,
-        context_window="256K",
-        context_tokens=262144,
+        context_window="32K",
+        context_tokens=32768,
         recommended_ram_min_gb=12,
         recommended_ram_max_gb=24,
         min_disk_gb=6,
         cpu_friendly=True,
         gpu_preferred=False,
-        strengths=["balanced", "multilingual", "large context"],
+        strengths=["balanced", "multilingual", "128K via YaRN"],
         best_for=["everyday chat", "multilingual tasks", "moderate hardware"],
         native_tools=False,
     ),
@@ -226,14 +267,14 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         litellm_model="ollama_chat/qwen3:8b",
         label="Qwen3 8B",
         download_size_gb=5.2,
-        context_window="40K",
-        context_tokens=40960,
+        context_window="32K",
+        context_tokens=32768,
         recommended_ram_min_gb=16,
         recommended_ram_max_gb=32,
         min_disk_gb=10,
         cpu_friendly=True,
         gpu_preferred=True,
-        strengths=["universal", "multilingual", "tool calling"],
+        strengths=["universal", "multilingual", "tool calling", "128K via YaRN"],
         best_for=["everyday chat", "tools", "general use"],
         native_tools=True,
     ),
@@ -280,34 +321,169 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         litellm_model="ollama_chat/devstral-small-2:24b",
         label="Devstral Small 2 24B",
         download_size_gb=15.0,
-        context_window="384K",
-        context_tokens=393216,
+        context_window="256K",
+        context_tokens=262144,
         recommended_ram_min_gb=32,
         recommended_ram_max_gb=64,
         min_disk_gb=22,
         cpu_friendly=False,
         gpu_preferred=True,
-        strengths=["coding", "repo exploration", "multi-file edits"],
+        strengths=["coding", "repo exploration", "multi-file edits", "384K via RoPE extension"],
         best_for=["code generation", "software engineering", "repo work"],
         native_tools=True,
     ),
+    # ──────────────────────────────────────────────────────────────────────
+    # Entries below are present in the catalog universe (consumed by the
+    # future InferenceRouter, ADR 004) but carry `internal=True` because their
+    # Ollama registry tags have NOT been verified against `ollama.com/library/<name>`.
+    # The user-facing chat picker filters them out so a stale-tag pull doesn't
+    # 404 on the customer. Promotion to user-pickable requires verifying the
+    # tag via `ollama pull <tag>` against the live registry, then flipping
+    # `internal=False`.
+    # ──────────────────────────────────────────────────────────────────────
     ModelCatalogEntry(
-        id="gemma4-27b",
+        # TODO: verify Ollama tag — was previously `gemma4:26b` with the wrong
+        # "Gemma 4 27B" label (which doesn't exist). The actual variant is
+        # 26B-A4B MoE per SELF-CONTAINED-APP-REVIEW.md §3; tag form on Ollama
+        # is unverified.
+        id="gemma4-26b-a4b",
         preset="best-local",
-        ollama_model="gemma4:26b",
-        litellm_model="ollama_chat/gemma4:26b",
-        label="Gemma 4 27B",
+        ollama_model="gemma4:26b-a4b",
+        litellm_model="ollama_chat/gemma4:26b-a4b",
+        label="Gemma 4 26B-A4B",
+        download_size_gb=15.0,
+        context_window="256K",
+        context_tokens=262144,
+        recommended_ram_min_gb=24,
+        recommended_ram_max_gb=48,
+        min_disk_gb=22,
+        cpu_friendly=False,
+        gpu_preferred=True,
+        strengths=["MoE", "reasoning", "generalist", "multimodal", "fast for size"],
+        best_for=["best quality", "complex tasks", "premium local"],
+        native_tools=True,
+        internal=True,
+    ),
+    ModelCatalogEntry(
+        # TODO: verify Ollama tag — Qwen3 -2507 split fine-tunes use various
+        # naming conventions across registries.
+        id="qwen3-4b-instruct-2507",
+        preset="long-docs",
+        ollama_model="qwen3:4b-instruct-2507",
+        litellm_model="ollama_chat/qwen3:4b-instruct-2507",
+        label="Qwen3 4B Instruct 2507",
+        download_size_gb=2.6,
+        context_window="256K",
+        context_tokens=262144,
+        recommended_ram_min_gb=12,
+        recommended_ram_max_gb=24,
+        min_disk_gb=6,
+        cpu_friendly=True,
+        gpu_preferred=False,
+        strengths=["256K native context", "instruction tuned", "multilingual"],
+        best_for=["long documents on light hardware", "instruction following"],
+        native_tools=True,
+        internal=True,
+    ),
+    ModelCatalogEntry(
+        # TODO: verify Ollama tag — `qwen3:14b` is plausible but unverified.
+        id="qwen3-14b",
+        preset="balanced",
+        ollama_model="qwen3:14b",
+        litellm_model="ollama_chat/qwen3:14b",
+        label="Qwen3 14B",
+        download_size_gb=9.0,
+        context_window="32K",
+        context_tokens=32768,
+        recommended_ram_min_gb=24,
+        recommended_ram_max_gb=32,
+        min_disk_gb=14,
+        cpu_friendly=False,
+        gpu_preferred=True,
+        strengths=["best dense Qwen3 for 24 GB", "tool calling", "128K via YaRN"],
+        best_for=["everyday chat on 24 GB unified memory", "tools", "general use"],
+        native_tools=True,
+        internal=True,
+    ),
+    ModelCatalogEntry(
+        # TODO: verify Ollama tag — required by ADR 008 as the v1 chat-pinned
+        # slot. Common Ollama abbreviations: `:30b-a3b`, `:30b-instruct`, etc.
+        id="qwen3-30b-a3b-instruct-2507",
+        preset="best-local",
+        ollama_model="qwen3:30b-a3b-instruct-2507",
+        litellm_model="ollama_chat/qwen3:30b-a3b-instruct-2507",
+        label="Qwen3 30B-A3B Instruct 2507",
         download_size_gb=18.0,
         context_window="256K",
         context_tokens=262144,
-        recommended_ram_min_gb=32,
-        recommended_ram_max_gb=64,
+        recommended_ram_min_gb=24,
+        recommended_ram_max_gb=48,
         min_disk_gb=26,
         cpu_friendly=False,
         gpu_preferred=True,
-        strengths=["premium", "reasoning", "generalist", "multimodal"],
-        best_for=["best quality", "complex tasks", "premium local"],
+        strengths=["MoE 30B/3B-active", "256K native", "tool calling", "ADR 008 pinned chat slot"],
+        best_for=["best local chat", "long conversations", "tools"],
         native_tools=True,
+        internal=True,
+    ),
+    ModelCatalogEntry(
+        # TODO: verify Ollama tag — IBM Granite 4.0 tag conventions vary
+        # (`granite4:h-micro`, `granite4-moe:micro`, `granite4:tiny-h`, etc.).
+        id="granite-4-h-micro",
+        preset="plumbing",
+        ollama_model="granite4:h-micro",
+        litellm_model="ollama_chat/granite4:h-micro",
+        label="Granite 4.0 H-Micro",
+        download_size_gb=2.0,
+        context_window="32K",
+        context_tokens=32768,
+        recommended_ram_min_gb=8,
+        recommended_ram_max_gb=16,
+        min_disk_gb=4,
+        cpu_friendly=True,
+        gpu_preferred=False,
+        strengths=["always-on classifier", "Apache 2.0", "ISO-42001 certified"],
+        best_for=["plumbing/dispatcher classifier slot"],
+        native_tools=False,
+        internal=True,
+    ),
+    ModelCatalogEntry(
+        id="granite-4-h-tiny",
+        preset="plumbing",
+        ollama_model="granite4:h-tiny",
+        litellm_model="ollama_chat/granite4:h-tiny",
+        label="Granite 4.0 H-Tiny",
+        download_size_gb=4.0,
+        context_window="128K",
+        context_tokens=131072,
+        recommended_ram_min_gb=12,
+        recommended_ram_max_gb=24,
+        min_disk_gb=6,
+        cpu_friendly=True,
+        gpu_preferred=False,
+        strengths=["plumbing", "Apache 2.0", "hybrid Mamba/attention"],
+        best_for=["plumbing/dispatcher mid-tier"],
+        native_tools=False,
+        internal=True,
+    ),
+    ModelCatalogEntry(
+        id="granite-4-h-small",
+        preset="plumbing",
+        ollama_model="granite4:h-small",
+        litellm_model="ollama_chat/granite4:h-small",
+        label="Granite 4.0 H-Small",
+        download_size_gb=18.0,
+        context_window="128K",
+        context_tokens=131072,
+        recommended_ram_min_gb=32,
+        recommended_ram_max_gb=48,
+        min_disk_gb=24,
+        cpu_friendly=False,
+        gpu_preferred=True,
+        strengths=["plumbing top-tier", "Apache 2.0", "hybrid Mamba/attention", "tool calling"],
+        best_for=["plumbing/dispatcher top-tier"],
+        native_tools=True,
+        internal=True,
     ),
 ]
 
@@ -316,13 +492,21 @@ _CATALOG_BY_ID: Dict[str, ModelCatalogEntry] = {m.id: m for m in MODEL_CATALOG}
 
 
 def _tool_mode_for(entry: ModelCatalogEntry) -> str:
-    """Derive tool_mode from catalog entry flags."""
+    """Derive tool_mode from catalog entry flags.
+
+    Tool-mode taxonomy (renamed 2026-04-28 per ADR 004's "Tool-format hardening"):
+      - native_qwen3: model exposes native function-calling in Qwen3 family format
+        (the format the dispatcher's adapter standardises on)
+      - adapted: tool calls are adapted via JSON-mode prompting through LiteLLM
+      - excluded_from_tools: model is too small to reliably tool-call; the router
+        excludes it from tool-using request classes
+    """
     if entry.native_tools:
-        return "native"
-    # Small models (< 3B params, heuristic: download < 2 GB) → limited
+        return "native_qwen3"
+    # Small models (< 3B params, heuristic: download < 2 GB) → excluded_from_tools
     if entry.download_size_gb < 2.0:
-        return "limited"
-    return "json_fallback"
+        return "excluded_from_tools"
+    return "adapted"
 
 
 def get_catalog() -> List[ModelCatalogEntry]:
@@ -453,6 +637,116 @@ def probe_hardware() -> HardwareProfile:
 
 
 # ── Runtime Probe ────────────────────────────────────────────────────────────
+
+
+def _detect_gpu_vram_used() -> Optional[float]:
+    """Best-effort current GPU VRAM usage in GB (NVIDIA via nvidia-smi).
+
+    Returns None on Apple Silicon (unified memory — caller uses RAM signals)
+    and on machines without nvidia-smi.
+    """
+    if platform.system() == "Darwin":
+        return None  # Apple Silicon: unified memory; no separate VRAM signal
+
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return None
+    try:
+        result = subprocess.run(
+            [nvidia_smi, "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            vram_mb = float(result.stdout.strip().split("\n")[0])
+            return round(vram_mb / 1024, 2)
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        pass
+    return None
+
+
+async def _list_loaded_ollama_models(base_url: str) -> Tuple[bool, List[LoadedOllamaModel]]:
+    """Fetch the list of models currently resident in Ollama via GET /api/ps.
+
+    Returns (reachable, models). When unreachable, models is empty and the
+    runtime-load endpoint can still report system signals.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+            resp = await client.get(f"{base_url}/api/ps")
+            if resp.status_code != 200:
+                return False, []
+            data = resp.json()
+            entries = data.get("models", []) or []
+            loaded: List[LoadedOllamaModel] = []
+            for entry in entries:
+                loaded.append(LoadedOllamaModel(
+                    name=entry.get("name", ""),
+                    size=int(entry.get("size", 0) or 0),
+                    size_vram=int(entry.get("size_vram", 0) or 0),
+                    expires_at=entry.get("expires_at"),
+                ))
+            return True, loaded
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError):
+        return False, []
+    except Exception as exc:
+        logger.debug("Ollama /api/ps unexpected error: %s", _sanitize_for_log(exc))
+        return False, []
+
+
+async def probe_runtime_load(base_url: str = DEFAULT_OLLAMA_BASE_URL) -> RuntimeLoad:
+    """Snapshot the current runtime load — RAM/swap/GPU + Ollama-loaded models.
+
+    Pure-Python scaffold per ADR 004 §"Buildable today". Future production form
+    will replace the macOS branch with a Tauri-side native helper that reads
+    memory pressure / VM stats via the OS APIs (see ADR 003 dependency in ADR
+    004's phasing). Until then, psutil is good enough to give the dispatcher a
+    correct-shaped signal — it'll just be slightly noisier than the eventual
+    native version on Apple Silicon.
+    """
+    base_url = _normalize_and_validate_ollama_base_url(base_url)
+
+    try:
+        import psutil
+        vmem = psutil.virtual_memory()
+        smem = psutil.swap_memory()
+        total_gb = round(vmem.total / (1024 ** 3), 2)
+        avail_gb = round(vmem.available / (1024 ** 3), 2)
+        used_gb = round(vmem.used / (1024 ** 3), 2)
+        ram_pct = float(vmem.percent)
+        swap_total_gb = round(smem.total / (1024 ** 3), 2)
+        swap_used_gb = round(smem.used / (1024 ** 3), 2)
+        swap_pct = float(smem.percent)
+    except ImportError:
+        total_gb = _get_total_ram_gb()
+        avail_gb = 0.0
+        used_gb = 0.0
+        ram_pct = 0.0
+        swap_total_gb = 0.0
+        swap_used_gb = 0.0
+        swap_pct = 0.0
+
+    gpu_vendor, gpu_vram_total = _detect_gpu()
+    gpu_vram_used = _detect_gpu_vram_used()
+
+    reachable, loaded = await _list_loaded_ollama_models(base_url)
+
+    return RuntimeLoad(
+        timestamp_utc=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        total_ram_gb=total_gb,
+        available_ram_gb=avail_gb,
+        used_ram_gb=used_gb,
+        ram_pct=ram_pct,
+        swap_total_gb=swap_total_gb,
+        swap_used_gb=swap_used_gb,
+        swap_pct=swap_pct,
+        gpu_vendor=gpu_vendor,
+        gpu_vram_total_gb=gpu_vram_total,
+        gpu_vram_used_gb=gpu_vram_used,
+        loaded_models=loaded,
+        ollama_reachable=reachable,
+    )
 
 
 async def probe_runtime(base_url: str = DEFAULT_OLLAMA_BASE_URL) -> RuntimeStatus:
@@ -653,13 +947,21 @@ async def build_catalog(
     hw: HardwareProfile,
     base_url: str = DEFAULT_OLLAMA_BASE_URL,
     active_model_id: Optional[str] = None,
+    include_internal: bool = False,
 ) -> List[ModelRecommendation]:
-    """Build the full model catalog with recommendations."""
+    """Build the model catalog with recommendations.
+
+    By default, plumbing/classifier entries (internal=True) are filtered out so
+    the user-facing chat picker only sees pickable chat models. The future
+    InferenceRouter (ADR 004) sets include_internal=True to see all slots.
+    """
     installed = await list_installed_models(base_url)
     installed_names = [m.get("name", "").lower() for m in installed]
 
     recommendations = []
     for model in MODEL_CATALOG:
+        if model.internal and not include_internal:
+            continue
         rec = score_model(model, hw, installed_names, active_model_id)
         recommendations.append(rec)
 
@@ -766,7 +1068,7 @@ async def test_model(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL) -> Tes
         if entry.ollama_model == model:
             catalog_entry = entry
             break
-    tool_mode = _tool_mode_for(catalog_entry) if catalog_entry else "json_fallback"
+    tool_mode = _tool_mode_for(catalog_entry) if catalog_entry else "adapted"
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:

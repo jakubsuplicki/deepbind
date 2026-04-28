@@ -65,7 +65,7 @@ class TestScoreModel:
         from services.ollama_service import score_model, get_model_by_id
 
         hw = self._make_hw(ram=16.0, gpu=None, apple_silicon=False)
-        model = get_model_by_id("gemma4-27b")
+        model = get_model_by_id("gemma4-26b-a4b")
         rec = score_model(model, hw, [])
         assert rec.compatibility in ("warning", "unsupported")
 
@@ -73,7 +73,7 @@ class TestScoreModel:
         from services.ollama_service import score_model, get_model_by_id
 
         hw = self._make_hw(ram=64.0, disk=5.0)  # 5 GB disk, model needs 18 GB
-        model = get_model_by_id("gemma4-27b")
+        model = get_model_by_id("gemma4-26b-a4b")
         rec = score_model(model, hw, [])
         assert rec.compatibility == "unsupported"
         assert rec.score == 0
@@ -134,6 +134,49 @@ class TestRecommendTop3:
         for m in recommended:
             assert m.compatibility in ("great", "good")
 
+    @pytest.mark.anyio
+    async def test_build_catalog_filters_internal_by_default(self):
+        from services.ollama_service import build_catalog, HardwareProfile
+
+        hw = HardwareProfile(
+            os="macos", arch="arm64", total_ram_gb=32.0, free_disk_gb=100.0,
+            cpu_cores=10, gpu_vendor="apple", is_apple_silicon=True, tier="strong",
+        )
+
+        with patch("services.ollama_service.list_installed_models", new_callable=AsyncMock, return_value=[]):
+            catalog = await build_catalog(hw, active_model_id=None)
+
+        ids = {m.model_id for m in catalog}
+        for internal_id in (
+            "gemma4-26b-a4b",
+            "qwen3-4b-instruct-2507",
+            "qwen3-14b",
+            "qwen3-30b-a3b-instruct-2507",
+            "granite-4-h-micro",
+            "granite-4-h-tiny",
+            "granite-4-h-small",
+        ):
+            assert internal_id not in ids
+
+    @pytest.mark.anyio
+    async def test_build_catalog_include_internal_returns_internal_entries(self):
+        from services.ollama_service import build_catalog, HardwareProfile
+
+        hw = HardwareProfile(
+            os="macos", arch="arm64", total_ram_gb=32.0, free_disk_gb=100.0,
+            cpu_cores=10, gpu_vendor="apple", is_apple_silicon=True, tier="strong",
+        )
+
+        with patch("services.ollama_service.list_installed_models", new_callable=AsyncMock, return_value=[]):
+            catalog = await build_catalog(hw, active_model_id=None, include_internal=True)
+
+        ids = {m.model_id for m in catalog}
+        # Sample of expected internal entries (full set covered by
+        # test_internal_models_marked at the catalog layer)
+        assert "granite-4-h-micro" in ids
+        assert "qwen3-30b-a3b-instruct-2507" in ids
+        assert "gemma4-26b-a4b" in ids
+
 
 # ── Hardware Probe ───────────────────────────────────────────────────────────
 
@@ -173,6 +216,116 @@ class TestRuntimeProbe:
         assert isinstance(status.running, bool)
 
 
+# ── Runtime Load Probe ───────────────────────────────────────────────────────
+
+
+class TestRuntimeLoadProbe:
+    @pytest.mark.anyio
+    async def test_returns_valid_shape(self):
+        from services.ollama_service import probe_runtime_load
+
+        # Hit a port that's almost certainly not Ollama so the call doesn't depend
+        # on the local Ollama state. System signals should still populate.
+        load = await probe_runtime_load("http://localhost:19999")
+        assert load.total_ram_gb > 0
+        assert 0.0 <= load.ram_pct <= 100.0
+        assert 0.0 <= load.swap_pct <= 100.0
+        assert load.timestamp_utc.endswith("Z")
+        assert load.ollama_reachable is False
+        assert load.loaded_models == []
+
+    @pytest.mark.anyio
+    async def test_apple_silicon_reports_unified_memory(self):
+        """On Darwin, gpu_vram_total/used must be None (unified memory)."""
+        import platform
+        from services.ollama_service import probe_runtime_load
+
+        load = await probe_runtime_load("http://localhost:19999")
+        if platform.system() == "Darwin" and platform.machine() == "arm64":
+            assert load.gpu_vendor == "apple"
+            assert load.gpu_vram_total_gb is None
+            assert load.gpu_vram_used_gb is None
+
+    @pytest.mark.anyio
+    async def test_loaded_models_parsed(self):
+        """Mock Ollama /api/ps and confirm LoadedOllamaModel records parse."""
+        from services.ollama_service import probe_runtime_load
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "models": [
+                {
+                    "name": "qwen3:8b",
+                    "size": 5_400_000_000,
+                    "size_vram": 5_400_000_000,
+                    "expires_at": "2026-04-28T10:00:00Z",
+                },
+                {
+                    "name": "qwen3:1.7b",
+                    "size": 1_500_000_000,
+                    "size_vram": 0,
+                    "expires_at": None,
+                },
+            ]
+        }
+
+        with patch("services.ollama_service.httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_client
+
+            load = await probe_runtime_load("http://localhost:11434")
+
+        assert load.ollama_reachable is True
+        assert len(load.loaded_models) == 2
+        assert load.loaded_models[0].name == "qwen3:8b"
+        assert load.loaded_models[0].size == 5_400_000_000
+        assert load.loaded_models[0].size_vram == 5_400_000_000
+        assert load.loaded_models[1].size_vram == 0
+
+    @pytest.mark.anyio
+    async def test_unreachable_ollama_keeps_system_signals(self):
+        """When Ollama is unreachable, system signals must still populate."""
+        import httpx
+        from services.ollama_service import probe_runtime_load
+
+        with patch("services.ollama_service.httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_client
+
+            load = await probe_runtime_load()
+
+        assert load.ollama_reachable is False
+        assert load.loaded_models == []
+        # System signals still populated even when Ollama is down
+        assert load.total_ram_gb > 0
+
+
+class TestRuntimeLoadEndpoint:
+    @pytest.mark.anyio
+    async def test_endpoint_returns_runtime_load_shape(self, client):
+        # Mock Ollama as unreachable so the test doesn't depend on local state
+        with patch("services.ollama_service._list_loaded_ollama_models",
+                   new_callable=AsyncMock,
+                   return_value=(False, [])):
+            resp = await client.get("/api/local/runtime/load")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "total_ram_gb" in data
+        assert "ram_pct" in data
+        assert "swap_pct" in data
+        assert "loaded_models" in data
+        assert "ollama_reachable" in data
+        assert data["ollama_reachable"] is False
+        assert "timestamp_utc" in data
+
+
 class TestOllamaBaseUrlValidation:
     def test_keeps_localhost(self):
         from services.ollama_service import _normalize_and_validate_ollama_base_url
@@ -207,18 +360,75 @@ class TestOllamaBaseUrlValidation:
 
 
 class TestModelCatalog:
-    def test_catalog_has_7_entries(self):
+    def test_catalog_size_lower_bound(self):
         from services.ollama_service import get_catalog
 
+        # Lower bound — checks for accidental removal. Adding entries is fine
+        # without breaking this test; per-id presence checks below cover the
+        # specific entries that must be present.
         catalog = get_catalog()
-        assert len(catalog) == 7
+        assert len(catalog) >= 13
 
     def test_all_presets_present(self):
         from services.ollama_service import get_catalog
 
         presets = {m.preset for m in get_catalog()}
-        expected = {"fast", "everyday", "balanced", "long-docs", "reasoning", "code", "best-local"}
-        assert presets == expected
+        expected_subset = {"fast", "everyday", "balanced", "long-docs", "reasoning", "code", "best-local", "plumbing"}
+        assert expected_subset.issubset(presets)
+
+    def test_internal_models_marked(self):
+        from services.ollama_service import get_catalog
+
+        # All entries with unverified Ollama tags carry internal=True so the
+        # user picker doesn't expose them. Promotion to user-pickable requires
+        # tag verification per the catalog correctness pass.
+        internal_ids = {m.id for m in get_catalog() if m.internal}
+        expected_internal = {
+            "gemma4-26b-a4b",
+            "qwen3-4b-instruct-2507",
+            "qwen3-14b",
+            "qwen3-30b-a3b-instruct-2507",
+            "granite-4-h-micro",
+            "granite-4-h-tiny",
+            "granite-4-h-small",
+        }
+        assert expected_internal.issubset(internal_ids)
+
+    def test_qwen3_native_contexts_corrected(self):
+        from services.ollama_service import get_model_by_id
+
+        # Pre-correction these were 40K/40K/256K — now native is 32K everywhere.
+        assert get_model_by_id("qwen3-1.7b").context_tokens == 32768
+        assert get_model_by_id("qwen3-4b").context_tokens == 32768
+        assert get_model_by_id("qwen3-8b").context_tokens == 32768
+
+    def test_devstral_native_context_corrected(self):
+        from services.ollama_service import get_model_by_id
+
+        # Pre-correction was 384K (RoPE-extended). Native is 256K.
+        assert get_model_by_id("devstral-small-2-24b").context_tokens == 262144
+
+    def test_qwen3_30b_a3b_instruct_2507_present(self):
+        from services.ollama_service import get_model_by_id
+
+        # Required by ADR 008 as the v1 chat-pinned slot. Currently internal
+        # because the Ollama tag is unverified — the dispatcher (ADR 004) is
+        # the consumer until the tag verifies, then it flips to user-pickable.
+        m = get_model_by_id("qwen3-30b-a3b-instruct-2507")
+        assert m is not None
+        assert m.preset == "best-local"
+        assert m.context_tokens == 262144
+        assert m.native_tools is True
+        assert m.internal is True
+
+    def test_qwen3_4b_instruct_2507_distinct_from_qwen3_4b(self):
+        from services.ollama_service import get_model_by_id
+
+        # The base qwen3-4b is 32K; the -2507 variant is the 256K-native sibling.
+        base = get_model_by_id("qwen3-4b")
+        ext = get_model_by_id("qwen3-4b-instruct-2507")
+        assert base.context_tokens == 32768
+        assert ext.context_tokens == 262144
 
     def test_litellm_model_has_prefix(self):
         from services.ollama_service import get_catalog
@@ -454,12 +664,26 @@ class TestLocalModelsAPI:
             resp = await client.get("/api/local/models/catalog")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 7
+        # Lower bound — internal entries (unverified Ollama tags) filtered out.
+        assert len(data) >= 6
         # Check that recommendations are scored
         for item in data:
             assert "compatibility" in item
             assert "score" in item
             assert "recommended" in item
+
+        # No internal models leaked through to the user picker
+        ids = {item["model_id"] for item in data}
+        for internal_id in (
+            "gemma4-26b-a4b",
+            "qwen3-4b-instruct-2507",
+            "qwen3-14b",
+            "qwen3-30b-a3b-instruct-2507",
+            "granite-4-h-micro",
+            "granite-4-h-tiny",
+            "granite-4-h-small",
+        ):
+            assert internal_id not in ids, f"{internal_id} (internal) leaked to /catalog"
 
     @pytest.mark.anyio
     async def test_select_endpoint(self, client, tmp_path):

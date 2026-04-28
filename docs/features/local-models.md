@@ -22,8 +22,8 @@ sources:
 	- frontend/app/types/index.ts
 	- frontend/tests/composables/useLocalModelsIntegration.test.ts
 depends_on: [chat, api-key-management, workspace-onboarding]
-last_reviewed: 2026-04-16
-last_updated: 2026-04-16
+last_reviewed: 2026-04-28
+last_updated: 2026-04-28
 ---
 
 # Local Models
@@ -32,7 +32,9 @@ Run Jarvis with on-device AI via Ollama — no API key required.
 
 ## Summary
 
-The local models feature adds support for running Jarvis with locally-hosted LLMs via Ollama. It provides hardware detection, a curated catalog of 7 model presets with hardware-based recommendations, model download with streaming progress, seamless integration with the existing multi-provider chat pipeline via LiteLLM, tool calling mode detection per model, runtime health monitoring with reconnection flow, and slow response indicators for local inference.
+The local models feature adds support for running Jarvis with locally-hosted LLMs via Ollama. It provides hardware detection, a curated catalog of model presets with hardware-based recommendations, model download with streaming progress, seamless integration with the existing multi-provider chat pipeline via LiteLLM, tool calling mode detection per model, runtime health monitoring with reconnection flow, and slow response indicators for local inference.
+
+The catalog is split into two layers: **user-pickable chat models** (6 entries with verified Ollama tags) and **internal entries** (7 entries — Qwen3-2507 split fine-tunes, Qwen3-14B, Gemma 4 26B-A4B, Granite 4.0 H-Micro/H-Tiny/H-Small — all carry `internal=True` because their Ollama registry tags are unverified). The user-facing endpoint filters internal entries out so a stale-tag pull never 404s the customer; the future InferenceRouter ([ADR 004](../architecture/decisions/004-inference-router-architecture.md)) consumes them via `build_catalog(include_internal=True)`. Each internal entry carries a `TODO: verify Ollama tag` comment marking the verification gap; promotion to user-pickable requires `ollama pull <tag>` against the live registry, then flipping `internal=False`.
 
 ## How It Works
 
@@ -43,6 +45,14 @@ The local models feature adds support for running Jarvis with locally-hosted LLM
 ### Runtime Probe
 
 `probe_runtime()` checks if Ollama is installed (via `shutil.which`) and running (via `GET /api/version` on the configured base URL). Returns installation status, version, and reachability.
+
+### Runtime Load Probe
+
+`probe_runtime_load()` snapshots the current local-runtime load — RAM/swap via `psutil`, GPU VRAM (best-effort: NVIDIA via `nvidia-smi`, Apple Silicon reports unified memory via the RAM signals only), and the list of models currently resident in Ollama via `GET /api/ps`. The future InferenceRouter ([ADR 004](../architecture/decisions/004-inference-router-architecture.md)) consumes this snapshot to decide whether a new request can fit in the current footprint or requires unloading another slot first.
+
+Today's implementation is a pure-Python scaffold per ADR 004 §"Buildable today". Per the same ADR's §"Blocked by upstream ADRs", the macOS branch graduates to a Tauri-side native helper after [ADR 003](../architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md) lands — `vm_stat` parsing via psutil is brittle across macOS versions and the M5 + macOS 26 + Ollama segfault is a recent reminder that platform quirks bite. The Python scaffold gives the right *shape* (consumers can wire to it) without locking in fragile platform code.
+
+Exposed at `GET /api/local/runtime/load`. Response shape: `RuntimeLoad` with `total_ram_gb`, `available_ram_gb`, `used_ram_gb`, `ram_pct`, `swap_total_gb`, `swap_used_gb`, `swap_pct`, `gpu_vendor`, `gpu_vram_total_gb`, `gpu_vram_used_gb`, `loaded_models[]` (each `LoadedOllamaModel` with `name`, `size`, `size_vram`, `expires_at`), `ollama_reachable`, `timestamp_utc`. When Ollama is unreachable the system signals still populate; only `loaded_models` and `ollama_reachable` reflect the runtime gap.
 
 ### URL Safety Guardrails
 
@@ -56,17 +66,34 @@ This protects local-model routes against partial SSRF patterns reported by stati
 
 ### Model Catalog
 
-Seven curated presets cover the spectrum from weak laptops to workstations:
+The catalog covers the spectrum from weak laptops to workstations across eight presets (`fast`, `everyday`, `balanced`, `long-docs`, `reasoning`, `code`, `best-local`, `plumbing`). Context windows below are the model's *native* context — RoPE / YaRN-extended ranges are listed in `strengths`, not in `context_window`.
 
-| Preset | Model | Size | Context | Best RAM |
-|--------|-------|------|---------|----------|
-| Fast | qwen3:1.7b | 1.4 GB | 40K | 8–16 GB |
-| Everyday | qwen3:4b | 2.5 GB | 256K | 12–24 GB |
-| Balanced | qwen3:8b | 5.2 GB | 40K | 16–32 GB |
-| Long Docs | ministral-3:8b | 6.0 GB | 256K | 16–32 GB |
-| Reasoning | gemma4:e4b | 9.6 GB | 128K | 24–40 GB |
-| Code | devstral-small-2:24b | 15 GB | 384K | 32–64 GB |
-| Best Local | gemma4:27b | 18 GB | 256K | 32–64 GB |
+**User-pickable chat models** (6 — all with verified Ollama tags):
+
+| Preset | Model | Size | Native Context | Best RAM | Notes |
+|--------|-------|------|---------------|----------|-------|
+| Fast | qwen3:1.7b | 1.4 GB | 32K | 8–16 GB | 128K via YaRN |
+| Everyday | qwen3:4b | 2.5 GB | 32K | 12–24 GB | 128K via YaRN |
+| Balanced | qwen3:8b | 5.2 GB | 32K | 16–32 GB | 128K via YaRN |
+| Long Docs | ministral-3:8b | 6.0 GB | 256K | 16–32 GB | |
+| Reasoning | gemma4:e4b | 9.6 GB | 128K | 24–40 GB | |
+| Code | devstral-small-2:24b | 15 GB | 256K | 32–64 GB | 384K via RoPE extension |
+
+**Internal entries** (7 — present in catalog, filtered from user picker until Ollama tag verified):
+
+| Preset | Model | Size | Native Context | Best RAM | Role / Status |
+|--------|-------|------|---------------|----------|---------------|
+| Best Local | gemma4:26b-a4b | 15 GB | 256K | 24–48 GB | 26B-A4B MoE (renamed from incorrect "Gemma 4 27B") — tag unverified |
+| Long Docs | qwen3:4b-instruct-2507 | 2.6 GB | 256K | 12–24 GB | 256K *native* sibling of qwen3:4b — tag unverified |
+| Balanced | qwen3:14b | 9.0 GB | 32K | 24–32 GB | best dense Qwen3 for 24 GB unified memory — tag unverified |
+| Best Local | qwen3:30b-a3b-instruct-2507 | 18 GB | 256K | 24–48 GB | ADR 008 v1 chat-pinned slot — tag unverified |
+| Plumbing | granite4:h-micro | 2.0 GB | 32K | 8–16 GB | always-on classifier (ISO-42001 certified) — tag unverified |
+| Plumbing | granite4:h-tiny | 4.0 GB | 128K | 12–24 GB | dispatcher mid-tier — tag unverified |
+| Plumbing | granite4:h-small | 18 GB | 128K | 32–48 GB | dispatcher top-tier (tool-capable) — tag unverified |
+
+Each internal entry carries a `TODO: verify Ollama tag` comment in [`ollama_service.py`](../../backend/services/ollama_service.py). Promotion to user-pickable requires verifying the tag against `https://ollama.com/library/<name>`, then flipping `internal=False`.
+
+Internal entries are present in `MODEL_CATALOG` but excluded from `build_catalog()` unless the caller passes `include_internal=True`. The future InferenceRouter ([ADR 004](../architecture/decisions/004-inference-router-architecture.md)) is the consumer.
 
 ### Recommendation Engine
 
@@ -79,12 +106,20 @@ Seven curated presets cover the spectrum from weak laptops to workstations:
 
 ### Tool Calling Mode
 
-Each model gets a `tool_mode` classification:
-- **native** — model supports native function calling (e.g. qwen3:8b, gemma4 variants)
-- **json_fallback** — model doesn't natively support tools but can use JSON-mode fallback via LiteLLM (e.g. qwen3:4b, ministral-3:8b)
-- **limited** — very small models (< 2 GB) that may not reliably execute tools (e.g. qwen3:1.7b)
+Each model gets a `tool_mode` classification (renamed 2026-04-28 per ADR 004's "Tool-format hardening"):
+- **`native_qwen3`** — model exposes native function-calling in the Qwen3 family format (e.g. qwen3:8b, qwen3:14b, qwen3:30b-a3b-instruct-2507, gemma4 variants, devstral). The dispatcher's adapter standardises on this format.
+- **`adapted`** — tool calls are adapted via JSON-mode prompting through LiteLLM (e.g. qwen3:4b, ministral-3:8b).
+- **`excluded_from_tools`** — very small models (< 2 GB) that don't reliably tool-call; the future router excludes them from tool-using request classes (e.g. qwen3:1.7b).
 
 `_tool_mode_for()` derives tool_mode from the catalog entry's `native_tools` flag and `download_size_gb`.
+
+Old taxonomy → new taxonomy mapping (for any external integrations that still consume the previous values):
+
+| Old | New |
+|-----|-----|
+| `native` | `native_qwen3` |
+| `json_fallback` | `adapted` |
+| `limited` | `excluded_from_tools` |
 
 ### Runtime Health Monitoring
 
@@ -125,6 +160,7 @@ Each model gets a `tool_mode` classification:
 |----------|--------|-------------|
 | `/api/local/hardware` | GET | Hardware profile (RAM, disk, CPU, GPU, tier) |
 | `/api/local/runtime` | GET | Ollama status (installed, running, version) |
+| `/api/local/runtime/load` | GET | Runtime load snapshot (RAM/swap/GPU + Ollama-loaded models) — consumed by ADR 004 dispatcher |
 | `/api/local/models/catalog` | GET | Model catalog with recommendations |
 | `/api/local/models/installed` | GET | Models downloaded in Ollama |
 | `/api/local/models/pull` | POST | Download model (SSE progress stream) |

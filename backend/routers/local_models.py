@@ -10,6 +10,7 @@ from services.ollama_service import (
     HardwareProfile,
     ModelRecommendation,
     PullRequest,
+    RuntimeLoad,
     RuntimeStatus,
     SelectRequest,
     TestRequest,
@@ -22,6 +23,7 @@ from services.ollama_service import (
     list_installed_models,
     probe_hardware,
     probe_runtime,
+    probe_runtime_load,
     pull_model_stream,
     set_active_local_model,
     test_model,
@@ -46,6 +48,19 @@ async def get_runtime(
 ) -> RuntimeStatus:
     """Check if Ollama is installed and running."""
     return await probe_runtime(base_url)
+
+
+@router.get("/runtime/load", response_model=RuntimeLoad)
+async def get_runtime_load(
+    base_url: str = Query(DEFAULT_OLLAMA_BASE_URL, alias="base_url"),
+) -> RuntimeLoad:
+    """Snapshot the current runtime load (RAM/swap/GPU + Ollama-loaded models).
+
+    Consumed by the future InferenceRouter (ADR 004) to make routing decisions.
+    Pure-Python scaffold today; graduates to a Tauri-side native helper after
+    ADR 003 lands. See `probe_runtime_load()` for the degradation note.
+    """
+    return await probe_runtime_load(base_url)
 
 
 @router.get("/models/catalog")

@@ -24,14 +24,15 @@ const presetLabel = computed(() => {
     reasoning: 'Reasoning',
     code: 'Code',
     'best-local': 'Best Local',
+    plumbing: 'Plumbing',
   }
   return map[props.model.preset] ?? props.model.preset
 })
 
 const toolBadge = computed(() => {
   const mode = props.model.tool_mode
-  if (mode === 'native') return { label: 'Native tools', cssClass: 'tool-badge--native', icon: '✅' }
-  if (mode === 'json_fallback') return { label: 'Tools via prompt', cssClass: 'tool-badge--fallback', icon: '⚠️' }
+  if (mode === 'native_qwen3') return { label: 'Native tools', cssClass: 'tool-badge--native', icon: '✅' }
+  if (mode === 'adapted') return { label: 'Tools via prompt', cssClass: 'tool-badge--fallback', icon: '⚠️' }
   return { label: 'Limited tool support', cssClass: 'tool-badge--limited', icon: '❌' }
 })
 
@@ -73,8 +74,8 @@ const buttonState = computed(() => {
       Best for: {{ model.best_for.slice(0, 2).join(', ') }}
     </p>
 
-    <p v-if="model.context_window === '40K'" class="model-card__ctx-hint">
-      Good for everyday chat. For long documents, choose a 128K–384K model.
+    <p v-if="model.context_window === '32K'" class="model-card__ctx-hint">
+      Good for everyday chat. For long documents, choose a 128K–256K model.
     </p>
 
     <p v-if="model.reason && model.compatibility !== 'great'" class="model-card__reason">{{ model.reason }}</p>

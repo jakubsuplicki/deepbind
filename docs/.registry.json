@@ -716,8 +716,9 @@
         "api-key-management",
         "workspace-onboarding"
       ],
-      "last_updated": "2026-04-26",
-      "status": "current"
+      "last_updated": "2026-04-28",
+      "status": "current",
+      "_note_2026_04_28": "Catalog correctness pass: fixed Qwen3 native contexts (32K not 40K/256K), Devstral native (256K not 384K), renamed Gemma 4 27B (nonexistent) to Gemma 4 26B-A4B; added Qwen3-14B, Qwen3-30B-A3B-Instruct-2507, Qwen3-4B-Instruct-2507, Granite 4.0 H-Micro/H-Tiny/H-Small. Per code review: all entries with unverified Ollama tags carry internal=True (filtered from user picker until tags are verified against ollama.com/library) — user-pickable list is the 6 original entries with verified tags, internal universe is 7 entries reserved for the future InferenceRouter (ADR 004). Each internal entry carries a TODO: verify Ollama tag comment. Tool_mode taxonomy renamed: native→native_qwen3, json_fallback→adapted, limited→excluded_from_tools (per ADR 004 'Tool-format hardening'). Added probe_runtime_load() + GET /api/local/runtime/load — pure-Python scaffold for the dispatcher's runtime-load signal (psutil + Ollama /api/ps); macOS branch graduates to Tauri-native after ADR 003."
     },
     "cross-source-linking": {
       "doc": "docs/features/cross-source-linking.md",

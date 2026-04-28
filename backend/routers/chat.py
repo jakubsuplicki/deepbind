@@ -436,7 +436,7 @@ async def _handle_message(
                 done_fields["tool_mode"] = _tool_mode_for(entry)
                 break
         else:
-            done_fields["tool_mode"] = "json_fallback"
+            done_fields["tool_mode"] = "adapted"
 
     # Step 28a — surface the per-note retrieval trace before `done`. Older
     # clients ignore unknown event types, so this degrades cleanly.
