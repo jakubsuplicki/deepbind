@@ -1,7 +1,7 @@
 # ADR 004 — Multi-model `InferenceRouter` with dynamic load/unload
 
 **Status:** Accepted
-**Date:** 2026-04-27
+**Date:** 2026-04-27 (initial), amended 2026-04-28 (implementation phasing)
 **Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 005](005-profile-driven-model-stacks.md) · [ADR 008](008-conversation-pinned-chat-model.md) · [ADR 009](009-context-overflow-compaction.md) · [`docs/research/models/model-research-4.md`](../../research/models/model-research-4.md)
 
 ## Context
@@ -148,6 +148,52 @@ Could ship a small classifier model to route requests. Adds another always-resid
 - [`ModelCatalogEntry`](../../../backend/services/ollama_service.py#L113) gains `bytes_per_kv_token`, `effective_context_tokens`, `attention_arch`, `slot_class` fields.
 - New `frontend/app/components/RuntimeModelPanel.vue` — RAM bar + loaded models + per-slot preferences + perf-mode toggle.
 - The existing `tool_mode` classification hardens into `native_qwen3` / `adapted` / `excluded_from_tools`.
+
+## Implementation phasing — what's feasible now vs blocked (2026-04-28)
+
+The full design above describes the steady-state target. Several pieces depend on other ADRs that haven't shipped yet; this section is the honest sequencing call so a partial build doesn't pretend to be more than it is.
+
+### Buildable today (no upstream dependency)
+
+These can land now in a behavior-preserving way — single-model production behavior is unchanged at the user level, but the codebase moves to the right shape:
+
+- **`InferenceRouter` skeleton.** Classifier (rule-based: tool-call → tool, code fence → code, embedding request → embed, default → chat), per-class slot table, `route(request) → model` with a single-loadout slot table that mirrors today's single-active-model install. `_make_llm()` becomes a thin wrapper around `router.route()` exactly as the ADR specifies; behavior on a single-profile single-model install is identical.
+- **`probe_runtime_load()` via pure Python.** `psutil.virtual_memory()`, `psutil.swap_memory()`, Ollama's `GET /api/ps` over HTTP. No Tauri or native module required. Degraded vs the eventual native version (vm_stat shelling-out has parsing brittleness on macOS, NVML access varies on Linux), but the shape is right and the consumers can wire to it.
+- **`ModelCatalogEntry` field additions.** `bytes_per_kv_token`, `attention_arch`, `slot_class` are pure data-model extensions; populating them is a docs-style table of reference numbers from `model-research-1.md` §"KV-cache discipline". No runtime risk.
+- **Per-slot `keep_alive` policy table.** Current code uses a single fixed value at [`ollama_service.py`](../../../backend/services/ollama_service.py); replace with a per-slot lookup. Behavior-preserving in single-slot setups; correct shape for multi-slot.
+- **Tool-format hardening.** `tool_mode` rename to `native_qwen3` / `adapted` / `excluded_from_tools` is mechanical and lands without depending on anything else.
+
+### Blocked by upstream ADRs
+
+These are part of the design but cannot be built honestly until prerequisites ship:
+
+- **Multi-profile slot tables.** Reference ADR 005's `ProfilePack`. Until ADR 005 is implemented, the router has exactly one profile (the active install) and the slot table is effectively static. Building "profile-driven slot tables" without ADR 005 means inventing the profile shape twice — once here, once in ADR 005 — and then resolving the conflict. Sequence: ADR 005 first, then this piece.
+- **Conversation pinning enforcement.** ADR 008 defines the pinning contract; ADR 004 enforces it. If ADR 008's per-conversation `pinned_loadout` snapshot doesn't exist yet, the enforcement is a no-op (single chat slot is never swapped anyway). Defer the `accepts pinned_loadout` interface until ADR 008 lands the snapshot shape.
+- **Production-grade Apple Silicon signals.** `vm_stat` parsing + page-out heuristics work in Python but are noticeably fragile across macOS versions (the M5 + macOS 26 combo we already hit on Ollama is a reminder that platform-quirks bite). The robust answer is a small Tauri-side native helper exposing memory pressure via the OS APIs. **Sequence: ADR 003 (Tauri packaging) first, then graduate the probe.** The Python version is a working scaffold in the meantime, not the shipping form.
+- **Runtime UI panel.** Frontend can prototype the Vue component now (the SSE backend is buildable), but the *final* form depends on whether some panels move into native Tauri windows / menubar items. Same gating: prototype now, finalize after ADR 003.
+
+### Useful sequencing call
+
+The cleanest order top-to-bottom:
+
+1. ADR 003 (Tauri packaging) — unblocks license, native signals, and finalizes the panel surface.
+2. ADR 005 (profile-driven model stacks) — produces the `ProfilePack` shape the router consumes.
+3. ADR 008 (conversation pinning) — produces the `pinned_loadout` shape the router enforces.
+4. **This ADR's full implementation** — composes all three above into the router contract.
+
+What can land out of order without harm:
+
+- The `InferenceRouter` skeleton + Python `probe_runtime_load()` + catalog field additions + `keep_alive` policy table — all of these are forward-compatible with the upstream ADRs and don't lock anything in.
+
+What should NOT land out of order:
+
+- Anything that bakes assumptions about the `ProfilePack` schema (creates ADR-005 churn).
+- Anything that ships native-signal probing as production-grade before Tauri lands (creates a "we shipped fragile platform code we have to maintain forever" liability).
+- The runtime UI panel as a final user-facing surface (creates a redesign cost when Tauri lands).
+
+### Interaction with active ADR-010 eval run
+
+The router work (skeleton + probe + catalog fields + keep_alive table) touches files the conversation-replay eval does not import: `routers/chat.py`'s `_make_llm`, `services/ollama_service.py`, and a new `services/inference_router.py`. The eval harness's `OllamaChat` adapter talks to Ollama directly and never goes through `_make_llm`. Concurrent work is safe at the source-file level; only commit timing needs care so a mid-run commit doesn't capture eval files in an inconsistent state.
 
 ## Open follow-ups (non-blocking)
 
