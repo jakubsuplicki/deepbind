@@ -7,6 +7,9 @@ sources:
   - backend/services/chat/__init__.py
   - backend/services/chat/context_strategy.py
   - backend/services/claude.py
+  - backend/services/compaction_service.py
+  - backend/services/token_counting.py
+  - backend/services/retrieval/sessions.py
   - backend/services/llm_service.py
   - backend/services/_anthropic_client.py
   - backend/services/tools/__init__.py
@@ -19,8 +22,8 @@ sources:
   - frontend/app/components/ChatPanel.vue
   - frontend/app/components/TraceList.vue
 depends_on: [retrieval, sessions, specialists, api-key-management, preferences-settings]
-last_updated: 2026-04-28
-last_reviewed: 2026-04-28
+last_updated: 2026-04-29
+last_reviewed: 2026-04-29
 ---
 
 # Chat & LLM Integration
@@ -75,6 +78,26 @@ The conversation-replay eval harness lives at [`backend/tests/eval/conversations
 - **[`run_eval.py`](../../backend/tests/eval/conversations/run_eval.py)** — the CLI. `python -m tests.eval.conversations.run_eval --strategies full-history,naive-truncate-4,naive-truncate-8 --provider ollama --seeds 1,2,3` orchestrates every (strategy × fixture × seed) combination, computes the gate decisions, and writes a stable-key JSON baseline file. Default strategies sweep multiple naive-truncate values so retrieval-substitution must beat the *best* simple alternative, not the first value tested. Default provider is Ollama; `--provider anthropic` is the opt-in iteration loop. `--retrieval` enables the production-retrieval wiring; `--workspace-path` pins the retrieval workspace for reproducibility.
 
 Neither file is in the production path; the runner is dev infra that the engineer invokes locally before merging compaction-affecting changes.
+
+### Production-side context compaction (ADR 009)
+
+Long-running conversations eventually exceed the chat model's safe context window. ADR 009's retrieval-first compaction now runs in production at the per-turn boundary. The eval gate verdict (run-20260428T112547Z) validated `recent_n=8, top_k=3, threshold=0.70` as the canonical configuration: retrieval-substitution at those values matches full-history quality (Δ ≈ 0 pp) at a small fraction of the context budget, while naive truncation regresses against full-history at every aggressive window size (-26 pp at N=8, -53 pp at N=4).
+
+How a turn is compacted:
+
+1. **Strategy assembly first.** `ContextStrategy.assemble` runs as before. Compaction is a *separate* step that runs after the strategy returns and before dispatch, so any future strategy that wants to compact in its own way is independent of (and composes with) the production compaction policy.
+2. **Active-model lookup.** `_resolve_system_prompt_budget` and `_maybe_compact` both look up the active local model in `MODEL_CATALOG` via `get_model_by_litellm`. Cloud providers (Anthropic, OpenAI) bypass compaction — they manage their own context server-side and the catalog only carries entries for local Ollama models.
+3. **System-prompt budget enforcement.** `build_system_prompt_with_stats` now accepts `system_prompt_budget_tokens` and `tokenizer_id`. The chat router computes the budget as `0.30 × effective_context_tokens` of the active model. When the assembled prompt exceeds budget, `_enforce_system_prompt_budget` truncates the retrieved-context block (not the base persona, not the language reminder) until it fits, keeping highest-priority retrieved content first. The `prompt_stats["context_truncated"]` field surfaces whether truncation kicked in.
+4. **Per-turn compaction.** `compact_messages` in `backend/services/compaction_service.py` is called with `effective_context_tokens`, `tokenizer_id`, and the system-prompt token count. It strips `<think>...</think>` scratchpad blocks unconditionally, then checks if the projected token total exceeds the proactive trigger (default 70%). When the trigger fires, it cuts at the `recent_n`-th-to-last *real* user-turn boundary (tool_result-only user messages don't count), reaches into the markdown vault via `find_earlier_turn_context` for the top `top_k` matches against the latest user turn, and prepends a synthesized user-role substitution block.
+5. **Atomicity (ADR 009 §"Atomicity").** Compaction runs **only** at the per-turn boundary in `_handle_message`, never inside the tool-call loop in `_stream_follow_up`. Mid-loop compaction would risk re-assembling between a `tool_use` block and its matching `tool_result`, which the provider rejects. The mid-loop `_compact_stale_tool_results` handles the only safe in-loop compaction (collapsing prior tool_result payloads).
+6. **Audit trail (ADR 009 §"Audit trail").** Every compaction event is recorded on the session row via `session_service.record_compaction_event` and persisted into the saved session JSON. The event captures `{timestamp, turns_dropped, summary_used, recent_window_size, effective_ctx_at_event, tokens_before, tokens_after, threshold_pct, retrieval_paths, reason}`. Compliance buyers can see exactly what the model "saw" at each turn alongside the per-turn `model_id`.
+7. **WS surfacing.** When compaction fires the router emits a `compaction` event over the WebSocket carrying the same numbers as the audit event. The frontend in-active-context indicator and pin-turn affordances (separate ADR 009 §"UI surface" chunk) attach here.
+
+Token counting uses the HuggingFace `tokenizers` package via `services.token_counting`, which lazily loads the per-model tokenizer (`Qwen/Qwen3-8B`, `ibm-granite/granite-4.0-h-micro`, etc.) and caches it for the process. When the tokenizer is unavailable (offline, gated, missing), the wrapper falls back to a `chars / 4` estimator — same approximation the codebase used pre-ADR-009. Token counts are accurate to the active model on Polish/Chinese/Japanese/Arabic content, where the char/4 approximation drifts 20–40%.
+
+Each catalog entry in `ollama_service.py::ModelCatalogEntry` now carries `effective_context_tokens` (RULER-safe ceiling, not the advertised number — typically half the native window for dense transformers, full native for hybrid Mamba) and `tokenizer_id` (the HF reference for accurate counting). The system-prompt budget and the compaction trigger both reference these fields.
+
+Thresholds and recent-N defaults are tunable per-deployment via the env vars `JARVIS_COMPACTION_THRESHOLD_PCT` (clamped to `[0.30, 0.95]`) and `JARVIS_COMPACTION_RECENT_N` (clamped at the floor of 2). Hardware-floor profiles can lower the recent window to fit tighter context budgets; the default 8 is the empirical optimum from ADR 010's gate.
 
 ### Latency benchmark harness
 

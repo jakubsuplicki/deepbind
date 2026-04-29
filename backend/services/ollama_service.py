@@ -138,6 +138,18 @@ class ModelCatalogEntry(BaseModel):
     # are the load-bearing signal, not the absolute numbers.
     bytes_per_kv_token: int = 4096  # transformer default; mamba/swa override below
     attention_arch: Literal["transformer", "mamba", "swa"] = "transformer"
+    # ADR 009 — effective (RULER-safe) context budget vs advertised context.
+    # Per research-1 §"Long-context performance", the operational ceiling is
+    # roughly half the advertised window before quality degrades; mamba/SWA
+    # families degrade more gracefully and keep something close to native.
+    # Defaults below are conservative; explicit per-entry overrides below
+    # reflect the research record (Qwen3 dense ~32K, Qwen3 MoE ~64K, etc.).
+    effective_context_tokens: int = 32768
+    # HuggingFace tokenizer id for accurate token counting. Optional — when
+    # None, token_counting falls back to a char/4 approximation. Setting an
+    # explicit id is the difference between accurate budgets in Polish/Chinese
+    # vs ~30% drift on non-English content (ADR 009 driver §3).
+    tokenizer_id: Optional[str] = None
 
 
 class ModelRecommendation(BaseModel):
@@ -252,6 +264,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=False,
         bytes_per_kv_token=2048,
         attention_arch="transformer",
+        effective_context_tokens=32768,
+        tokenizer_id="Qwen/Qwen3-1.7B",
     ),
     ModelCatalogEntry(
         id="qwen3-4b",
@@ -272,6 +286,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=False,
         bytes_per_kv_token=3072,
         attention_arch="transformer",
+        effective_context_tokens=32768,
+        tokenizer_id="Qwen/Qwen3-4B",
     ),
     ModelCatalogEntry(
         id="qwen3-8b",
@@ -292,6 +308,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=True,
         bytes_per_kv_token=4096,
         attention_arch="transformer",
+        effective_context_tokens=32768,
+        tokenizer_id="Qwen/Qwen3-8B",
     ),
     ModelCatalogEntry(
         id="ministral-3-8b",
@@ -312,6 +330,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=False,
         bytes_per_kv_token=3072,
         attention_arch="transformer",
+        # Ministral-3 advertises 256K native; conservative RULER-safe ceiling.
+        effective_context_tokens=65536,
+        tokenizer_id="mistralai/Ministral-3-8B",
     ),
     ModelCatalogEntry(
         id="gemma4-e4b",
@@ -332,6 +353,10 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=True,
         bytes_per_kv_token=1024,
         attention_arch="swa",
+        # SWA degrades faster on long context (research-1 §SWA) — half the
+        # advertised 128K, not the full window.
+        effective_context_tokens=65536,
+        tokenizer_id="google/gemma-4-e4b",
     ),
     ModelCatalogEntry(
         id="devstral-small-2-24b",
@@ -352,6 +377,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         native_tools=True,
         bytes_per_kv_token=5120,
         attention_arch="transformer",
+        # 256K advertised; RULER-safe at the dense-transformer scale ~64K.
+        effective_context_tokens=65536,
+        tokenizer_id="mistralai/Devstral-Small-2-24B-2507",
     ),
     # ──────────────────────────────────────────────────────────────────────
     # Entries below carry `internal=True` because their Ollama registry tags
@@ -385,6 +413,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=1536,
         attention_arch="swa",
+        # SWA at MoE 26B/4B-active scale; conservative half-window ceiling.
+        effective_context_tokens=65536,
+        tokenizer_id="google/gemma-4-26b-a4b",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — Qwen3 -2507 split fine-tunes use various
@@ -408,6 +439,10 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=3072,
         attention_arch="transformer",
+        # Qwen3 dense Instruct-2507 advertises 256K; dense-transformer RULER
+        # ceiling stays at the family ~32K floor.
+        effective_context_tokens=32768,
+        tokenizer_id="Qwen/Qwen3-4B-Instruct-2507",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — `qwen3:14b` is plausible but unverified.
@@ -430,6 +465,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=5120,
         attention_arch="transformer",
+        effective_context_tokens=32768,
+        tokenizer_id="Qwen/Qwen3-14B",
     ),
     ModelCatalogEntry(
         # Verified absent on Ollama 0.18.0 (2026-04-28): `ollama pull qwen3:30b-a3b-instruct-2507`
@@ -463,6 +500,10 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=4096,
         attention_arch="transformer",
+        # MoE 30B/3B-active — research-1 calls out roughly double the dense
+        # ceiling. Conservative 64K stays safe.
+        effective_context_tokens=65536,
+        tokenizer_id="Qwen/Qwen3-30B-A3B-Instruct-2507",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — IBM Granite 4.0 tag conventions vary
@@ -486,6 +527,10 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=256,
         attention_arch="mamba",
+        # Hybrid Mamba degrades less on long context; the full native window
+        # is operational, not half.
+        effective_context_tokens=32768,
+        tokenizer_id="ibm-granite/granite-4.0-h-micro",
     ),
     ModelCatalogEntry(
         id="granite-4-h-tiny",
@@ -507,6 +552,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=512,
         attention_arch="mamba",
+        effective_context_tokens=131072,
+        tokenizer_id="ibm-granite/granite-4.0-h-tiny",
     ),
     ModelCatalogEntry(
         id="granite-4-h-small",
@@ -528,6 +575,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         internal=True,
         bytes_per_kv_token=1024,
         attention_arch="mamba",
+        effective_context_tokens=131072,
+        tokenizer_id="ibm-granite/granite-4.0-h-small",
     ),
 ]
 

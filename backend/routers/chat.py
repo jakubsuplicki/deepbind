@@ -298,6 +298,106 @@ def _make_llm(provider: Optional[str], model: Optional[str], api_key: str, base_
     return ClaudeService(api_key=api_key)
 
 
+def _resolve_system_prompt_budget(
+    provider: Optional[str], model: Optional[str]
+) -> tuple[Optional[int], Optional[str]]:
+    """Compute the system-prompt token budget for the active model.
+
+    Returns ``(budget_tokens, tokenizer_id)``. ``(None, None)`` is the
+    safe fallback that opts the request out of budget enforcement —
+    used for cloud providers (Anthropic / OpenAI manage their own
+    context server-side) and for local models without a catalog entry.
+    """
+    if provider != "ollama" or not model:
+        return None, None
+    from services.ollama_service import get_model_by_litellm
+    from services.claude import _SYSTEM_PROMPT_BUDGET_FRACTION
+
+    entry = get_model_by_litellm(model)
+    if entry is None:
+        return None, None
+    budget = int(entry.effective_context_tokens * _SYSTEM_PROMPT_BUDGET_FRACTION)
+    return budget, entry.tokenizer_id
+
+
+async def _maybe_compact(
+    messages: list[dict],
+    *,
+    session_id: str,
+    system_prompt: str,
+    provider: Optional[str],
+    model: Optional[str],
+    ws: WebSocket,
+) -> list[dict]:
+    """Apply ADR 009 production compaction when the active model is local.
+
+    Returns the (possibly compacted) message list. Records an event on
+    the session row when compaction fires; emits a ``compaction`` WS
+    event so the frontend can surface "this turn was compacted" UI.
+
+    Anthropic / OpenAI / other cloud providers are skipped — their
+    context windows are managed server-side, and the catalog only
+    carries entries for the local Ollama models. A future ADR can
+    extend the catalog to cover hosted providers if cross-provider
+    compaction parity becomes a requirement.
+    """
+    # Cloud providers handle context server-side; only run compaction
+    # when we're routing through a known local catalog entry.
+    if provider != "ollama" or not model:
+        return messages
+
+    # Wrap the entire compaction path in one guard. Compaction is a
+    # quality lift, not a correctness gate — any failure (catalog
+    # lookup, tokenizer load, retrieval, recording, WS emission) must
+    # degrade to "use uncompacted history" rather than abort the turn.
+    # Without this wrapper, an unhandled exception here would propagate
+    # to _handle_message which has no surrounding try, dropping the WS
+    # connection silently.
+    try:
+        from services.ollama_service import get_model_by_litellm
+        from services.compaction_service import compact_messages
+        from services.token_counting import count_tokens
+
+        entry = get_model_by_litellm(model)
+        if entry is None:
+            return messages
+
+        system_prompt_tokens = count_tokens(system_prompt, tokenizer_id=entry.tokenizer_id)
+
+        result = await compact_messages(
+            messages,
+            effective_context_tokens=entry.effective_context_tokens,
+            tokenizer_id=entry.tokenizer_id,
+            system_prompt_tokens=system_prompt_tokens,
+            current_session_id=session_id,
+        )
+
+        if result.compacted:
+            event = result.as_event()
+            session_service.record_compaction_event(session_id, event)
+            try:
+                await _send_event(
+                    ws, "compaction",
+                    turns_dropped=result.turns_dropped,
+                    recent_window_size=result.recent_window_size,
+                    tokens_before=result.tokens_before,
+                    tokens_after=result.tokens_after,
+                    effective_ctx=result.effective_ctx,
+                    retrieval_paths=[r.get("path", "") for r in result.retrieval_results],
+                )
+            except Exception:
+                # WS may already be torn down — surface at INFO so an
+                # operator monitoring the production logs can see the
+                # client missed the compaction notification (the audit
+                # event was already recorded above this).
+                logger.info("Failed to emit compaction WS event for session %s", session_id)
+
+        return result.messages
+    except Exception:
+        logger.exception("Compaction wiring failed for session %s; using uncompacted history", session_id)
+        return messages
+
+
 async def _handle_message(
     ws: WebSocket,
     session_id: str,
@@ -324,7 +424,32 @@ async def _handle_message(
             "expected list. The strategy boundary rejects malformed returns "
             "to prevent confusing provider-level errors downstream."
         )
-    system_prompt, prompt_stats = await build_system_prompt_with_stats(content, graph_scope=graph_scope)
+
+    # ADR 009 — derive system-prompt budget from the active model's
+    # effective ceiling so the retrieved-context block can be capped if a
+    # huge retrieval would push the prompt past the model's safe window.
+    sp_budget_tokens, sp_tokenizer_id = _resolve_system_prompt_budget(provider, model)
+
+    system_prompt, prompt_stats = await build_system_prompt_with_stats(
+        content,
+        graph_scope=graph_scope,
+        system_prompt_budget_tokens=sp_budget_tokens,
+        tokenizer_id=sp_tokenizer_id,
+    )
+
+    # ADR 009 §"Atomicity" — compaction runs ONLY here at the per-turn
+    # boundary, never inside _stream_follow_up. Triggered when projected
+    # tokens exceed `threshold_pct × effective_ctx_tokens`. No-ops when
+    # the active model has no catalog entry (Anthropic / OpenAI manage
+    # their own context server-side).
+    messages = await _maybe_compact(
+        messages,
+        session_id=session_id,
+        system_prompt=system_prompt,
+        provider=provider,
+        model=model,
+        ws=ws,
+    )
     active_specs = specialist_service.get_active_specialists()
     tools = specialist_service.filter_tools(TOOLS, specialists=active_specs)
     # Check token budget before calling Claude

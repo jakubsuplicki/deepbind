@@ -6,6 +6,7 @@ pytestmark = pytest.mark.anyio(backends=["asyncio"])
 
 from services.session_service import (
     SessionNotFoundError,
+    _save_to_memory_locks,
     _sessions,
     add_message,
     create_session,
@@ -28,8 +29,10 @@ def anyio_backend(request):
 @pytest.fixture(autouse=True)
 def clean_sessions():
     _sessions.clear()
+    _save_to_memory_locks.clear()
     yield
     _sessions.clear()
+    _save_to_memory_locks.clear()
 
 
 @pytest.fixture
@@ -203,3 +206,51 @@ def test_record_tool_use(ws):
     save_session(sid, ws)
     data = json.loads((ws / "app" / "sessions" / f"{sid}.json").read_text())
     assert sorted(data["tools_used"]) == ["create_plan", "search_notes"]
+
+
+# ── Save-lock dict lifecycle (ADR 009) ────────────────────────────────
+
+
+async def test_delete_session_drops_save_lock():
+    """The per-session asyncio.Lock used by save_session_to_memory must
+    be dropped when the session is deleted; otherwise the lock dict
+    leaks one entry per ever-seen session for the process lifetime.
+    """
+    from services.session_service import save_session_to_memory
+
+    sid = create_session()
+    add_message(sid, "user", "hello")
+    add_message(sid, "assistant", "hi")
+    # Touch the lock so it actually gets created.
+    _ = await save_session_to_memory(sid)  # may write to memory; ignore result
+    assert sid in _save_to_memory_locks
+    delete_session(sid)
+    assert sid not in _save_to_memory_locks
+
+
+def test_evict_oldest_sessions_drops_save_lock():
+    """Eviction caused by exceeding MAX_IN_MEMORY_SESSIONS must also
+    drop the per-session save lock to bound the dict's growth."""
+    from services.session_service import (
+        MAX_IN_MEMORY_SESSIONS,
+        _evict_oldest_sessions,
+    )
+
+    # Stub locks for two distinct ids without going through the async
+    # save path; the eviction logic only cares that the entries exist.
+    import asyncio
+    sids = [create_session() for _ in range(MAX_IN_MEMORY_SESSIONS)]
+    for sid in sids:
+        _save_to_memory_locks[sid] = asyncio.Lock()
+    # Add one more to push past the cap and force one eviction.
+    overflow_sid = create_session()
+    _save_to_memory_locks[overflow_sid] = asyncio.Lock()
+    _evict_oldest_sessions()
+
+    # Whichever session was evicted must have lost its lock too.
+    surviving_sids = set(_sessions.keys())
+    evicted_sids = (set(sids) | {overflow_sid}) - surviving_sids
+    for evicted in evicted_sids:
+        assert evicted not in _save_to_memory_locks, (
+            f"lock leaked for evicted session {evicted}"
+        )

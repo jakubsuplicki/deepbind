@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -16,6 +17,17 @@ MAX_IN_MEMORY_SESSIONS = 10
 MAX_SESSION_FILES = 200
 
 _sessions: dict[str, dict] = {}
+
+# Per-session async locks for save_session_to_memory. The dedup-and-
+# write block scans memory/conversations/*.md for an existing note with
+# the same session_id, then either updates it or creates a new one.
+# Two coroutines saving the same session concurrently (e.g. the
+# debounced background task fires at the same moment as the explicit
+# WebSocketDisconnect save) can both find no existing note before
+# either has written, producing duplicate files for the same logical
+# session. The lock serialises the dedup-and-write so at most one
+# coroutine is inside the critical section at a time.
+_save_to_memory_locks: dict[str, asyncio.Lock] = {}
 
 
 class SessionNotFoundError(Exception):
@@ -55,6 +67,12 @@ def _evict_oldest_sessions(exclude: str = "") -> None:
         except Exception:
             pass
         _sessions.pop(oldest_id, None)
+        # Drop the per-session save lock too — keeping it would leak
+        # one Lock instance per evicted session for the lifetime of
+        # the process. Safe to drop because the session is no longer
+        # in ``_sessions``: any new save_session_to_memory call for
+        # this id would short-circuit on the missing-session check.
+        _save_to_memory_locks.pop(oldest_id, None)
 
 
 def create_session() -> str:
@@ -118,6 +136,7 @@ def get_messages(session_id: str) -> list[dict]:
 
 def delete_session(session_id: str) -> None:
     _sessions.pop(session_id, None)
+    _save_to_memory_locks.pop(session_id, None)
 
 
 def record_tool_use(session_id: str, tool_name: str) -> None:
@@ -133,6 +152,45 @@ def record_note_access(session_id: str, note_path: str) -> None:
     if not session:
         return
     session.setdefault("notes_accessed", set()).add(note_path)
+
+
+def record_compaction_event(session_id: str, event: dict) -> None:
+    """Append a compaction-event record to the session row (ADR 009).
+
+    Each event is the dict returned by ``CompactionResult.as_event()``.
+    Compliance buyers see what the model "saw" at each turn alongside
+    the per-turn ``model_id``; the ordered list lets the UI re-render
+    "this turn was compacted, here's what got substituted."
+
+    Persisted via ``_auto_persist`` immediately so the audit trail
+    survives a process death between the compaction event and the
+    next assistant ``add_message`` (which is when ``_auto_persist``
+    would otherwise fire). Without this immediate save, a crash inside
+    the LLM stream — or a non-swallowed tool-loop exception — would
+    leave the event in memory only; the saved session JSON on disk
+    would have no record of the compaction. Compliance buyers expect
+    the audit trail to be at least as durable as the chat transcript.
+
+    Tests patch ``_auto_persist`` via the autouse ``_no_auto_persist``
+    fixture so this call is a no-op there, matching the existing
+    ``add_message`` contract.
+    """
+    session = _sessions.get(session_id)
+    if not session:
+        return
+    session.setdefault("compaction_events", []).append(event)
+    try:
+        _auto_persist(session_id)
+    except Exception:
+        logger.warning("Failed to auto-persist compaction event for %s", session_id)
+
+
+def get_compaction_events(session_id: str) -> List[dict]:
+    """Return the ordered list of compaction events for a session."""
+    session = _sessions.get(session_id)
+    if not session:
+        return []
+    return list(session.get("compaction_events", []))
 
 
 def _get_workspace_path(workspace_path: Optional[Path]) -> Path:
@@ -170,6 +228,11 @@ def save_session(session_id: str, workspace_path: Optional[Path] = None) -> None
         "messages": messages,
         "tools_used": sorted(session.get("tools_used", set())),
         "notes_accessed": sorted(session.get("notes_accessed", set())),
+        # ADR 009 audit trail — compaction events written by the chat
+        # router at per-turn boundaries. Always included (empty list when
+        # nothing has fired yet) so consumers don't have to defend against
+        # the key being missing.
+        "compaction_events": list(session.get("compaction_events", [])),
     }
 
     filepath = sessions_dir / f"{session_id}.json"
@@ -252,6 +315,10 @@ def resume_session(session_id: str, workspace_path: Optional[Path] = None) -> st
         "created_at": data.get("created_at", datetime.now(timezone.utc).isoformat()),
         "tools_used": set(data.get("tools_used", [])),
         "notes_accessed": set(data.get("notes_accessed", [])),
+        # Restore ADR 009 audit trail — compliance buyers expect the
+        # event log to survive process restarts the same way the chat
+        # transcript does.
+        "compaction_events": list(data.get("compaction_events", [])),
     }
     return session_id
 
@@ -461,6 +528,40 @@ async def save_session_to_memory(
     if not (has_user and has_assistant):
         return None
 
+    # Serialise concurrent saves for the same session — the dedup
+    # scan-and-write below is not atomic, and two coroutines racing
+    # would otherwise produce two notes for one logical session.
+    #
+    # Note: ``messages`` is a live reference to ``session["messages"]``,
+    # not an isolated snapshot. A concurrent ``add_message`` that
+    # interleaves between the gating checks above and lock acquisition
+    # will appear in the saved JSON under the lock. This is benign and
+    # actually preferable — the saved note is fresher rather than
+    # staler — but worth documenting so a future reader doesn't read
+    # the parameter passing as defensive copying.
+    lock = _save_to_memory_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        return await _save_session_to_memory_locked(
+            session_id, session, messages, workspace_path,
+        )
+
+
+async def _save_session_to_memory_locked(
+    session_id: str,
+    session: dict,
+    messages: List[dict],
+    workspace_path: Optional[Path],
+) -> Optional[str]:
+    """Inner critical section of ``save_session_to_memory``.
+
+    Held under the per-session lock. Split out so the locking is a
+    single visible decoration on the public function rather than an
+    indented block wrapping the entire 80-line body.
+
+    ``messages`` is the same list object stored in ``session["messages"]``
+    (passed by reference, not copied) — see the comment in the public
+    wrapper.
+    """
     from services import memory_service, graph_service
 
     ws = workspace_path

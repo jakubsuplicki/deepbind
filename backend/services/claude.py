@@ -305,10 +305,22 @@ async def build_system_prompt(
     return prompt
 
 
+# ADR 009 §"System-prompt budget enforcement" — a retrieval that surfaces
+# too many notes can balloon the system prompt past the model's effective
+# ceiling. We cap the *retrieved-context* block specifically (not the
+# base persona, not the language reminder) since that's the part that
+# scales with retrieval depth. 30% of effective ctx is conservative —
+# leaves 70% for history + output reserve.
+_SYSTEM_PROMPT_BUDGET_FRACTION = 0.30
+
+
 async def build_system_prompt_with_stats(
     user_message: str,
     workspace_path=None,
     graph_scope: Optional[str] = None,
+    *,
+    system_prompt_budget_tokens: Optional[int] = None,
+    tokenizer_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """Build the system prompt and return token-attribution stats.
 
@@ -317,6 +329,15 @@ async def build_system_prompt_with_stats(
       - context_tokens: retrieved notes / issues / decisions context block
       - lang_tokens: language reminder footer
       - total_tokens: sum (approx, 4 chars ≈ 1 token)
+
+    When ``system_prompt_budget_tokens`` is supplied (typically derived
+    from the active model's ``effective_context_tokens × 0.30``), the
+    retrieved-context block is iteratively truncated until the total
+    fits. Per ADR 009 §"System-prompt budget enforcement" the truncation
+    keeps the highest-priority retrieved notes (which arrive first in
+    the assembled context) and discards the tail. ``tokenizer_id`` is
+    optional; ``None`` falls back to the ``count_tokens`` char/4
+    estimator.
     """
     from services import specialist_service
     from services.context_builder import build_graph_scoped_context
@@ -362,6 +383,28 @@ async def build_system_prompt_with_stats(
     # assistant token wins over instructions buried at the top of a long prompt.
     lang_reminder = _language_reminder(user_message)
 
+    # ADR 009 — enforce a total system-prompt budget when supplied. Only
+    # the retrieved-context block is truncated; base persona + language
+    # reminder are stable in size and load-bearing. The trace stays
+    # attached to the original retrieval ranking so the UI continues to
+    # show the user *why* a note was picked even if its body was
+    # truncated to fit. The helper also returns the token counts it
+    # already computed so the stats block below doesn't re-encode the
+    # same strings.
+    (
+        context,
+        context_truncated,
+        base_tok_cached,
+        context_tok_cached,
+        lang_tok_cached,
+    ) = _enforce_system_prompt_budget(
+        base=base,
+        context=context,
+        lang_reminder=lang_reminder,
+        budget_tokens=system_prompt_budget_tokens,
+        tokenizer_id=tokenizer_id,
+    )
+
     if not context:
         prompt = base + "\n\n" + lang_reminder
     else:
@@ -373,15 +416,131 @@ async def build_system_prompt_with_stats(
             + lang_reminder
         )
 
+    # Use the configured tokenizer when one is available so the stats
+    # the audit log forwards (via prompt_stats["context_tokens"] in
+    # log_usage) match the numbers the compaction trigger and the
+    # system-prompt budget enforcement actually saw. The pre-ADR-009
+    # char/4 path stays as the fallback when no tokenizer_id is in
+    # scope (legacy callers like the duel orchestrator). Without this
+    # alignment the audit logs diverge 20–40% from the budget on
+    # Polish/Chinese/Arabic content, which is exactly the languages
+    # the tokenizer was added for.
+    #
+    # When budget enforcement ran, it already paid the encode cost for
+    # base / context / lang_reminder; reuse those counts. Only the
+    # final assembled prompt count needs a fresh encode either way.
+    from services.token_counting import count_tokens
+
+    base_tok = base_tok_cached if base_tok_cached is not None \
+        else count_tokens(base, tokenizer_id=tokenizer_id)
+    context_tok = context_tok_cached if context_tok_cached is not None \
+        else (count_tokens(context, tokenizer_id=tokenizer_id) if context else 0)
+    lang_tok = lang_tok_cached if lang_tok_cached is not None \
+        else count_tokens(lang_reminder, tokenizer_id=tokenizer_id)
+    total_tok = count_tokens(prompt, tokenizer_id=tokenizer_id)
+
     stats = {
-        "base_tokens": len(base) // 4,
-        "context_tokens": (len(context) // 4) if context else 0,
-        "lang_tokens": len(lang_reminder) // 4,
-        "total_tokens": len(prompt) // 4,
+        "base_tokens": base_tok,
+        "context_tokens": context_tok,
+        "lang_tokens": lang_tok,
+        "total_tokens": total_tok,
+        # ADR 009 — surface whether the system-prompt budget kicked in
+        # so callers can log it alongside the compaction event.
+        "context_truncated": context_truncated,
         # Step 28a — per-note retrieval trace surfaced over the chat WS.
         "trace": trace,
     }
     return prompt, stats
+
+
+def _enforce_system_prompt_budget(
+    *,
+    base: str,
+    context: Optional[str],
+    lang_reminder: str,
+    budget_tokens: Optional[int],
+    tokenizer_id: Optional[str],
+) -> tuple[Optional[str], bool, Optional[int], Optional[int], Optional[int]]:
+    """Cap the retrieved-context block so the assembled prompt fits ``budget_tokens``.
+
+    Returns ``(maybe_truncated_context, was_truncated, base_tokens,
+    context_tokens, lang_tokens)``. The trailing token counts are
+    populated when the helper actually ran the budget calculation
+    (i.e. ``budget_tokens`` was set) so the caller can reuse them in
+    its stats block instead of re-encoding the same strings — three
+    redundant HF tokenizer ``encode`` calls per turn on a hot path.
+    All three are ``None`` when the helper short-circuited (no
+    budget, no context); the caller then falls back to computing
+    counts itself, identical to the pre-fix behavior.
+
+    The truncation is **proportional** rather than note-by-note. Doing
+    this at the retrieval-result granularity would require routing the
+    structured result list through this function; instead we rely on the
+    fact that the assembled context already has highest-priority items
+    first (per ``build_context``), so truncating from the tail
+    preferentially drops the lower-relevance content first.
+    """
+    if not budget_tokens or budget_tokens <= 0 or not context:
+        return context, False, None, None, None
+
+    from services.token_counting import count_tokens
+
+    base_tokens = count_tokens(base, tokenizer_id=tokenizer_id)
+    lang_tokens = count_tokens(lang_reminder, tokenizer_id=tokenizer_id)
+    overhead = base_tokens + lang_tokens
+    if overhead >= budget_tokens:
+        # Base + reminder already exceed the budget — there's nothing the
+        # context truncation can do. Drop the context entirely so we at
+        # least don't make the overflow worse.
+        return "", True, base_tokens, 0, lang_tokens
+
+    context_budget = budget_tokens - overhead
+    context_tokens = count_tokens(context, tokenizer_id=tokenizer_id)
+    if context_tokens <= context_budget:
+        return context, False, base_tokens, context_tokens, lang_tokens
+
+    # Binary-shrink the context string until it fits. Slicing by chars is
+    # crude but stable; the alternative (re-tokenize, slice tokens, decode)
+    # is far more expensive per turn for a knob the user only hits during
+    # over-retrieval. The first iteration almost always succeeds because
+    # the char-to-token ratio is roughly constant within a single document.
+    ratio = context_budget / max(1, context_tokens)
+    target_chars = int(len(context) * ratio)
+    truncated = context[:target_chars].rstrip()
+    # Re-check; if the first cut overshoots (multi-byte tokens compress
+    # differently), shave another 10% off and retry up to a few times.
+    truncated_tokens = count_tokens(truncated, tokenizer_id=tokenizer_id)
+    for _ in range(4):
+        if truncated_tokens <= context_budget:
+            break
+        target_chars = int(len(truncated) * 0.90)
+        truncated = truncated[:target_chars].rstrip()
+        truncated_tokens = count_tokens(truncated, tokenizer_id=tokenizer_id)
+
+    # The marker itself costs tokens — budget against the assembled
+    # output, not the bare truncation. Reserve enough room for the
+    # marker and re-shrink if needed; if the loop still hasn't
+    # converged, drop the context entirely so the invariant
+    # ``assembled_prompt_tokens <= budget_tokens`` always holds. The
+    # ADR 009 invariant is that the prompt fits — silently shipping
+    # over-budget content would defeat the entire enforcement step.
+    marker = "\n\n... [retrieved context truncated to fit budget] ..."
+    marker_tokens = count_tokens(marker, tokenizer_id=tokenizer_id)
+    while truncated_tokens + marker_tokens > context_budget:
+        if not truncated:
+            break
+        target_chars = int(len(truncated) * 0.80)
+        if target_chars <= 0:
+            truncated = ""
+            truncated_tokens = 0
+            break
+        truncated = truncated[:target_chars].rstrip()
+        truncated_tokens = count_tokens(truncated, tokenizer_id=tokenizer_id)
+    if not truncated:
+        return "", True, base_tokens, 0, lang_tokens
+    final_context = truncated + marker
+    final_context_tokens = truncated_tokens + marker_tokens
+    return final_context, True, base_tokens, final_context_tokens, lang_tokens
 
 
 def _language_reminder(user_message: str) -> str:

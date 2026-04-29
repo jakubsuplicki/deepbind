@@ -1,8 +1,8 @@
 # ADR 009 — Retrieval-first context-overflow compaction
 
-**Status:** Accepted
-**Date:** 2026-04-27 (initial), amended 2026-04-28 (eval-side `retrieval-substitution-v1` landed; production wiring pending)
-**Related:** [`docs/features/retrieval.md`](../../features/retrieval.md) · [`docs/features/sessions.md`](../../features/sessions.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §5
+**Status:** Accepted — production wiring landed
+**Date:** 2026-04-27 (initial), amended 2026-04-28 (eval-side `retrieval-substitution-v1` landed; gate verdict justified production wiring), 2026-04-29 (production-side compaction wiring landed; same-day code-review fixes pass)
+**Related:** [`docs/features/retrieval.md`](../../features/retrieval.md) · [`docs/features/sessions.md`](../../features/sessions.md) · [`docs/features/chat.md`](../../features/chat.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §5
 
 ## Context
 
@@ -233,6 +233,97 @@ Backend chunks #1–#5 land first; UI chunk #6 follows once the backend behavior
 - **Vault-retrieval quality at production substrate.** The eval validated history-self-retrieval at recent_n=8/top_k=3. Production reaches into the vault via the retrieval pipeline; that pipeline's "find earlier turn" entry point doesn't exist yet and is part of build-step #2 above. Whether the vault substrate matches eval-side quality is an open empirical question that the next conversation-eval run (with `retrieval_enabled=True` against a populated workspace) will answer.
 - **Threshold tuning.** The 70% proactive-trigger threshold and the recent_n=8 default are now eval-justified for this fixture set, but real-usage data will refine them. Tune via the existing harness once production compaction lands.
 - **Failure-mode coverage.** The 19 launch fixtures cover the failure modes we knew to test for. Real users will discover failure modes the fixture set didn't anticipate; the growth discipline ("add a fixture every time real usage produces a regression") applies.
+
+## Production wiring landed (2026-04-29) — what shipped
+
+The build plan filed at the end of the gate-verdict amendment is now landed in full on the backend side. UI surface (chunk #6) is the remaining work item; it attaches to the WS event + audit log this chunk shipped.
+
+### Substrate (chunk #1)
+
+`ModelCatalogEntry` ([`backend/services/ollama_service.py`](../../../backend/services/ollama_service.py)) gained:
+
+- **`effective_context_tokens`** — RULER-safe ceiling, not the advertised number. Per-entry values were chosen against [research-1 §"Long-context performance"](../../research/models/model-research-1.md): Qwen3 dense at the family floor (32K) regardless of YaRN-extended advertised window; Qwen3 MoE 30B at ~64K; Ministral-3 / Devstral-Small-2 / Gemma-4 SWA conservative at ~64K of advertised 256K-128K windows; Granite 4 hybrid Mamba runs at full native (32K / 128K / 128K) since Mamba degrades less.
+- **`tokenizer_id`** — HuggingFace reference for accurate token counting. Set per-entry where the upstream HF id is known (`Qwen/Qwen3-8B`, `ibm-granite/granite-4.0-h-micro`, etc.). Optional — `None` falls back to char/4 estimation.
+
+Token counting lives in [`backend/services/token_counting.py`](../../../backend/services/token_counting.py): a thin wrapper around the `tokenizers` Rust-backed Python package (chosen over `transformers` for size, over `tiktoken` for catalog coverage). Lazy-loads tokenizers, caches them per-process, and treats failed loads as sticky so a transient network hiccup doesn't re-attempt every turn. Honors `HF_HUB_OFFLINE=1` and a `JARVIS_DISABLE_TOKENIZER_DOWNLOAD=1` knob so CI runs deterministically without touching the network. Counts both single strings and Anthropic-style block-list message content (text / tool_use / tool_result) so the chat router can budget against actual provider payload shape.
+
+### Compaction service (chunk #2)
+
+[`backend/services/compaction_service.py`](../../../backend/services/compaction_service.py) implements the production retrieval-first policy:
+
+1. Strips `<think>...</think>` scratchpad from assistant turns unconditionally (Qwen3 Thinking variants leak these even with `think: false` on Ollama 0.18; the in-stream filter catches the live response, this catches what made it into stored history).
+2. Computes `headroom = effective_ctx − system_prompt − output_reserve`, then `budget = headroom × threshold_pct`. Defaults: `recent_n=8`, `top_k=3`, `threshold_pct=0.70` — the gate-validated optimum.
+3. When `history_tokens > budget`, finds the `recent_n`-th-to-last *real user-turn* boundary (tool_result-only user messages don't count) and drops everything before it.
+4. Reaches into the markdown vault via [`find_earlier_turn_context`](../../../backend/services/retrieval/sessions.py) for the top-`top_k` matches against the latest user turn. The eval-side scaffold reaches into the dropped portion of the conversation history; production reaches into the canonical store, per the original ADR design.
+5. Synthesizes a leading user-role message summarizing the retrieved pairs and prepends it to the kept window.
+
+Returns a `CompactionResult` carrying the assembled messages, the audit-event payload (`turns_dropped`, `summary_used`, `recent_window_size`, `effective_ctx_at_event`, `tokens_before`, `tokens_after`, `threshold_pct`, `retrieval_paths`, `reason`), and the retrieved-vault attribution. Tunable via `JARVIS_COMPACTION_THRESHOLD_PCT` (clamped to `[0.30, 0.95]`) and `JARVIS_COMPACTION_RECENT_N` (clamped at floor of 2).
+
+### Vault-retrieval entry point (chunk #2 substrate)
+
+[`backend/services/retrieval/sessions.py::find_earlier_turn_context`](../../../backend/services/retrieval/sessions.py) is the "find earlier turn" entry point referenced in the ADR's "What this changes about existing code" list. It scopes `memory_service.list_notes` to `folder='conversations'`, reads the top-K matches off disk, strips frontmatter from the snippet, and excludes the **current** session's own saved conversation note (frontmatter `session_id` match) so the user doesn't see "earlier context" that's actually their current turn. Failures (index unavailable, file missing) are caught — vault retrieval must never break a chat turn.
+
+We deliberately do *not* run the full hybrid retrieval pipeline here: BM25 alone is sufficient for "find a conversation that mentioned X" since the corpus and query share nearly identical surface text, and skipping cosine/graph keeps compaction-trigger latency low. If quality measurement (open follow-up #2) shows BM25 alone is insufficient, this is the right place to graduate.
+
+### Chat router wiring (chunk #3) and atomicity
+
+[`backend/routers/chat.py::_handle_message`](../../../backend/routers/chat.py) now calls `_maybe_compact` immediately after `ContextStrategy.assemble` and before the LLM stream is opened. `_maybe_compact` looks up the active model in the catalog (`get_model_by_litellm`); cloud providers without catalog entries (Anthropic / OpenAI) bypass compaction since they manage context server-side. The tool-call loop in `_stream_follow_up` deliberately does NOT call `_maybe_compact` mid-loop — atomicity per ADR 009 §"Atomicity" is enforced.
+
+When compaction fires, the router records the audit event on the session row and emits a `compaction` WebSocket event carrying `turns_dropped`, `recent_window_size`, `tokens_before`, `tokens_after`, `effective_ctx`, and `retrieval_paths`. Internal failures inside `compact_messages` are caught and the turn proceeds with the uncompacted history — compaction is a quality lift, not a correctness gate.
+
+### Audit trail (chunk #4)
+
+[`session_service`](../../../backend/services/session_service.py) gained `record_compaction_event` and `get_compaction_events`; the `compaction_events` list is included in the JSON written by `save_session` and restored on `resume_session`. Compliance buyers see what the model "saw" at each turn alongside the per-turn `model_id`. A round-trip test pins this in `tests/test_chat_compaction_wiring.py`.
+
+### System-prompt budget enforcement (chunk #5)
+
+[`build_system_prompt_with_stats`](../../../backend/services/claude.py) accepts optional `system_prompt_budget_tokens` and `tokenizer_id` kwargs. The chat router computes the budget as `0.30 × effective_context_tokens` of the active model and passes both. The new `_enforce_system_prompt_budget` helper truncates the retrieved-context block (not the base persona, not the language reminder) until the prompt fits, keeping highest-priority retrieved content first. The `prompt_stats["context_truncated"]` field surfaces whether truncation kicked in. Cloud providers and unknown local models opt out cleanly via `(None, None)` from `_resolve_system_prompt_budget`.
+
+### Test coverage
+
+45 new tests across 5 files, full suite green at 1486 passed / 204 skipped:
+
+- [`tests/test_token_counting.py`](../../../backend/tests/test_token_counting.py) — fallback path, tokenizer-loaded path (stubbed for determinism), cache stickiness on failure, message-block flattening for tool_use / tool_result.
+- [`tests/test_compaction_service.py`](../../../backend/tests/test_compaction_service.py) — under-threshold no-op, recent-N cut-index, recent-N floor, tool-result-only user messages excluded from the count, vault failure degrades gracefully, `<think>` stripping, audit event shape, env-var threshold/recent-N overrides, defaults pinned to the ADR 010 gate verdict.
+- [`tests/test_retrieval_sessions.py`](../../../backend/tests/test_retrieval_sessions.py) — empty-query short-circuit, `list_notes` failure handling, missing-file resilience, current-session exclusion, frontmatter stripping, `top_k` honored.
+- [`tests/test_chat_compaction_wiring.py`](../../../backend/tests/test_chat_compaction_wiring.py) — `_resolve_system_prompt_budget` matrix (cloud vs local-known vs local-unknown), `_maybe_compact` audit-event recording + WS emission, internal-failure fallback, save/resume round-trip of the audit log.
+- [`tests/test_system_prompt_budget.py`](../../../backend/tests/test_system_prompt_budget.py) — no-budget identity, under-budget identity, over-budget truncation, pathological budget drops the context entirely.
+
+### Code-review fixes (2026-04-29 evening)
+
+A post-landing review identified twelve issues across the chunk; all were applied in the same day. The non-cosmetic fixes:
+
+- **Substitution block role flipped from `user` to `assistant`.** The kept window's first message after the cut is always a real user turn (the cut lands on a user-turn boundary by construction). A user-role substitution block produced consecutive same-role messages — Anthropic accepts that, but Ollama chat templates can merge or reject. Assistant-role alternates cleanly; reads naturally as "recalling earlier context." Compaction is gated to `provider=="ollama"` so Anthropic's "first message must be user" rule does not apply.
+- **`_enforce_system_prompt_budget` now respects the budget after the marker.** The previous retry loop appended the truncation marker without re-checking, so the assembled prompt could ship 5–15% over budget on dense token content. The fix budgets the marker against the context budget and re-shrinks until both fit, dropping context entirely if necessary. The ADR invariant "assembled prompt fits the budget" now always holds.
+- **Post-compaction overflow surfaced via warning log.** `compact_messages` now logs when `tokens_after > headroom` (large vault snippets pushing the kept window back over budget). Threshold-based gating is an ADR extension; this lands the diagnostic only.
+- **`_maybe_compact` exception guard widened.** Previously the catalog lookup and `count_tokens(system_prompt, …)` ran outside the try; an unhandled exception there propagated to `_handle_message` (no surrounding guard), dropping the WS connection. The whole path is now wrapped — compaction degrades to "use uncompacted history" on any failure.
+- **Audit-event persistence is now immediate.** `record_compaction_event` triggers `_auto_persist` so a process crash inside the LLM stream — or a non-swallowed tool-loop exception — cannot lose an audit event between recording and the next assistant `add_message`.
+- **Concurrent `save_session_to_memory` calls are now serialised** via a per-session `asyncio.Lock`. A debounced background save racing with a `WebSocketDisconnect` explicit save could otherwise produce two notes for one logical session, leaking past the `find_earlier_turn_context` same-session exclusion.
+- **`JARVIS_COMPACTION_RECENT_N` is clamped to `[2, 200]`** with a warning on out-of-range values. Without an upper bound, a misconfiguration to e.g. 1_000_000 would silently disable the strategy by always exceeding conversation length.
+- **`build_system_prompt_with_stats` stats use the configured tokenizer** rather than char/4 when one is in scope. Audit logs forwarded via `prompt_stats["context_tokens"]` now match the numbers the budget enforcement actually saw, especially on Polish/Chinese/Arabic content.
+- **`find_earlier_turn_context` caps the FTS limit at 50**, defending the index against an unbounded query if a caller passes a pathological `top_k`.
+
+Six additional tests pin the contracts: substitution-block-role, marker-fit invariant, recent_n ceiling clamp (kwarg + env var paths), recent_n boundary equality (`recent_n == len(user_turns)` is the "already minimal" path), consecutive think-only assistant turns, vault-retrieval list_notes ceiling. Suite at 1492 passed / 204 skipped after the fixes.
+
+A second review pass closed four follow-ups introduced or surfaced by the first fix:
+
+- **`_save_to_memory_locks` cleaned up alongside `_sessions` eviction** in both `_evict_oldest_sessions` and `delete_session`. Without this, the per-session lock dict leaked one `asyncio.Lock` entry per ever-seen session id for the lifetime of the process — small in absolute terms but principally wrong for a long-running deployment.
+- **Tightened the consecutive-think-blocks test.** The original was named "no consecutive same-role messages" but only asserted on assistant pairs, allowing user-user pairs through silently on the unusual `[user, assistant_think, assistant_think, user]` history shape. Split into two tests: one pinning that pure-think blocks are dropped (the actual behavior on unusual histories), and a new `test_strip_preserves_alternation_on_normal_history` pinning the real production contract that on realistically-alternating histories think-stripping never produces consecutive same-role messages of either kind.
+- **`_enforce_system_prompt_budget` threads token counts back to its caller.** The helper now returns `(context, was_truncated, base_tokens, context_tokens, lang_tokens)`; `build_system_prompt_with_stats` reuses the cached counts in its stats block instead of re-encoding the same strings. Saves three HF tokenizer `encode` calls per turn on the hot path; falls back to fresh counts when the helper short-circuits.
+- **Clarified the live-reference contract** in `save_session_to_memory`. The `messages` parameter is the same list object as `session["messages"]`, not a defensive copy — a concurrent `add_message` will be visible inside the locked section. This is benign (saved note is fresher rather than staler) but worth documenting so a future reader doesn't read the parameter passing as isolation.
+
+Five additional tests pin the new contracts: lock-dict cleanup on `delete_session` and `_evict_oldest_sessions`, role-alternation on normally-alternating histories, helper returning cached token counts, helper returning `None` counts when short-circuiting. Suite at 1497 passed / 204 skipped after the second-pass fixes.
+
+### What remains for ADR 009 v1
+
+Backend behavior is stable; the open chunk is the **frontend UI surface** (ADR 009 §"UI surface"):
+
+- In-active-context indicator next to each turn.
+- Pin-turn affordance (keep a turn in active context regardless of compaction).
+- Re-include affordance (promote a vault turn back into active context).
+- Compaction expand-summary view consuming the audit log.
+
+That chunk attaches to the `compaction` WebSocket event this chunk now emits and the `compaction_events` array this chunk now persists, so the contract for the frontend is set.
 
 ## Open follow-ups (non-blocking)
 
