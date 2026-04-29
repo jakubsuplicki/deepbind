@@ -547,3 +547,134 @@ Still on the table for first-ingest:
 
 First-ingest of the 911 Report at ~26 s is the new floor for this
 fixture on this hardware until one of those knobs lands.
+## Amendment 4 — knob-3 investigated: ONNX Runtime threading is already optimal (2026-04-29)
+
+**Result**: no code change. ONNX Runtime's auto-pick (`intra_op_num_threads=0`,
+which lets ORT default to the physical core count) is already the
+fastest configuration at production scale. Clamping threads to the
+P-core count — which the 64-batch micro-bench *suggested* — is 4%
+slower across a real ~5,500-chunk pass. Knob-3 closed without a
+landing.
+
+### Why we measured this anyway
+
+Amendment 2 listed knob-3 as "free ~2× if currently single-threaded."
+The current code (`backend/services/embedding_service.py::_get_model`)
+constructs `TextEmbedding(model_name=...)` with no `threads=` kwarg,
+which means fastembed leaves `intra_op_num_threads` and
+`inter_op_num_threads` at ORT's defaults (both 0 = auto). On Apple
+Silicon M5 Pro 24 GB the topology is asymmetric (4 P-cores +
+6 E-cores = 10 logical), and ORT's auto-pick blindly grabs all
+physical cores including the slower E-cores — a classic anti-pattern
+on hetero hardware. The hypothesis was that capping to the P-core
+count would cut intra-op sync waits.
+
+### Sweep results
+
+Two passes against the production embedding model
+(`paraphrase-multilingual-MiniLM-L12-v2`):
+
+**Pass 1 — single 64-text batch** (representative of `embed-batch-64`
+harness scenario), 3 timed runs each, p50:
+
+| `threads` | p50 ms | Δ vs auto |
+|----------:|-------:|----------:|
+| auto (10) | 490 | baseline |
+| 1         | 733   | +50% |
+| 2         | 555   | +13% |
+| 3         | 496   | +1% |
+| **4**     | **484** | **−1.4%** ← P-core count |
+| 5         | 483   | −1.5% |
+| 6         | 515   | +5% |
+| 8         | 526   | +7% |
+| 10        | 557   | +14% |
+
+Suggests `threads=4` or `5` is best — by ~7 ms / 64-chunk batch.
+
+**Pass 2 — production-scale 5,546-chunk pass** (the actual
+bottleneck-stage workload), warm-up + 2 timed runs, p50:
+
+| Config (`threads / batch_size / parallel`) | p50 (s) | Δ vs current |
+|---|---:|---:|
+| **auto / 256 / none** (current production) | **40.93** | baseline |
+| 4 / 256 / none | 42.72 | +4% (worse) |
+| auto / 512 / none | 42.00 | +3% (worse) |
+| auto / 1024 / none | 48.21 | +18% (worse) |
+| 4 / 1024 / none | 48.40 | +18% (worse) |
+| auto / 256 / parallel=0 | 89.09 | +118% (terrible) |
+| auto / 256 / parallel=4 | 37.31 | **−9% (faster)** |
+
+### Why the micro-bench result inverts at scale
+
+A 64-chunk batch executes a single `InferenceSession.run()` call. With
+short batches the intra-op sync-points dominate, and clamping to
+P-cores reduces sync waits.
+
+A 5,546-chunk pass executes ~22 successive `run()` calls (at
+`batch_size=256`). Across that many calls, ORT's auto-pick gets to
+keep all 10 logical cores busy because work overlaps with the next
+batch's preprocessing. The "auto over-subscribes E-cores" effect that
+hurt the single-batch case is amortized away. Net: the micro-bench
+overstated the win.
+
+This is exactly the failure mode `--scope nightly` was designed to
+catch: stage-isolated micro-bench numbers are useful but production-
+scale measurement is the truth. Recording it explicitly so we don't
+re-run the same 64-batch sweep next time.
+
+### `parallel=4` is real but not free
+
+Fastembed's `embed(parallel=4)` spawns 4 worker *processes* (not
+threads), each loading its own ORT session and ~400 MB model copy.
+That's ~1.6 GB of additional resident memory while embedding runs,
+on top of the chat-path embedding singleton. On a 24 GB laptop this
+is acceptable; on the smaller end of the supported hardware
+(8-16 GB MacBook Air, low-tier Windows) it would not be.
+
+Other costs:
+- Per-call worker spawn overhead. `embed-batch-64` (small batches)
+  almost certainly regresses with `parallel=4` because the spawn
+  amortization isn't there. Untested but high prior.
+- Process pool isolation breaks the chat-path embedding singleton
+  warm-cache benefit (every chunk-embed call would respawn).
+- 9% gain on a knob with this many trade-offs is below the bar for a
+  standalone landing.
+
+If we revisit `parallel=4`, it should be inside a *combined* knob —
+e.g. layer it with knob-4 (int8 quantized model) where the model copy
+is half size and the parallelism win compounds. Recorded as a
+deferred sub-knob, not its own line item.
+
+### Implication for knobs 4-7
+
+The 43-second embed_batch floor on this hardware is real and won't be
+moved by threading alone. Headroom from here lives in:
+
+1. **Smaller / quantized model** (knobs 4 + 5) — `(model, ONNX-config)`
+   space, not the threading space. Same compute pattern, less compute
+   per chunk.
+2. **Hardware-accelerator backend** (knob 7, MLX) — moves the work off
+   CPU entirely. Order-of-magnitude territory, but Mac-only.
+3. **Background/lazy embedding** (knob 6) — UX move, not a compute
+   move. User perceives ingest as instant; embedding catches up
+   asynchronously. Independent of all the above.
+
+Knob-3 is the first knob in this loop that closed without a landing.
+The measurement has paid for itself by ruling out a category of
+"easy" wins and re-pointing the loop at model-level changes (knob-4
+next).
+
+### What's recorded
+
+- No code change. `_get_model()` continues to construct
+  `TextEmbedding(model_name=...)` without a `threads=` kwarg.
+- No new baseline JSON. `knob_stack` continues to be
+  `[pypdfium2_extract, honest_e2e_embed]` (chunk-hash-skip is a
+  re-ingest-path knob, doesn't apply to first-ingest harness numbers).
+- The two sweep scripts (`sweep_threads.py`, `sweep_batchparallel.py`)
+  were one-off tmp tools and are not committed; the numbers above are
+  the durable record. If a future reader wants to re-verify, the
+  sweep shape is: `services.embedding_service._model = TextEmbedding(
+  model_name=..., threads=N)` then time `embed(TEXTS, batch_size=...,
+  parallel=...)` — full reconstruction in one screen.
+

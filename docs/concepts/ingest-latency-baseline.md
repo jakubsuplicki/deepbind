@@ -1,7 +1,7 @@
 ---
 title: Ingest latency baseline
 type: concept
-last_updated: 2026-04-28
+last_updated: 2026-04-29
 related_features:
   - memory
   - latency-benchmark
@@ -173,12 +173,33 @@ knob loop targets it from multiple angles.
 |---|------|---------|--------|-------|
 | 1 | **pypdfium2 replaces pdfplumber** | extract | ✅ landed (2026-04-28) | extract 55× / end-to-end ~30% |
 | 2 | **Chunk-level content-hash skip** | re-ingest path | ✅ landed (2026-04-28) | Re-ingest unchanged 25.6s → 1.4s (18.6×); partial edit 25.6s → 2s (12.9×); first-ingest unchanged |
-| 3 | ONNX Runtime threading | first-ingest embed | future | Free ~2× if currently single-threaded |
+| 3 | ONNX Runtime threading | first-ingest embed | ❌ closed (2026-04-29) | No-op at production scale; auto already optimal. `parallel=4` worth +9% but +1.6 GB RAM (deferred sub-knob) |
 | 4 | int8 quantized embedding model | first-ingest embed | future | ~2-3× embed; <2 pt MTEB regression |
 | 5 | Smaller English-only model (MiniLM-L6) | first-ingest embed | future | ~2× embed; quality measurement via ADR 010 harness |
 | 6 | Background / lazy embedding | first-ingest UX | future | UX change — user perceives ingest as ~100 ms; compute unchanged |
 | 7 | MLX backend (Apple Silicon NPU) | first-ingest embed | future tier 2 | ~5-10× on Mac; Mac-only path |
 | 8 | Parallel page extraction | extract | future, optional | PDFium isn't thread-safe; needs `multiprocessing.Pool` |
+
+### Knob-3 closed (2026-04-29) — threading is already optimal
+
+Measured: ORT's auto-pick `intra_op_num_threads=0` (= physical cores)
+is the fastest on a real 5,546-chunk pass at 40.9 s. Clamping threads
+to the M5 Pro's 4 P-cores — what the 64-batch micro-bench suggested —
+slows production-scale ingest by 4%.
+
+The 64-batch sweep favored `threads=4` by ~1.4%. The 5,546-chunk pass
+inverted that result because at scale the work spans ~22 successive
+ORT calls and the auto-pick gets to overlap them across all 10 cores.
+Single-batch sync penalties amortize away.
+
+`parallel=4` (fastembed multiprocessing) was the only positive signal
+at +9%, but at the cost of +1.6 GB resident memory (4 model copies)
+and almost-certain regression on small docs. Recorded as a sub-knob
+to layer with int8 (knob-4), not as its own landing.
+
+Net: no code change. Headroom from here is in `(model, ONNX-config)`
+or hardware-accelerator space, not threading. See
+[ADR 013 Amendment 4](../architecture/decisions/013-ingest-latency-benchmark-harness.md#amendment-4--knob-3-investigated-onnx-runtime-threading-is-already-optimal-2026-04-29).
 
 ### Production vs harness numbers
 
