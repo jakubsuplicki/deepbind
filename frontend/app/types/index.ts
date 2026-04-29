@@ -407,3 +407,61 @@ export interface PullProgress {
   total?: number
   completed?: number
 }
+
+// --- Chat-model self-test (ADR 012) ---
+
+export type ChatModelProbeVerdict =
+  | 'pass'
+  | 'fail_hardware_fit'
+  | 'fail_correctness'
+  | 'fail_speed'
+  | 'fail_unreachable'
+
+export type ChatModelProbeRerunReason =
+  | 'no_prior_probe'
+  | 'ollama_version_changed'
+  | 'platform_changed'
+  | 'catalog_added_models'
+  | 'fresh'
+
+export interface ChatModelProbeEvidence {
+  model: string
+  verdict: ChatModelProbeVerdict
+  correctness_response?: string | null
+  hardware_fit_bytes?: number | null
+  available_ram_bytes?: number | null
+  warm_short_total_ms?: number | null
+  realistic_tps?: number | null
+  error_message?: string | null
+}
+
+export interface ChatModelProbeRecord {
+  schema_version: number
+  timestamp_utc: string
+  ollama_version: string | null
+  platform: string
+  ram_gb: number | null
+  recommended_model: string | null
+  safe_fallback_used: boolean
+  candidates_evaluated: ChatModelProbeEvidence[]
+  user_override: string | null
+}
+
+export interface ChatModelProbeStatus {
+  persisted: ChatModelProbeRecord | null
+  needs_rerun: boolean
+  rerun_reason: ChatModelProbeRerunReason
+  current_environment: {
+    ollama_version: string | null
+    platform: string
+    catalog_models: string[]
+  }
+  runtime_reachable: boolean
+}
+
+export type ChatModelProbeEvent =
+  | { event: 'started'; candidate_count: number; available_ram_bytes: number | null }
+  | { event: 'candidate_start'; model: string; index: number; candidate_count: number }
+  | { event: 'candidate_evidence'; evidence: ChatModelProbeEvidence }
+  | { event: 'complete'; result: ChatModelProbeRecord }
+  | { event: 'error'; message: string }

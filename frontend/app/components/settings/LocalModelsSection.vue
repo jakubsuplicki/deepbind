@@ -126,6 +126,11 @@
       </div>
     </details>
 
+    <!-- Chat-model self-test (ADR 012) -->
+    <div v-if="localModels.isOllamaReady() && installedLocalModels.length > 0" class="local-models__group">
+      <ChatModelProbePanel variant="settings" />
+    </div>
+
     <!-- Advanced connection settings -->
     <details class="local-models__advanced">
       <summary class="local-models__all-toggle">Advanced connection settings</summary>

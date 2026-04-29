@@ -1,5 +1,18 @@
 <template>
   <div class="main-page">
+    <div v-if="showProbeRerunBanner" class="main-page__probe-banner">
+      <span class="main-page__probe-banner-icon">⚙️</span>
+      <div class="main-page__probe-banner-info">
+        <span class="main-page__probe-banner-title">Re-test recommended</span>
+        <span class="main-page__probe-banner-reason">{{ probeRerunReasonText }}</span>
+      </div>
+      <button class="main-page__probe-banner-btn" @click="handleRerunProbe">
+        Re-run
+      </button>
+      <button class="main-page__probe-banner-dismiss" @click="probeBannerDismissed = true" title="Dismiss">
+        ×
+      </button>
+    </div>
     <div class="main-page__layout">
       <SessionHistory
         :sessions="sessions"
@@ -190,6 +203,30 @@ watch(isLoading, (loading, wasLoading) => {
 
 const localModels = useLocalModels()
 const { activeProvider } = useApiKeys()
+const probe = useChatModelProbe()
+const probeBannerDismissed = ref(false)
+
+const showProbeRerunBanner = computed(() =>
+  activeProvider.value === 'ollama'
+  && probe.needsRerun.value
+  && probe.status.value?.runtime_reachable
+  && !!probe.status.value?.persisted
+  && !probeBannerDismissed.value
+  && !probe.running.value,
+)
+
+const probeRerunReasonText = computed(() => {
+  switch (probe.rerunReason.value) {
+    case 'ollama_version_changed': return 'Ollama version changed since the last self-test.'
+    case 'platform_changed': return 'Operating system changed since the last self-test.'
+    case 'catalog_added_models': return 'A new local model is available — re-run to consider it.'
+    default: return 'Environment changed since the last self-test.'
+  }
+})
+
+async function handleRerunProbe(): Promise<void> {
+  await probe.runProbe()
+}
 
 // Start/stop Ollama health polling based on active provider
 watch(activeProvider, (provider) => {
@@ -219,6 +256,10 @@ onMounted(async () => {
   localModels.fetchCatalog()
   // Also fetch runtime status immediately so the status bar dot is correct
   localModels.fetchRuntime()
+  // ADR 012 boot detection: read probe status so the re-run banner can
+  // surface when Ollama version, OS, or catalog membership has changed
+  // since the last persisted verdict.
+  probe.fetchStatus()
 
   // Handle graph_scope query param from "Ask about this" in graph view
   const route = useRoute()
@@ -243,6 +284,71 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+}
+
+.main-page__probe-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.85rem;
+  background: rgba(251, 191, 36, 0.08);
+  border-bottom: 1px solid rgba(251, 191, 36, 0.25);
+  font-size: 0.82rem;
+}
+
+.main-page__probe-banner-icon {
+  font-size: 0.9rem;
+}
+
+.main-page__probe-banner-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 0.05rem;
+}
+
+.main-page__probe-banner-title {
+  font-weight: 600;
+  color: #fbbf24;
+}
+
+.main-page__probe-banner-reason {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.main-page__probe-banner-btn {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  border-radius: 6px;
+  background: rgba(251, 191, 36, 0.06);
+  color: #fbbf24;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.main-page__probe-banner-btn:hover {
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.main-page__probe-banner-dismiss {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.main-page__probe-banner-dismiss:hover {
+  color: var(--text-primary);
+  border-color: var(--neon-cyan-30);
 }
 
 .main-page__layout {

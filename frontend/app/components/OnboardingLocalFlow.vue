@@ -6,19 +6,42 @@ const emit = defineEmits<{
 
 const localModels = useLocalModels()
 const flow = useLocalSetupFlow()
+const probe = useChatModelProbe()
 const showAll = ref(false)
 const showManualSetup = ref(false)
+const probeFinished = ref(false)
 
 const linuxCommand = 'curl -fsSL https://ollama.com/install.sh | sh'
 const copiedCommand = ref(false)
 
 onMounted(() => {
   flow.initialize()
+  probe.fetchStatus()
 })
 
 onUnmounted(() => {
   flow.cleanup()
 })
+
+// Auto-run the chat-model self-test the first time we hit model_ready.
+// The user has just downloaded a model; ADR 012 says we validate before
+// the user actually opens the chat surface, so any per-environment
+// failure is caught here rather than mid-conversation.
+watch(
+  () => flow.state.value,
+  async (state) => {
+    if (state === 'model_ready' && !probeFinished.value && !probe.running.value) {
+      // Skip if a fresh persisted record already covers this environment.
+      const status = probe.status.value ?? await probe.fetchStatus()
+      if (status?.persisted && !status.needs_rerun) {
+        probeFinished.value = true
+        return
+      }
+      await probe.runProbe()
+      probeFinished.value = true
+    }
+  },
+)
 
 function copyLinuxCommand() {
   navigator.clipboard.writeText(linuxCommand)
@@ -315,23 +338,37 @@ const readyModel = computed(() => localModels.activeModel.value)
     <template v-else-if="flow.state.value === 'model_ready' || flow.state.value === 'local_active'">
       <div class="local-flow__ready">
         <div class="local-flow__ready-check">✓</div>
-        <h3 class="local-flow__section-title">Jarvis is ready</h3>
+        <h3 class="local-flow__section-title">
+          {{ probe.running.value ? 'Validating your setup…' : 'Jarvis is ready' }}
+        </h3>
         <p class="local-flow__ready-model">
-          Using {{ readyModel?.label ?? 'local model' }} locally on this computer
+          {{ probe.running.value
+            ? 'Running quick self-test — this takes 30–60 seconds.'
+            : `Using ${readyModel?.label ?? 'local model'} locally on this computer` }}
         </p>
 
-        <div class="local-flow__ready-details">
+        <ChatModelProbePanel
+          v-if="probe.running.value || probe.events.value.length > 0"
+          variant="onboarding"
+          externally-driven
+        />
+
+        <div v-if="!probe.running.value" class="local-flow__ready-details">
           <div class="local-flow__ready-detail">
             <span class="local-flow__ready-detail-label">Runtime</span>
             <span class="local-flow__ready-detail-value">Ollama</span>
           </div>
           <div class="local-flow__ready-detail">
             <span class="local-flow__ready-detail-label">Model</span>
-            <span class="local-flow__ready-detail-value">{{ readyModel?.label ?? 'Local' }}</span>
+            <span class="local-flow__ready-detail-value">{{ probe.effectiveModel.value ?? readyModel?.label ?? 'Local' }}</span>
           </div>
           <div class="local-flow__ready-detail">
-            <span class="local-flow__ready-detail-label">Mode</span>
-            <span class="local-flow__ready-detail-value">Local</span>
+            <span class="local-flow__ready-detail-label">Self-test</span>
+            <span class="local-flow__ready-detail-value">
+              {{ probe.status.value?.persisted?.recommended_model
+                ? '✓ Passed'
+                : probe.status.value?.persisted ? '⚠ Fallback' : 'Pending' }}
+            </span>
           </div>
           <div class="local-flow__ready-detail">
             <span class="local-flow__ready-detail-label">Privacy</span>
@@ -339,11 +376,15 @@ const readyModel = computed(() => localModels.activeModel.value)
           </div>
         </div>
 
-        <button class="local-flow__primary-btn" @click="handleFinish">
-          Open Jarvis
+        <button
+          class="local-flow__primary-btn"
+          :disabled="probe.running.value"
+          @click="handleFinish"
+        >
+          {{ probe.running.value ? 'Probing…' : 'Open Jarvis' }}
         </button>
 
-        <div class="local-flow__ready-actions">
+        <div v-if="!probe.running.value" class="local-flow__ready-actions">
           <button class="local-flow__link-btn" @click="handleDownloadAnother">
             Download another model
           </button>
