@@ -699,3 +699,241 @@ class TestLocalModelsAPI:
             })
             assert resp.status_code == 200
             assert resp.json()["status"] == "ok"
+
+
+# ── Chat-model self-test endpoints (ADR 012) ────────────────────────────────
+
+
+class TestChatModelProbeEndpoints:
+    @pytest.mark.anyio
+    async def test_get_returns_no_prior_probe_on_fresh_workspace(self, client, tmp_path):
+        """First-launch state: no persisted record → ``needs_rerun=True``,
+        reason=``no_prior_probe`` so the UI knows to trigger /run."""
+        from services.ollama_service import RuntimeStatus
+
+        (tmp_path / "app").mkdir()
+        runtime = RuntimeStatus(
+            runtime="ollama", installed=True, running=True,
+            base_url="http://localhost:11434", reachable=True, version="0.18.0",
+        )
+        with (
+            patch("config.get_settings") as mock_settings,
+            patch("routers.local_models.probe_runtime", new_callable=AsyncMock, return_value=runtime),
+        ):
+            settings = MagicMock()
+            settings.workspace_path = tmp_path
+            mock_settings.return_value = settings
+
+            resp = await client.get("/api/local/chat-model-probe")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["persisted"] is None
+            assert data["needs_rerun"] is True
+            assert data["rerun_reason"] == "no_prior_probe"
+            assert data["runtime_reachable"] is True
+            assert data["current_environment"]["ollama_version"] == "0.18.0"
+
+    @pytest.mark.anyio
+    async def test_get_returns_fresh_when_persisted_matches_environment(self, client, tmp_path):
+        from services.chat_model_probe import (
+            PROBE_CONFIG_KEY, _platform_string,
+        )
+        from services.ollama_service import RuntimeStatus
+
+        (tmp_path / "app").mkdir()
+        config_path = tmp_path / "app" / "config.json"
+        config_path.write_text(
+            json.dumps({
+                PROBE_CONFIG_KEY: {
+                    "schema_version": 1,
+                    "ollama_version": "0.18.0",
+                    "platform": _platform_string(),
+                    "candidates_evaluated": [],
+                    "recommended_model": "qwen3:14b",
+                }
+            }),
+            encoding="utf-8",
+        )
+        runtime = RuntimeStatus(
+            runtime="ollama", installed=True, running=True,
+            base_url="http://localhost:11434", reachable=True, version="0.18.0",
+        )
+        with (
+            patch("config.get_settings") as mock_settings,
+            patch("routers.local_models.probe_runtime", new_callable=AsyncMock, return_value=runtime),
+            patch("services.chat_model_probe.get_catalog", return_value=[]),
+        ):
+            settings = MagicMock()
+            settings.workspace_path = tmp_path
+            mock_settings.return_value = settings
+
+            resp = await client.get("/api/local/chat-model-probe")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["persisted"]["recommended_model"] == "qwen3:14b"
+            assert data["needs_rerun"] is False
+            assert data["rerun_reason"] == "fresh"
+
+    @pytest.mark.anyio
+    async def test_run_refuses_when_runtime_unreachable(self, client, tmp_path):
+        """Don't waste the user's time probing every candidate as
+        fail_unreachable — return 503 so the UI prompts them to start Ollama."""
+        from services.ollama_service import RuntimeStatus
+
+        (tmp_path / "app").mkdir()
+        runtime = RuntimeStatus(
+            runtime="ollama", installed=False, running=False,
+            base_url="http://localhost:11434", reachable=False, version=None,
+        )
+        with (
+            patch("config.get_settings") as mock_settings,
+            patch("routers.local_models.probe_runtime", new_callable=AsyncMock, return_value=runtime),
+        ):
+            settings = MagicMock()
+            settings.workspace_path = tmp_path
+            mock_settings.return_value = settings
+
+            resp = await client.post("/api/local/chat-model-probe/run")
+            assert resp.status_code == 503
+
+    @pytest.mark.anyio
+    async def test_override_endpoint_sets_user_override(self, client, tmp_path):
+        (tmp_path / "app").mkdir()
+        with patch("config.get_settings") as mock_settings:
+            settings = MagicMock()
+            settings.workspace_path = tmp_path
+            mock_settings.return_value = settings
+
+            resp = await client.post(
+                "/api/local/chat-model-probe/override",
+                json={"model": "qwen3:14b"},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["user_override"] == "qwen3:14b"
+
+            # Clearing the override should set it back to null
+            resp = await client.post(
+                "/api/local/chat-model-probe/override",
+                json={"model": None},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["user_override"] is None
+
+    @pytest.mark.anyio
+    async def test_run_streams_events_and_persists_result(self, client, tmp_path, monkeypatch):
+        """The streaming endpoint must consume the probe generator, persist
+        the final result, and emit SSE events the frontend can render."""
+        from services.chat_model_probe import PROBE_CONFIG_KEY
+        from services.ollama_service import RuntimeStatus
+
+        (tmp_path / "app").mkdir()
+        runtime = RuntimeStatus(
+            runtime="ollama", installed=True, running=True,
+            base_url="http://localhost:11434", reachable=True, version="0.18.0",
+        )
+
+        async def fake_iter(**_kw):
+            yield {"event": "started", "candidate_count": 1, "available_ram_bytes": 24 * (1024**3)}
+            yield {
+                "event": "candidate_start", "model": "qwen3:14b",
+                "index": 0, "candidate_count": 1,
+            }
+            yield {
+                "event": "candidate_evidence",
+                "evidence": {"model": "qwen3:14b", "verdict": "pass"},
+            }
+            yield {
+                "event": "complete",
+                "result": {
+                    "schema_version": 1,
+                    "timestamp_utc": "2026-04-29T00:00:00Z",
+                    "ollama_version": "0.18.0",
+                    "platform": "darwin-arm64-macos14",
+                    "ram_gb": 24,
+                    "recommended_model": "qwen3:14b",
+                    "safe_fallback_used": False,
+                    "candidates_evaluated": [{
+                        "model": "qwen3:14b",
+                        "verdict": "pass",
+                        "correctness_response": None,
+                        "hardware_fit_bytes": None,
+                        "available_ram_bytes": None,
+                        "warm_short_total_ms": None,
+                        "realistic_tps": None,
+                        "error_message": None,
+                    }],
+                    "user_override": None,
+                },
+            }
+
+        with (
+            patch("config.get_settings") as mock_settings,
+            patch("routers.local_models.probe_runtime", new_callable=AsyncMock, return_value=runtime),
+            patch("routers.local_models.iter_probe_events", side_effect=lambda **kw: fake_iter(**kw)),
+        ):
+            settings = MagicMock()
+            settings.workspace_path = tmp_path
+            mock_settings.return_value = settings
+
+            resp = await client.post("/api/local/chat-model-probe/run")
+            assert resp.status_code == 200
+            body = resp.text
+            # SSE shape: at least one started + one complete event
+            assert "\"event\": \"started\"" in body
+            assert "\"event\": \"complete\"" in body
+            # Result was persisted
+            saved = json.loads((tmp_path / "app" / "config.json").read_text(encoding="utf-8"))
+            assert saved[PROBE_CONFIG_KEY]["recommended_model"] == "qwen3:14b"
+
+    @pytest.mark.anyio
+    async def test_run_preserves_existing_user_override(self, client, tmp_path):
+        """A re-run shouldn't silently drop the user's override choice."""
+        from services.chat_model_probe import PROBE_CONFIG_KEY
+        from services.ollama_service import RuntimeStatus
+
+        (tmp_path / "app").mkdir()
+        config_path = tmp_path / "app" / "config.json"
+        config_path.write_text(
+            json.dumps({
+                PROBE_CONFIG_KEY: {
+                    "schema_version": 1,
+                    "user_override": "qwen3:30b-a3b-instruct-2507",
+                    "candidates_evaluated": [],
+                }
+            }),
+            encoding="utf-8",
+        )
+        runtime = RuntimeStatus(
+            runtime="ollama", installed=True, running=True,
+            base_url="http://localhost:11434", reachable=True, version="0.18.0",
+        )
+
+        async def fake_iter(**_kw):
+            yield {
+                "event": "complete",
+                "result": {
+                    "schema_version": 1,
+                    "timestamp_utc": "2026-04-29T00:00:00Z",
+                    "ollama_version": "0.18.0",
+                    "platform": "darwin-arm64-macos14",
+                    "ram_gb": 24,
+                    "recommended_model": "qwen3:14b",
+                    "safe_fallback_used": False,
+                    "candidates_evaluated": [],
+                    "user_override": None,
+                },
+            }
+
+        with (
+            patch("config.get_settings") as mock_settings,
+            patch("routers.local_models.probe_runtime", new_callable=AsyncMock, return_value=runtime),
+            patch("routers.local_models.iter_probe_events", side_effect=lambda **kw: fake_iter(**kw)),
+        ):
+            settings = MagicMock()
+            settings.workspace_path = tmp_path
+            mock_settings.return_value = settings
+
+            await client.post("/api/local/chat-model-probe/run")
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            assert saved[PROBE_CONFIG_KEY]["user_override"] == "qwen3:30b-a3b-instruct-2507"
+            assert saved[PROBE_CONFIG_KEY]["recommended_model"] == "qwen3:14b"

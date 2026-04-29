@@ -1,8 +1,8 @@
 # ADR 012 — Install-time chat-model self-test
 
-**Status:** Accepted
+**Status:** Accepted — production wiring landed (2026-04-29)
 **Date:** 2026-04-28
-**Related:** [ADR 010](010-conversation-replay-eval-harness.md) · [ADR 011](011-latency-benchmark-harness.md) · [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) · [`docs/features/local-models.md`](../../features/local-models.md)
+**Related:** [ADR 010](010-conversation-replay-eval-harness.md) · [ADR 011](011-latency-benchmark-harness.md) · [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) · [`docs/features/chat-model-probe.md`](../../features/chat-model-probe.md) · [`docs/features/local-models.md`](../../features/local-models.md)
 
 ## Context
 
@@ -166,6 +166,16 @@ Rejected. The full grid takes 45–90 minutes — unacceptable for an install-ti
 2. **Onboarding wiring** (next chunk): [`frontend/app/components/OnboardingLocalFlow.vue`](../../../frontend/app/components/OnboardingLocalFlow.vue) calls a new `/api/local/chat-model-probe` endpoint, displays progress, persists the verdict.
 3. **Settings surface** (subsequent): re-run / override UI in `LocalModelsSection.vue`.
 4. **Pattern-panel calibration** as more environments land: the thinking-prose regex grows by evidence, not by guess.
+
+## Production wiring landed (2026-04-29)
+
+Steps 2 and 3 above merged. End-to-end shape:
+
+- **Re-run trigger detection.** `current_environment(*, ollama_version)` captures `(version, platform-with-macos-major, sorted catalog ollama_models)`; `needs_rerun(persisted, current)` returns `(bool, reason)` with reasons `no_prior_probe`, `ollama_version_changed`, `platform_changed`, `catalog_added_models`, `fresh`. Catalog *removals* don't trigger a re-run — only additions do, since a new model might be a better recommendation than the current pick.
+- **Streaming primitive.** `iter_probe_events(...)` async generator yields `started` → (`candidate_start`, `candidate_evidence`)+ → `complete`. The blocking `recommend_chat_model(...)` now drains it, so streaming and non-streaming callers share one probe loop.
+- **HTTP API** in [`backend/routers/local_models.py`](../../../backend/routers/local_models.py): `GET /api/local/chat-model-probe` (status + needs_rerun + env), `POST /api/local/chat-model-probe/run` (SSE; refuses 503 when Ollama unreachable; preserves prior `user_override` across re-runs), `POST /api/local/chat-model-probe/override` (set/clear; does not re-run).
+- **Frontend.** `useChatModelProbe` composable consumes the SSE stream. `OnboardingLocalFlow.vue` runs the probe automatically after a model finishes downloading (between `model_ready` and "Open Jarvis"). `LocalModelsSection.vue` surfaces the verdict, evidence, the re-run reason, and a re-run + override picker. `pages/main.vue` calls `fetchStatus()` on mount and shows a non-blocking banner when `needs_rerun` is true.
+- **Tests grew by 30**: 18 new units in `test_chat_model_probe.py` (re-run-trigger across all five reasons, macOS-major capture, override on empty config, generator event sequence, complete-payload-key parity with persistence) + 12 new endpoint tests in `test_local_models.py::TestChatModelProbeEndpoints` (status/no-prior, refused-when-down, override get+clear, SSE+persist, override preservation across re-runs).
 
 ## Open follow-ups (non-blocking)
 

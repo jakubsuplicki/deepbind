@@ -14,14 +14,19 @@ from services.chat_model_probe import (
     PROBE_CONFIG_KEY,
     REALISTIC_TPS_PASS,
     WARM_SHORT_PASS_MS,
+    CurrentEnvironment,
     ProbeResult,
     ProbeVerdict,
     _matches_thinking_prose,
+    current_environment,
     effective_chat_model,
+    iter_probe_events,
+    needs_rerun,
     persist_probe_result,
     probe_hardware_fit,
     read_probe_result,
     recommend_chat_model,
+    set_user_override,
 )
 from services.ollama_service import ModelCatalogEntry
 from tests.eval.latency.harness import TimedResponse
@@ -399,3 +404,266 @@ def test_effective_chat_model_returns_none_before_probe_runs(tmp_path: Path):
     # File exists but no probe key
     config.write_text(json.dumps({"other": "x"}), encoding="utf-8")
     assert effective_chat_model(config) is None
+
+
+# ── User override setter ──────────────────────────────────────────────────
+
+
+def test_set_user_override_creates_stub_record_when_no_probe_has_run(tmp_path: Path):
+    """Letting a power user pick a model before the probe runs requires
+    a stub record so the override survives the first probe run."""
+    config = tmp_path / "config.json"
+    set_user_override(config, model="qwen3:14b")
+    record = read_probe_result(config)
+    assert record is not None
+    assert record["user_override"] == "qwen3:14b"
+    assert record["recommended_model"] is None
+    # And the override is what effective_chat_model returns:
+    assert effective_chat_model(config) == "qwen3:14b"
+
+
+def test_set_user_override_updates_existing_record_without_clobbering_evidence(tmp_path: Path):
+    config = tmp_path / "config.json"
+    result = ProbeResult(
+        schema_version=1,
+        timestamp_utc="2026-04-28T12:34:56Z",
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos14",
+        ram_gb=24,
+        recommended_model="qwen3:14b",
+        safe_fallback_used=False,
+        candidates_evaluated=(),
+        user_override=None,
+    )
+    persist_probe_result(result, config_path=config)
+    set_user_override(config, model="qwen3:30b-a3b-instruct-2507")
+    record = read_probe_result(config)
+    assert record["user_override"] == "qwen3:30b-a3b-instruct-2507"
+    assert record["recommended_model"] == "qwen3:14b"
+    assert record["timestamp_utc"] == "2026-04-28T12:34:56Z"
+
+
+def test_set_user_override_to_none_clears_override(tmp_path: Path):
+    config = tmp_path / "config.json"
+    set_user_override(config, model="qwen3:14b")
+    set_user_override(config, model=None)
+    record = read_probe_result(config)
+    assert record["user_override"] is None
+
+
+# ── Re-run trigger detection ──────────────────────────────────────────────
+
+
+def _persisted(
+    *,
+    ollama_version: str = "0.18.0",
+    platform: str = "darwin-arm64-macos14",
+    models: tuple[str, ...] = ("qwen3:14b", "qwen3:8b"),
+) -> dict:
+    return {
+        "schema_version": 1,
+        "ollama_version": ollama_version,
+        "platform": platform,
+        "candidates_evaluated": [{"model": m, "verdict": "pass"} for m in models],
+    }
+
+
+def test_needs_rerun_when_no_prior_probe():
+    env = CurrentEnvironment(ollama_version="0.18.0", platform="darwin-arm64", catalog_models=())
+    rerun, reason = needs_rerun(None, env)
+    assert rerun is True
+    assert reason == "no_prior_probe"
+
+
+def test_needs_rerun_when_persisted_is_empty_dict():
+    """A pre-existing config with no probe record reads as empty dict, not None."""
+    env = CurrentEnvironment(ollama_version="0.18.0", platform="darwin-arm64", catalog_models=())
+    rerun, reason = needs_rerun({}, env)
+    assert rerun is True
+    assert reason == "no_prior_probe"
+
+
+def test_needs_rerun_on_ollama_version_change():
+    persisted = _persisted(ollama_version="0.18.0")
+    env = CurrentEnvironment(
+        ollama_version="0.21.0",
+        platform="darwin-arm64-macos14",
+        catalog_models=("qwen3:14b", "qwen3:8b"),
+    )
+    rerun, reason = needs_rerun(persisted, env)
+    assert rerun is True
+    assert reason == "ollama_version_changed"
+
+
+def test_needs_rerun_on_platform_change():
+    """macOS major-version bump must trigger a re-run — that's the failure mode that
+    motivated ADR 012 in the first place (the Qwen3-30B-A3B leak appeared on macOS 26
+    but not 14)."""
+    persisted = _persisted(platform="darwin-arm64-macos14")
+    env = CurrentEnvironment(
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos26",
+        catalog_models=("qwen3:14b", "qwen3:8b"),
+    )
+    rerun, reason = needs_rerun(persisted, env)
+    assert rerun is True
+    assert reason == "platform_changed"
+
+
+def test_needs_rerun_when_catalog_adds_models():
+    persisted = _persisted(models=("qwen3:14b", "qwen3:8b"))
+    env = CurrentEnvironment(
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos14",
+        catalog_models=("qwen3:14b", "qwen3:30b-a3b-instruct-2507", "qwen3:8b"),
+    )
+    rerun, reason = needs_rerun(persisted, env)
+    assert rerun is True
+    assert reason == "catalog_added_models"
+
+
+def test_needs_rerun_false_when_catalog_only_shrinks():
+    """Removing a model from the catalog (e.g. retiring an old quant) must not
+    trigger a re-run — the existing pick is still valid for the models that remain."""
+    persisted = _persisted(models=("qwen3:14b", "qwen3:8b", "qwen3:retired"))
+    env = CurrentEnvironment(
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos14",
+        catalog_models=("qwen3:14b", "qwen3:8b"),
+    )
+    rerun, reason = needs_rerun(persisted, env)
+    assert rerun is False
+    assert reason == "fresh"
+
+
+def test_needs_rerun_false_on_identical_environment():
+    persisted = _persisted()
+    env = CurrentEnvironment(
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos14",
+        catalog_models=("qwen3:14b", "qwen3:8b"),
+    )
+    rerun, reason = needs_rerun(persisted, env)
+    assert rerun is False
+    assert reason == "fresh"
+
+
+def test_current_environment_includes_macos_major_on_darwin(monkeypatch):
+    """The persisted ``platform`` field needs the macOS major version baked in
+    so the OS-bump re-run trigger fires; without it, two distinct environments
+    (macOS 14 vs 26) collapse to ``darwin-arm64`` and bugs go undetected."""
+    import services.chat_model_probe as probe_mod
+    from services.ollama_service import HardwareProfile
+
+    monkeypatch.setattr(
+        probe_mod, "probe_hardware",
+        lambda: HardwareProfile(
+            os="darwin", arch="arm64", total_ram_gb=24.0, free_disk_gb=100.0,
+            cpu_cores=10, gpu_vendor="apple", gpu_vram_gb=None,
+            is_apple_silicon=True, tier="strong",
+        ),
+    )
+    monkeypatch.setattr(probe_mod._platform_module, "mac_ver", lambda: ("26.1.0", ("", "", ""), ""))
+
+    env = current_environment(ollama_version="0.21.0", catalog=[])
+    assert env.platform == "darwin-arm64-macos26"
+    assert env.ollama_version == "0.21.0"
+
+
+# ── Streaming generator ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_iter_probe_events_yields_started_then_per_candidate_then_complete(monkeypatch):
+    """Event sequence is: started → (candidate_start, candidate_evidence)+ → complete."""
+    big = _entry(id="qwen3:big", gb=15.0)
+    small = _entry(id="qwen3:small", gb=4.0)
+    stub = _StubOllamaClient(
+        responses={
+            "qwen3:big": [
+                _ok("qwen3:big", scenario="probe-correctness",
+                    text="Okay, the user asked", tps=10, total=600),
+            ],
+            "qwen3:small": [
+                _ok("qwen3:small", scenario="probe-correctness", text="Hi.",
+                    tps=20, total=200),
+                _ok("qwen3:small", scenario="warm-short", text="Hi.", tps=20, total=300),
+                _ok("qwen3:small", scenario="chat-realistic-shallow",
+                    text="ok", tps=14, total=2000),
+            ],
+        }
+    )
+    import services.chat_model_probe as probe_mod
+    from services.ollama_service import HardwareProfile
+
+    monkeypatch.setattr(probe_mod, "OllamaTimedClient", lambda **_kw: stub)
+    monkeypatch.setattr(
+        probe_mod, "probe_hardware",
+        lambda: HardwareProfile(
+            os="darwin", arch="arm64", total_ram_gb=24.0, free_disk_gb=100.0,
+            cpu_cores=10, gpu_vendor="apple", gpu_vram_gb=None,
+            is_apple_silicon=True, tier="strong",
+        ),
+    )
+
+    events = []
+    async for ev in iter_probe_events(candidates=[big, small], ollama_version="0.18.0"):
+        events.append(ev)
+
+    # First event is started
+    assert events[0]["event"] == "started"
+    assert events[0]["candidate_count"] == 2
+    # Last event is complete
+    assert events[-1]["event"] == "complete"
+    result = events[-1]["result"]
+    assert result["recommended_model"] == "qwen3:small"
+    assert result["ollama_version"] == "0.18.0"
+    # Two candidate_start + two candidate_evidence events between them
+    starts = [e for e in events if e["event"] == "candidate_start"]
+    finishes = [e for e in events if e["event"] == "candidate_evidence"]
+    assert len(starts) == 2
+    assert len(finishes) == 2
+    # candidate_start order matches sorted-by-size-desc input
+    assert [s["model"] for s in starts] == ["qwen3:big", "qwen3:small"]
+
+
+@pytest.mark.asyncio
+async def test_iter_probe_events_complete_payload_matches_persisted_shape(monkeypatch):
+    """The frontend persists the final-event payload directly — its keys must
+    match the on-disk record so a future read_probe_result() returns the same
+    shape it would after persist_probe_result()."""
+    only = _entry(id="qwen3:only", gb=4.0)
+    stub = _StubOllamaClient(
+        responses={
+            "qwen3:only": [
+                _ok("qwen3:only", scenario="probe-correctness", text="Hi.",
+                    tps=20, total=200),
+                _ok("qwen3:only", scenario="warm-short", text="Hi.", tps=20, total=300),
+                _ok("qwen3:only", scenario="chat-realistic-shallow",
+                    text="ok", tps=14, total=2000),
+            ],
+        }
+    )
+    import services.chat_model_probe as probe_mod
+    from services.ollama_service import HardwareProfile
+
+    monkeypatch.setattr(probe_mod, "OllamaTimedClient", lambda **_kw: stub)
+    monkeypatch.setattr(
+        probe_mod, "probe_hardware",
+        lambda: HardwareProfile(
+            os="darwin", arch="arm64", total_ram_gb=24.0, free_disk_gb=100.0,
+            cpu_cores=10, gpu_vendor="apple", gpu_vram_gb=None,
+            is_apple_silicon=True, tier="strong",
+        ),
+    )
+
+    events = []
+    async for ev in iter_probe_events(candidates=[only], ollama_version="0.18.0"):
+        events.append(ev)
+    payload = events[-1]["result"]
+    expected_keys = {
+        "schema_version", "timestamp_utc", "ollama_version", "platform",
+        "ram_gb", "recommended_model", "safe_fallback_used",
+        "candidates_evaluated", "user_override",
+    }
+    assert set(payload.keys()) == expected_keys

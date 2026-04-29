@@ -1,11 +1,23 @@
 """Local models router — hardware probe, runtime status, model catalog & pull."""
 
+import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
+from services.chat_model_probe import (
+    PROBE_CONFIG_KEY,
+    current_environment,
+    iter_probe_events,
+    needs_rerun,
+    persist_probe_result,
+    read_probe_result,
+    set_user_override,
+)
+from services.chat_model_probe import ProbeEvidence, ProbeResult
 from services.ollama_service import (
     HardwareProfile,
     ModelRecommendation,
@@ -34,6 +46,17 @@ from services.ollama_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/local", tags=["local-models"])
+
+
+def _config_path():
+    """Path to ``app/config.json`` in the active workspace.
+
+    Resolves ``get_settings`` lazily so test fixtures that monkey-patch
+    ``config.get_settings`` (the convention used elsewhere in this router's
+    test suite) take effect on each call.
+    """
+    from config import get_settings
+    return get_settings().workspace_path / "app" / "config.json"
 
 
 @router.get("/hardware", response_model=HardwareProfile)
@@ -132,3 +155,123 @@ async def warm_up(req: WarmUpRequest):
     """Send a tiny prompt to keep model loaded in Ollama memory."""
     success = await warm_up_model(req.model, req.base_url)
     return {"status": "warm" if success else "failed"}
+
+
+# ── Chat-model self-test (ADR 012) ─────────────────────────────────────────
+
+
+class ChatModelProbeOverrideRequest(BaseModel):
+    """Set or clear ``user_override`` on the persisted probe record."""
+
+    model: Optional[str] = None  # None clears the override
+
+
+@router.get("/chat-model-probe")
+async def get_chat_model_probe(
+    base_url: str = Query(DEFAULT_OLLAMA_BASE_URL, alias="base_url"),
+):
+    """Read the persisted probe verdict + whether a re-run is required.
+
+    The frontend calls this on app boot and on the settings page. When
+    ``needs_rerun`` is true (Ollama version bump, OS major bump, new
+    catalog model), the UI prompts the user to re-test. ``persisted`` is
+    None on first launch — the UI then triggers ``/run`` automatically.
+    """
+    persisted = read_probe_result(_config_path())
+    runtime = await probe_runtime(base_url)
+    env = current_environment(ollama_version=runtime.version)
+    rerun, reason = needs_rerun(persisted, env)
+    return {
+        "persisted": persisted,
+        "needs_rerun": rerun,
+        "rerun_reason": reason,
+        "current_environment": {
+            "ollama_version": env.ollama_version,
+            "platform": env.platform,
+            "catalog_models": list(env.catalog_models),
+        },
+        "runtime_reachable": runtime.reachable,
+    }
+
+
+@router.post("/chat-model-probe/run")
+async def run_chat_model_probe(
+    base_url: str = Query(DEFAULT_OLLAMA_BASE_URL, alias="base_url"),
+):
+    """Stream probe progress as SSE; persist the result on the ``complete`` event.
+
+    Refuses to start if Ollama isn't reachable — running the probes
+    against a down runtime would just fail every candidate with
+    ``fail_unreachable`` and waste the user's time.
+    """
+    runtime = await probe_runtime(base_url)
+    if not runtime.reachable:
+        raise HTTPException(
+            status_code=503,
+            detail="Ollama runtime is not reachable; start Ollama before running the probe.",
+        )
+
+    config_path = _config_path()
+    existing_override = (read_probe_result(config_path) or {}).get("user_override")
+
+    async def event_stream():
+        try:
+            async for event in iter_probe_events(
+                base_url=base_url,
+                ollama_version=runtime.version,
+            ):
+                if event.get("event") == "complete":
+                    payload = event["result"]
+                    # Reconstruct ProbeResult to reuse persist_probe_result's
+                    # locked_config_update path; preserves any prior override
+                    # (rerun shouldn't silently drop a user's choice).
+                    result = ProbeResult(
+                        schema_version=payload["schema_version"],
+                        timestamp_utc=payload["timestamp_utc"],
+                        ollama_version=payload["ollama_version"],
+                        platform=payload["platform"],
+                        ram_gb=payload["ram_gb"],
+                        recommended_model=payload["recommended_model"],
+                        safe_fallback_used=payload["safe_fallback_used"],
+                        candidates_evaluated=tuple(
+                            ProbeEvidence(**e) for e in payload["candidates_evaluated"]
+                        ),
+                        user_override=existing_override,
+                    )
+                    persist_probe_result(
+                        result,
+                        config_path=config_path,
+                        user_override=existing_override,
+                    )
+                    payload["user_override"] = existing_override
+                    event = {"event": "complete", "result": payload}
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:  # noqa: BLE001 — surface any failure to the client
+            logger.exception("chat-model-probe stream failed")
+            yield f"data: {json.dumps({'event': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/chat-model-probe/override")
+async def set_chat_model_probe_override(req: ChatModelProbeOverrideRequest):
+    """Set ``user_override`` on the persisted probe record.
+
+    ``model: null`` clears the override (revert to recommendation). Setting
+    an override does not re-run the probe — the user is opting out of the
+    automated recommendation.
+    """
+    set_user_override(_config_path(), model=req.model)
+    record = read_probe_result(_config_path()) or {}
+    return {
+        "status": "ok",
+        "user_override": record.get("user_override"),
+        "recommended_model": record.get("recommended_model"),
+    }

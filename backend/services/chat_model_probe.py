@@ -33,12 +33,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import platform as _platform_module
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from services._config_io import locked_config_update
 from services.ollama_service import (
@@ -298,32 +299,49 @@ def _candidates_for_probe() -> list[ModelCatalogEntry]:
     )
 
 
-async def recommend_chat_model(
+async def iter_probe_events(
     *,
     base_url: str = DEFAULT_OLLAMA_BASE_URL,
     timeout_per_probe_s: float = 60.0,
     candidates: Optional[list[ModelCatalogEntry]] = None,
-) -> ProbeResult:
-    """Run the three probes against each candidate; return ranked recommendation.
+    ollama_version: Optional[str] = None,
+) -> AsyncIterator[dict]:
+    """Yield probe progress events; the final event carries the full ``ProbeResult``.
 
-    Hardware-fit pre-filtering runs first per candidate (no Ollama call).
-    Correctness runs next (one Ollama call, ~5s). Speed runs last (two
-    Ollama calls, ~10–20s). First fully-passing candidate wins.
+    Event shapes (stable JSON; consumed by the SSE endpoint and by the
+    blocking ``recommend_chat_model`` wrapper alike):
 
-    If *no* candidate passes, ``recommended_model`` is None and
-    ``safe_fallback_used`` is True — the caller chooses how to handle the
-    degenerate case (typically: fall back to the smallest catalog entry
-    and surface a warning).
+    - ``{"event": "started", "candidate_count": N, "available_ram_bytes": int|None}``
+    - ``{"event": "candidate_start", "model": str, "index": int, "candidate_count": N}``
+    - ``{"event": "candidate_evidence", "evidence": ProbeEvidence-as-dict}``
+    - ``{"event": "complete", "result": ProbeResult-as-dict}``
+
+    Generating events instead of returning a single value lets the install-
+    time UI stream "1/4: probing qwen3:30b..." progress, while the
+    non-streaming caller still gets the final aggregate by draining the
+    generator.
     """
     candidate_list = candidates if candidates is not None else _candidates_for_probe()
     available_ram = _available_ram_bytes()
     hw = probe_hardware()
     client = OllamaTimedClient(base_url=base_url)
 
+    yield {
+        "event": "started",
+        "candidate_count": len(candidate_list),
+        "available_ram_bytes": available_ram,
+    }
+
     evidence: list[ProbeEvidence] = []
     recommended: Optional[str] = None
 
-    for entry in candidate_list:
+    for index, entry in enumerate(candidate_list):
+        yield {
+            "event": "candidate_start",
+            "model": entry.ollama_model,
+            "index": index,
+            "candidate_count": len(candidate_list),
+        }
         # Probe 2 first — cheapest. If we can't fit the weights, no point
         # paying correctness or speed probe cost.
         if available_ram is not None:
@@ -331,14 +349,14 @@ async def recommend_chat_model(
                 entry, available_ram_bytes=available_ram
             )
             if not fits:
-                evidence.append(
-                    ProbeEvidence(
-                        model=entry.ollama_model,
-                        verdict=ProbeVerdict.FAIL_HARDWARE_FIT.value,
-                        hardware_fit_bytes=footprint,
-                        available_ram_bytes=available_ram,
-                    )
+                ev = ProbeEvidence(
+                    model=entry.ollama_model,
+                    verdict=ProbeVerdict.FAIL_HARDWARE_FIT.value,
+                    hardware_fit_bytes=footprint,
+                    available_ram_bytes=available_ram,
                 )
+                evidence.append(ev)
+                yield {"event": "candidate_evidence", "evidence": asdict(ev)}
                 continue
         else:
             # No RAM detection — skip hardware-fit prefiltering, proceed to correctness.
@@ -351,22 +369,22 @@ async def recommend_chat_model(
                 timeout=timeout_per_probe_s,
             )
         except asyncio.TimeoutError:
-            evidence.append(
-                ProbeEvidence(
-                    model=entry.ollama_model,
-                    verdict=ProbeVerdict.FAIL_UNREACHABLE.value,
-                    error_message="correctness probe timed out",
-                )
+            ev = ProbeEvidence(
+                model=entry.ollama_model,
+                verdict=ProbeVerdict.FAIL_UNREACHABLE.value,
+                error_message="correctness probe timed out",
             )
+            evidence.append(ev)
+            yield {"event": "candidate_evidence", "evidence": asdict(ev)}
             continue
         if not correct:
-            evidence.append(
-                ProbeEvidence(
-                    model=entry.ollama_model,
-                    verdict=ProbeVerdict.FAIL_CORRECTNESS.value,
-                    correctness_response=evidence_text[:500],
-                )
+            ev = ProbeEvidence(
+                model=entry.ollama_model,
+                verdict=ProbeVerdict.FAIL_CORRECTNESS.value,
+                correctness_response=evidence_text[:500],
             )
+            evidence.append(ev)
+            yield {"event": "candidate_evidence", "evidence": asdict(ev)}
             continue
 
         # Probe 3 — speed
@@ -376,53 +394,210 @@ async def recommend_chat_model(
                 timeout=timeout_per_probe_s * 2,  # speed probe runs two scenarios
             )
         except asyncio.TimeoutError:
-            evidence.append(
-                ProbeEvidence(
-                    model=entry.ollama_model,
-                    verdict=ProbeVerdict.FAIL_UNREACHABLE.value,
-                    correctness_response=evidence_text[:500],
-                    error_message="speed probe timed out",
-                )
+            ev = ProbeEvidence(
+                model=entry.ollama_model,
+                verdict=ProbeVerdict.FAIL_UNREACHABLE.value,
+                correctness_response=evidence_text[:500],
+                error_message="speed probe timed out",
             )
+            evidence.append(ev)
+            yield {"event": "candidate_evidence", "evidence": asdict(ev)}
             continue
         if not fast:
-            evidence.append(
-                ProbeEvidence(
-                    model=entry.ollama_model,
-                    verdict=ProbeVerdict.FAIL_SPEED.value,
-                    correctness_response=evidence_text[:500],
-                    warm_short_total_ms=warm_ms,
-                    realistic_tps=realistic_tps,
-                )
-            )
-            continue
-
-        # All three probes passed
-        evidence.append(
-            ProbeEvidence(
+            ev = ProbeEvidence(
                 model=entry.ollama_model,
-                verdict=ProbeVerdict.PASS.value,
+                verdict=ProbeVerdict.FAIL_SPEED.value,
                 correctness_response=evidence_text[:500],
-                hardware_fit_bytes=footprint,
-                available_ram_bytes=available_ram,
                 warm_short_total_ms=warm_ms,
                 realistic_tps=realistic_tps,
             )
+            evidence.append(ev)
+            yield {"event": "candidate_evidence", "evidence": asdict(ev)}
+            continue
+
+        # All three probes passed
+        ev = ProbeEvidence(
+            model=entry.ollama_model,
+            verdict=ProbeVerdict.PASS.value,
+            correctness_response=evidence_text[:500],
+            hardware_fit_bytes=footprint,
+            available_ram_bytes=available_ram,
+            warm_short_total_ms=warm_ms,
+            realistic_tps=realistic_tps,
         )
+        evidence.append(ev)
+        yield {"event": "candidate_evidence", "evidence": asdict(ev)}
         recommended = entry.ollama_model
         break  # first passing candidate wins
 
-    return ProbeResult(
+    result = ProbeResult(
         schema_version=1,
         timestamp_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        ollama_version=None,  # populated by callers that capture it; harness independence
-        platform=f"{hw.os}-{hw.arch}",
+        ollama_version=ollama_version,
+        platform=_platform_string(hw),
         ram_gb=int(hw.total_ram_gb) if hw.total_ram_gb else None,
         recommended_model=recommended,
         safe_fallback_used=recommended is None,
         candidates_evaluated=tuple(evidence),
         user_override=None,
     )
+    yield {
+        "event": "complete",
+        "result": _result_as_dict(result),
+    }
+
+
+def _result_as_dict(result: ProbeResult) -> dict:
+    """JSON-shape projection of a ``ProbeResult``.
+
+    Same fields persistence writes to ``app/config.json`` so SSE events and
+    the persisted record are byte-identical — a frontend can persist the
+    final-event payload directly without re-fetching.
+    """
+    return {
+        "schema_version": result.schema_version,
+        "timestamp_utc": result.timestamp_utc,
+        "ollama_version": result.ollama_version,
+        "platform": result.platform,
+        "ram_gb": result.ram_gb,
+        "recommended_model": result.recommended_model,
+        "safe_fallback_used": result.safe_fallback_used,
+        "candidates_evaluated": [asdict(e) for e in result.candidates_evaluated],
+        "user_override": result.user_override,
+    }
+
+
+async def recommend_chat_model(
+    *,
+    base_url: str = DEFAULT_OLLAMA_BASE_URL,
+    timeout_per_probe_s: float = 60.0,
+    candidates: Optional[list[ModelCatalogEntry]] = None,
+    ollama_version: Optional[str] = None,
+) -> ProbeResult:
+    """Drain ``iter_probe_events`` and return the final ``ProbeResult``.
+
+    Test-friendly synchronous-style wrapper for callers that don't need
+    progress streaming.
+    """
+    final: Optional[ProbeResult] = None
+    async for ev in iter_probe_events(
+        base_url=base_url,
+        timeout_per_probe_s=timeout_per_probe_s,
+        candidates=candidates,
+        ollama_version=ollama_version,
+    ):
+        if ev.get("event") == "complete":
+            payload = ev["result"]
+            final = ProbeResult(
+                schema_version=payload["schema_version"],
+                timestamp_utc=payload["timestamp_utc"],
+                ollama_version=payload["ollama_version"],
+                platform=payload["platform"],
+                ram_gb=payload["ram_gb"],
+                recommended_model=payload["recommended_model"],
+                safe_fallback_used=payload["safe_fallback_used"],
+                candidates_evaluated=tuple(
+                    ProbeEvidence(**e) for e in payload["candidates_evaluated"]
+                ),
+                user_override=payload["user_override"],
+            )
+    assert final is not None, "iter_probe_events must yield a complete event"
+    return final
+
+
+# ── Re-run trigger detection ───────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class CurrentEnvironment:
+    """The pieces of the runtime environment a re-run trigger can detect.
+
+    ``platform`` includes macOS major version because the Qwen3-30B-A3B
+    correctness leak (ADR 010 Issue 4) was observed only on macOS 26 — same
+    arch and chip on macOS 14 produced clean output. We persist the major
+    version so a major-OS bump triggers a fresh probe automatically.
+
+    ``catalog_models`` is the sorted tuple of ``ollama_model`` strings for
+    user-pickable entries; new entries trigger re-run so the user sees the
+    new model in the recommendation set on next launch instead of waiting
+    for an explicit re-test.
+    """
+
+    ollama_version: Optional[str]
+    platform: str
+    catalog_models: tuple[str, ...]
+
+
+def _platform_string(hw=None) -> str:
+    """``{os}-{arch}`` with macOS major version appended on darwin.
+
+    Pre-existing persisted records used the simpler ``{os}-{arch}`` form;
+    those records will trip ``platform_changed`` on first read after this
+    change ships, which is the desired behaviour — the probe re-runs once,
+    and from then on the format is stable.
+    """
+    if hw is None:
+        hw = probe_hardware()
+    base = f"{hw.os}-{hw.arch}"
+    if hw.os == "darwin":
+        try:
+            mac_ver = _platform_module.mac_ver()[0]
+            major = mac_ver.split(".")[0] if mac_ver else ""
+            if major:
+                return f"{base}-macos{major}"
+        except Exception:  # noqa: BLE001 — diagnostic only
+            pass
+    return base
+
+
+def current_environment(
+    *,
+    ollama_version: Optional[str],
+    catalog: Optional[list[ModelCatalogEntry]] = None,
+) -> CurrentEnvironment:
+    """Capture the current environment for re-run-trigger comparison.
+
+    ``ollama_version`` should come from ``probe_runtime()``; the catalog
+    defaults to the user-pickable subset of ``get_catalog()``.
+    """
+    if catalog is None:
+        catalog = [e for e in get_catalog() if not e.internal]
+    return CurrentEnvironment(
+        ollama_version=ollama_version,
+        platform=_platform_string(),
+        catalog_models=tuple(sorted(e.ollama_model for e in catalog)),
+    )
+
+
+def needs_rerun(
+    persisted: Optional[dict],
+    current: CurrentEnvironment,
+) -> tuple[bool, str]:
+    """Return ``(needs_rerun, reason)``.
+
+    The reason string is one of: ``no_prior_probe``, ``ollama_version_changed``,
+    ``platform_changed``, ``catalog_added_models``, or ``fresh``.
+
+    Catalog *removals* don't trigger a re-run — if a model the user had is
+    no longer in the catalog the existing recommendation is still valid for
+    the models that remain. Only *additions* warrant re-running, since a
+    new model might be a better choice than the current pick.
+    """
+    if not persisted:
+        return True, "no_prior_probe"
+    if persisted.get("ollama_version") != current.ollama_version:
+        return True, "ollama_version_changed"
+    if persisted.get("platform") != current.platform:
+        return True, "platform_changed"
+    persisted_models = {
+        e.get("model")
+        for e in persisted.get("candidates_evaluated") or []
+        if e.get("model")
+    }
+    added = set(current.catalog_models) - persisted_models
+    if added:
+        return True, "catalog_added_models"
+    return False, "fresh"
 
 
 # ── Persistence ────────────────────────────────────────────────────────────
@@ -469,6 +644,35 @@ def read_probe_result(config_path: Path) -> Optional[dict]:
     except (OSError, json.JSONDecodeError):
         return None
     return data.get(PROBE_CONFIG_KEY)
+
+
+def set_user_override(
+    config_path: Path,
+    *,
+    model: Optional[str],
+) -> None:
+    """Set or clear ``user_override`` in the persisted record.
+
+    ``model=None`` clears the override (revert to recommendation). If no
+    probe has run yet, the override is written into a stub record so the
+    chat router still reads the user's choice — the ``recommended_model``
+    field stays ``None`` until a real probe runs and overwrites it.
+    """
+    with locked_config_update(config_path) as config:
+        record = config.get(PROBE_CONFIG_KEY) or {}
+        if not record:
+            record = {
+                "schema_version": 1,
+                "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "ollama_version": None,
+                "platform": _platform_string(),
+                "ram_gb": None,
+                "recommended_model": None,
+                "safe_fallback_used": True,
+                "candidates_evaluated": [],
+            }
+        record["user_override"] = model
+        config[PROBE_CONFIG_KEY] = record
 
 
 def effective_chat_model(config_path: Path) -> Optional[str]:
