@@ -678,3 +678,162 @@ next).
   model_name=..., threads=N)` then time `embed(TEXTS, batch_size=...,
   parallel=...)` — full reconstruction in one screen.
 
+## Amendment 5 — knob-6 landed: background/lazy embedding for section-split ingest (2026-04-29)
+
+**Result**: user-perceived ingest of `samples/911Report.pdf` dropped
+from 25.6 s → **1.53 s** (~17× faster). Background embed catches up
+in ~24.5 s with per-note progress (`embedding 12/61…`) visible via
+`GET /api/memory/ingest/status`. Total compute is unchanged — knob-6
+is a perception change, not a compute change.
+
+### Why this is the highest-EV remaining knob
+
+The knob-3 / knob-4 path turned out to be a dead end on this hardware:
+- Threading is already optimal (Amendment 4)
+- Int8 quantization isn't available pre-built and self-quantizing
+  involves calibration + custom-model loader + workspace migration
+  story + quality regression risk
+- CoreML Execution Provider silently falls back to CPU on this model
+  (the optimized graph uses ORT contrib ops `SkipLayerNormalization` /
+  `Attention` / `FastGelu` that CoreML EP can't handle)
+
+That left compute reduction looking like substantial work with
+uncertain payoff. Meanwhile knob-6 is a UX move on top of unchanged
+compute: the slow stage already runs *after* the fast user-visible
+work, so deferring it to a background job costs nothing in
+correctness, vector quality, or hardware support, and recovers
+~24 s of user-perceived latency.
+
+### Implementation
+
+Three small changes:
+
+1. **`backend/services/memory_service.py`** — `_index_note` and
+   `index_note_file` accept a `defer_embedding: bool = False`
+   parameter. When True, `embed_note` and `embed_note_chunks` are
+   skipped; the caller is responsible for catching up later.
+
+2. **`backend/services/ingest.py::_emit_document_sections`** — passes
+   `defer_embedding=True` to every `index_note_file` call (both index
+   and per-section), then schedules the embed pass via
+   `ingest_jobs.schedule_embed_for_paths(...)` *before* `connect_note`
+   runs. Smart Connect on the index runs synchronously; it embeds
+   query content on the fly and reads from already-populated
+   embeddings of OTHER notes — so it works fine without this
+   document's own embeddings being in place yet.
+
+3. **`backend/services/ingest_jobs.py`** — adds
+   `schedule_embed_for_paths(paths, *, workspace_path, doc_title)` and
+   the underlying coroutine `embed_paths(paths, *, workspace_path,
+   job_id)`. The scheduler mirrors the existing
+   `schedule_graph_rebuild` shape — daemon thread, `start_job` /
+   `update_stage` / `finish_job` for UI visibility, env-var
+   short-circuit (`JARVIS_DISABLE_EMBEDDINGS=1`) for test isolation.
+
+The single-file ingest path (memos, short PDFs) is untouched — no
+`defer_embedding` flag flips, embedding still runs inline, sub-second.
+
+### Measured impact (production fast_ingest, 911Report.pdf, M5 Pro 24 GB)
+
+| Phase | Before knob-6 | After knob-6 | Notes |
+|---|---:|---:|---|
+| User-perceived (HTTP response) | 25.6 s | **1.53 s** | What the UI sees |
+| Background embed (async) | 0 s | 24.55 s | Same compute, decoupled |
+| Total compute | 25.6 s | 26.08 s | Equivalent (~1.9% noise) |
+| User-perceived speedup | — | **16.7×** | First-ingest UX win |
+
+Cumulative on a fresh first-ingest of 911Report.pdf, vs the original
+pdfplumber + inline-embed baseline:
+
+| State | First-ingest (user-perceived) |
+|---|---:|
+| Pre-knob-1 (pdfplumber + inline embed) | ~60 s (estimated honest) |
+| After knob-1 (pypdfium2 + inline embed) | 25.6 s |
+| After knob-6 (pypdfium2 + deferred embed) | **1.53 s** |
+| Cumulative speedup | **~40×** user-perceived |
+
+Re-ingest paths (knob-2 territory) are unchanged from Amendment 3:
+unchanged content stays at 1.4 s, partial edit at 2.0 s. Knob-6
+doesn't help re-ingest because that path doesn't go through
+`_emit_document_sections` for already-split documents (it goes
+through `reindex_all_chunks`, which still runs synchronously for now).
+
+### Eventual-consistency contract surfaced
+
+Search behavior during the embed window:
+- `search_similar` and `search_similar_chunks` query the embedding
+  tables directly. Notes that are still being embedded are absent
+  from results until the background job catches up.
+- `connect_note` for newly-ingested notes finds connections to
+  *existing* notes correctly. It doesn't find connections from this
+  new document's sections back to themselves — those embeddings
+  aren't there yet — but section-to-section is already handled by
+  the wiki-link graph that `_emit_document_sections` writes
+  synchronously, so the user-facing graph view isn't impacted.
+- `schedule_section_connect` (the per-section Smart Connect job that
+  fires alongside the embed job) reads chunk_embeddings and may miss
+  same-document siblings while the embed job is still running. Sibling
+  links via wiki-links are the load-bearing path; cross-document
+  semantic links are recoverable on the next manual "Reindex
+  connections" or are picked up the next time another document is
+  ingested.
+
+The cost is bounded by the embed window (~24 s for a 60-section
+document on this hardware). For a compliance product this is
+acceptable: the user sees their notes immediately and the UI
+already shows a per-note "indexing N/M" badge.
+
+### Tests
+
+Three new tests in
+[backend/tests/test_embedding_service.py](../../../backend/tests/test_embedding_service.py):
+
+- `test_index_note_file_defer_embedding_skips_model` — `defer_embedding=True` produces zero rows in `note_embeddings`/`chunk_embeddings`
+- `test_index_note_file_default_still_embeds` — regression: single-file ingest path still embeds inline
+- `test_embed_paths_populates_deferred_embeddings` — the underlying coroutine catches up exactly the deferred set
+- `test_schedule_embed_for_paths_returns_none_for_empty_list` — short-circuit for empty paths
+
+`JARVIS_DISABLE_EMBEDDINGS=1` is honored by the scheduler so tests
+that exercise `_emit_document_sections` don't leak daemon threads
+past teardown.
+
+### Response payload addition
+
+`fast_ingest`'s return dict now includes `embed_job_id` (alongside
+the existing `section_connect_job_id`). Frontend can poll
+`/api/memory/ingest/status` for the specific embed job's progress
+and clear the "indexing" badge when it shows up in `recent`.
+
+### What this doesn't address
+
+- Re-ingest paths (`reindex_all_chunks`) still run synchronously.
+  Could apply the same defer pattern but UX value is lower because
+  the user is already inside a "reindexing…" flow when they trigger
+  it.
+- Search results during the embed window have a "freshness gap" — a
+  newly-ingested note isn't searchable for ~25 s on a long PDF.
+  Could improve by surfacing a UI hint when a search runs while
+  embeddings are still settling. Not in this chunk.
+- Process death during the embed window leaves notes indexed but not
+  embedded. Recovery exists (`reindex_all_chunks` from settings)
+  but isn't automatic. A startup scan that re-queues
+  notes-without-embeddings would close this gap; flagged for a
+  follow-on chunk if it becomes a real complaint.
+
+### Knob-6 vs other candidates
+
+Not a substitute for compute reduction — knob-4/5/7 still represent
+real follow-on territory if first-ingest *compute* needs to drop
+(e.g. for a 5,000-page document where the embed window grows
+proportionally). For the 585-page 911 Report on M5 Pro 24 GB, knob-6
+delivers a user experience that feels instant and pushes follow-on
+compute knobs further out the priority queue.
+
+The knob loop has now produced wins from three angles:
+- knob-1 (extract): 55× faster compute on the dominant stage
+- knob-2 (chunk-hash-skip): 18× faster re-ingest via memoization
+- knob-6 (background embed): 17× faster user-perceived first-ingest
+  via decoupling
+
+The first two reduced *compute*; knob-6 reduced *latency*. Both axes
+were necessary; neither alone got us to "feels instant."

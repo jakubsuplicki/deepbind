@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional
 
 
@@ -23,7 +24,8 @@ from typing import Dict, List, Optional
 class IngestJob:
     id: str
     name: str
-    kind: str  # "file" | "url" | "youtube" | "graph_rebuild"
+    # "file" | "url" | "youtube" | "graph_rebuild" | "embed" | "section_connect"
+    kind: str
     started_at: float
     size_bytes: Optional[int] = None
     status: str = "running"  # "running" | "done" | "failed"
@@ -40,6 +42,113 @@ _FINISHED_TTL_S = 8.0
 # Separate flag for the background graph rebuild so we only run one at a time
 # and can report its progress as a dedicated job in the status snapshot.
 _rebuild_job_id: Optional[str] = None
+
+
+def _resolve_memory_dir(workspace_path: Optional[Path]) -> Path:
+    """Resolve the workspace's memory dir without importing inside hot paths."""
+    from config import get_settings
+    base = Path(workspace_path) if workspace_path else get_settings().workspace_path
+    return base / "memory"
+
+
+def _resolve_db_path(workspace_path: Optional[Path]) -> Path:
+    from config import get_settings
+    base = Path(workspace_path) if workspace_path else get_settings().workspace_path
+    return base / "app" / "jarvis.db"
+
+
+async def embed_paths(
+    paths: List[str],
+    *,
+    workspace_path: Optional[Path] = None,
+    job_id: Optional[str] = None,
+) -> None:
+    """Embed note + chunk vectors for a list of paths sequentially.
+
+    Extracted so unit tests can invoke the embedding pass directly
+    without going through the daemon-thread scheduler. ``job_id`` is
+    optional; when set, ``update_stage`` reports per-note progress.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    from services.embedding_service import embed_note, embed_note_chunks
+    from utils.markdown import parse_frontmatter
+
+    mem = _resolve_memory_dir(workspace_path)
+    db_path = _resolve_db_path(workspace_path)
+    total = len(paths)
+
+    for idx, rel_path in enumerate(paths):
+        if job_id:
+            update_stage(job_id, f"embedding {idx + 1}/{total}")
+        file_path = mem / rel_path
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("embed job: cannot read %s: %s", rel_path, exc)
+            continue
+        try:
+            await embed_note(rel_path, content, db_path)
+        except Exception as exc:
+            log.warning("embed_note failed for %s: %s", rel_path, exc)
+        try:
+            fm, _body = parse_frontmatter(content)
+            subject_type = str(fm.get("type") or "note")
+            await embed_note_chunks(
+                rel_path, content, db_path, subject_type=subject_type
+            )
+        except Exception as exc:
+            log.warning(
+                "embed_note_chunks failed for %s: %s", rel_path, exc
+            )
+
+
+def schedule_embed_for_paths(
+    paths: List[str],
+    *,
+    workspace_path: Optional[Path] = None,
+    doc_title: str = "",
+) -> Optional[str]:
+    """Background job that embeds note + chunk vectors for a list of paths.
+
+    ADR 013 knob-6: ``_emit_document_sections`` writes each section's MD
+    file and indexes it WITHOUT embedding (``defer_embedding=True``). The
+    HTTP response returns once that synchronous portion finishes. This
+    function fires a daemon thread that walks the listed paths and runs
+    ``embed_note`` + ``embed_note_chunks`` for each, marking progress
+    through ``update_stage`` so the UI badge shows "embedding 12/60…".
+
+    Returns the job id, or ``None`` if no paths were supplied.
+    """
+    if not paths:
+        return None
+
+    # Same escape hatch as the inline embed path in memory_service._index_note —
+    # tests that don't care about embeddings can short-circuit the daemon
+    # thread and avoid leaking work past test teardown.
+    import os
+    if os.environ.get("JARVIS_DISABLE_EMBEDDINGS") == "1":
+        return None
+
+    name = f"Embedding: {doc_title}" if doc_title else "Embedding sections"
+    job_id = start_job(name, kind="embed")
+
+    def _run() -> None:
+        import asyncio
+        import logging
+        log = logging.getLogger(__name__)
+        try:
+            asyncio.run(
+                embed_paths(paths, workspace_path=workspace_path, job_id=job_id)
+            )
+            finish_job(job_id)
+        except Exception as exc:
+            log.warning("Background embed job %s failed: %s", job_id, exc)
+            finish_job(job_id, error=str(exc))
+
+    t = threading.Thread(target=_run, daemon=True, name=f"embed-{job_id}")
+    t.start()
+    return job_id
 
 
 def schedule_graph_rebuild(workspace_path=None) -> None:

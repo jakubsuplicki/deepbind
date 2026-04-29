@@ -176,9 +176,43 @@ knob loop targets it from multiple angles.
 | 3 | ONNX Runtime threading | first-ingest embed | ❌ closed (2026-04-29) | No-op at production scale; auto already optimal. `parallel=4` worth +9% but +1.6 GB RAM (deferred sub-knob) |
 | 4 | int8 quantized embedding model | first-ingest embed | future | ~2-3× embed; <2 pt MTEB regression |
 | 5 | Smaller English-only model (MiniLM-L6) | first-ingest embed | future | ~2× embed; quality measurement via ADR 010 harness |
-| 6 | Background / lazy embedding | first-ingest UX | future | UX change — user perceives ingest as ~100 ms; compute unchanged |
+| 6 | **Background / lazy embedding** | first-ingest UX | ✅ landed (2026-04-29) | First-ingest 911Report 25.6 s → **1.53 s** (16.7×); compute unchanged, decoupled into `ingest_jobs.embed_paths` background job |
 | 7 | MLX backend (Apple Silicon NPU) | first-ingest embed | future tier 2 | ~5-10× on Mac; Mac-only path |
 | 8 | Parallel page extraction | extract | future, optional | PDFium isn't thread-safe; needs `multiprocessing.Pool` |
+
+### Knob-6 landed (2026-04-29) — background embedding decouples user latency from compute
+
+`_emit_document_sections` now writes per-section MD files and indexes
+them with `defer_embedding=True`, then fires
+`ingest_jobs.schedule_embed_for_paths(...)` as a daemon-threaded
+background job before returning. The synchronous portion (extract +
+section-split + write MDs + index rows + Smart Connect on the index)
+finishes in ~1.5 s on the 911 Report; the embed pass catches up
+asynchronously in ~24 s with per-note progress (`embedding 12/61…`)
+visible via `GET /api/memory/ingest/status`.
+
+| Phase | Before knob-6 | After knob-6 |
+|---|---:|---:|
+| User-perceived (HTTP response) | 25.6 s | **1.53 s** |
+| Background embed (async) | 0 s | 24.55 s |
+| Total compute | 25.6 s | 26.08 s |
+
+Cumulative on first-ingest of 911Report.pdf, vs the original
+pdfplumber + inline-embed baseline:
+
+| State | First-ingest (user-perceived) |
+|---|---:|
+| Pre-knob-1 (pdfplumber + inline embed) | ~60 s (estimated honest) |
+| After knob-1 (pypdfium2 + inline embed) | 25.6 s |
+| After knob-6 (deferred embed) | **1.53 s** |
+| Cumulative | **~40× user-perceived speedup** |
+
+Eventual-consistency cost: notes are not searchable until the
+background embed job catches up (~24 s on a 60-section document).
+The UI's existing per-note "indexing N/M" badge surfaces this
+window; sibling-section links go through wiki-links (written
+synchronously) so the graph view is unaffected. Full discussion in
+[ADR 013 Amendment 5](../architecture/decisions/013-ingest-latency-benchmark-harness.md#amendment-5--knob-6-landed-backgroundlazy-embedding-for-section-split-ingest-2026-04-29).
 
 ### Knob-3 closed (2026-04-29) — threading is already optimal
 

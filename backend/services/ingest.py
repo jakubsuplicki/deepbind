@@ -600,10 +600,23 @@ async def _emit_document_sections(
 
     _stage("indexing")
     try:
-        await index_note_file(index_rel_path, workspace_path=workspace_path)
+        # ADR 013 knob-6: section-split ingest defers embedding so the
+        # HTTP response returns before the ~25 s chunk-embed pass on a
+        # large document. The caller below schedules the embed work as a
+        # background ingest_jobs task; the user sees notes appear and
+        # become listable immediately while semantic search catches up.
+        await index_note_file(
+            index_rel_path,
+            workspace_path=workspace_path,
+            defer_embedding=True,
+        )
         for sf in section_files:
             sf_rel = sf.relative_to(mem).as_posix()
-            await index_note_file(sf_rel, workspace_path=workspace_path)
+            await index_note_file(
+                sf_rel,
+                workspace_path=workspace_path,
+                defer_embedding=True,
+            )
         # Step 28b — register section notes in the graph at ingest time so
         # their tags, wiki-links and entities become reachable by retrieval
         # expansion immediately. ingest_note() is local-only (no LLM, no
@@ -630,6 +643,20 @@ async def _emit_document_sections(
         except Exception:
             pass
         raise IngestError(f"Failed to index sections: {exc}") from exc
+
+    # ADR 013 knob-6: schedule chunk-embedding for the index + every
+    # section as a background job BEFORE Smart Connect kicks in. Smart
+    # Connect embeds query content on the fly and reads from the
+    # already-populated tables of EXISTING notes; it does not need this
+    # document's own embeddings to be in place to find connections FROM
+    # it. Background-running concurrently with section_connect is safe.
+    paths_to_embed = [index_rel_path]
+    paths_to_embed.extend(sf.relative_to(mem).as_posix() for sf in section_files)
+    embed_job_id = ingest_jobs.schedule_embed_for_paths(
+        paths_to_embed,
+        workspace_path=workspace_path,
+        doc_title=title,
+    )
 
     connections_payload = None
     section_connect_job_id: Optional[str] = None
@@ -666,6 +693,7 @@ async def _emit_document_sections(
         "sections": len(sections),
         "connections": connections_payload,
         "section_connect_job_id": section_connect_job_id,
+        "embed_job_id": embed_job_id,
     }
 
 

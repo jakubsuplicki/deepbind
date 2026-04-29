@@ -305,6 +305,8 @@ async def delete_note(
 async def index_note_file(
     note_path: str,
     workspace_path: Optional[Path] = None,
+    *,
+    defer_embedding: bool = False,
 ) -> None:
     mem = _memory_path(workspace_path)
     _validate_path(note_path, mem)
@@ -316,7 +318,7 @@ async def index_note_file(
 
     content = file_path.read_text(encoding="utf-8")
     fm, body = parse_frontmatter(content)
-    await _index_note(note_path, content, fm, body, db_p)
+    await _index_note(note_path, content, fm, body, db_p, defer_embedding=defer_embedding)
 
 
 async def reindex_all(workspace_path: Optional[Path] = None) -> int:
@@ -369,6 +371,8 @@ async def _index_note(
     fm: Dict,
     body: str,
     db_path: Path,
+    *,
+    defer_embedding: bool = False,
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     folder = str(Path(note_path).parent) if "/" in note_path else ""
@@ -438,9 +442,13 @@ async def _index_note(
         logger.warning("alias_index upsert failed for %s: %s",
                        _sanitize_for_log(note_path), exc)
 
-    # Auto-embed for semantic search (skip if fastembed missing or disabled)
+    # Auto-embed for semantic search (skip if fastembed missing or disabled).
+    # When ``defer_embedding`` is True the caller takes responsibility for
+    # running ``embed_note`` / ``embed_note_chunks`` later — used by the
+    # section-split ingest path so the HTTP response returns before the
+    # ~25 s chunk-embed pass on a large document (ADR 013 knob-6).
     import os
-    if os.environ.get("JARVIS_DISABLE_EMBEDDINGS") != "1":
+    if not defer_embedding and os.environ.get("JARVIS_DISABLE_EMBEDDINGS") != "1":
         try:
             from services.embedding_service import embed_note
             await embed_note(note_path, full_content, db_path)

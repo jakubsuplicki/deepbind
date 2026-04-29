@@ -374,3 +374,150 @@ async def test_chunk_hash_skip_rebuilds_when_chunks_added(counting_embeddings, w
         f"only the {n_second - n_first} new chunks should embed, "
         f"but model was called for {new_embeddings}"
     )
+
+
+# ── Deferred embedding for section-split ingest (ADR 013 knob-6) ────────────
+
+
+@pytest.mark.anyio
+async def test_index_note_file_defer_embedding_skips_model(counting_embeddings, ws_db):
+    """``defer_embedding=True`` must NOT call the embedding model.
+
+    Section-split ingest writes 60+ section MD files; deferring the
+    embed pass to a background job is what lets the HTTP response
+    return in seconds rather than ~25 s.
+    """
+    from services import memory_service
+
+    mem = ws_db / "memory"
+    (mem / "inbox").mkdir(parents=True)
+    note_path = "inbox/section.md"
+    content = "---\ntitle: Section\n---\n\n# Section\n\nSome body content with enough text to chunk.\n"
+    (mem / note_path).write_text(content, encoding="utf-8")
+
+    embeddings_before = counting_embeddings.total_texts_embedded
+    await memory_service.index_note_file(
+        note_path, workspace_path=ws_db, defer_embedding=True
+    )
+    new_embeddings = counting_embeddings.total_texts_embedded - embeddings_before
+
+    assert new_embeddings == 0, (
+        f"defer_embedding=True should not call the model; "
+        f"{new_embeddings} texts were embedded"
+    )
+
+    # And no rows should exist in either embedding table for this note
+    db_path = ws_db / "app" / "jarvis.db"
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM note_embeddings WHERE path = ?", (note_path,)
+        )
+        assert (await cursor.fetchone())[0] == 0
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM chunk_embeddings WHERE path = ?", (note_path,)
+        )
+        assert (await cursor.fetchone())[0] == 0
+
+
+@pytest.mark.anyio
+async def test_index_note_file_default_still_embeds(counting_embeddings, ws_db):
+    """Default ``index_note_file`` (without ``defer_embedding``) still embeds.
+
+    Regression check — the single-file ingest path (memos, short PDFs)
+    must keep its inline embedding behavior unchanged.
+    """
+    from services import memory_service
+
+    mem = ws_db / "memory"
+    (mem / "inbox").mkdir(parents=True)
+    note_path = "inbox/inline.md"
+    content = "---\ntitle: Inline\n---\n\n# Inline\n\nBody content that should embed inline.\n"
+    (mem / note_path).write_text(content, encoding="utf-8")
+
+    embeddings_before = counting_embeddings.total_texts_embedded
+    await memory_service.index_note_file(note_path, workspace_path=ws_db)
+    new_embeddings = counting_embeddings.total_texts_embedded - embeddings_before
+
+    assert new_embeddings > 0, "default index_note_file must still embed inline"
+
+    db_path = ws_db / "app" / "jarvis.db"
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM note_embeddings WHERE path = ?", (note_path,)
+        )
+        assert (await cursor.fetchone())[0] == 1
+
+
+@pytest.mark.anyio
+async def test_embed_paths_populates_deferred_embeddings(counting_embeddings, ws_db):
+    """``ingest_jobs.embed_paths`` should fully embed a list of deferred notes.
+
+    Models the section-split ingest flow end-to-end without the daemon
+    thread: index every section with ``defer_embedding=True``, then call
+    the embed pass that the background job wraps.
+    """
+    from services import memory_service, ingest_jobs
+
+    mem = ws_db / "memory"
+    (mem / "doc").mkdir(parents=True)
+
+    section_paths = []
+    for i in range(3):
+        rel = f"doc/section-{i}.md"
+        (mem / rel).write_text(
+            f"---\ntitle: Section {i}\n---\n\n# Section {i}\n\n"
+            f"Body for section {i} that is long enough to chunk into something.\n",
+            encoding="utf-8",
+        )
+        await memory_service.index_note_file(
+            rel, workspace_path=ws_db, defer_embedding=True
+        )
+        section_paths.append(rel)
+
+    # Deferred — no embeddings yet
+    db_path = ws_db / "app" / "jarvis.db"
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM note_embeddings")
+        assert (await cursor.fetchone())[0] == 0
+
+    # Run the background embed pass synchronously (test harness skips the thread)
+    await ingest_jobs.embed_paths(section_paths, workspace_path=ws_db)
+
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute(
+            "SELECT path FROM note_embeddings ORDER BY path"
+        )
+        rows = [r[0] for r in await cursor.fetchall()]
+    assert rows == section_paths, "every deferred path must be embedded"
+
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT path) FROM chunk_embeddings"
+        )
+        assert (await cursor.fetchone())[0] == len(section_paths)
+
+
+def test_schedule_embed_for_paths_returns_none_for_empty_list():
+    """The scheduler must short-circuit when there are no paths to embed."""
+    from services import ingest_jobs
+
+    assert ingest_jobs.schedule_embed_for_paths([], workspace_path=None) is None
+
+
+def test_schedule_embed_for_paths_short_circuits_when_disabled(monkeypatch):
+    """``JARVIS_DISABLE_EMBEDDINGS=1`` must skip the daemon thread.
+
+    Tests rely on this so the background embed work doesn't outlive the
+    test fixture and try to write to a torn-down database — but the
+    contract is intentional, not accidental, and is asserted here.
+    """
+    from services import ingest_jobs
+
+    monkeypatch.setenv("JARVIS_DISABLE_EMBEDDINGS", "1")
+    job_id = ingest_jobs.schedule_embed_for_paths(
+        ["doc/section-0.md"], workspace_path=None
+    )
+    assert job_id is None
+    # And no job should have been registered in the snapshot
+    active_kinds = {j["kind"] for j in ingest_jobs.snapshot()["active"]}
+    assert "embed" not in active_kinds
