@@ -16,11 +16,23 @@ jobs:
   # Backend — build & test
   # ─────────────────────────────────────────────
   backend:
-    name: Backend — pytest
+    name: Backend — pytest (${{ matrix.bundle_label }})
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
+    strategy:
+      fail-fast: false
+      # ADR 014 §139 — both build targets exercised so the cloud-provider
+      # code path stays correct enough to ship. desktop-bundle (=1) is
+      # the v1 default; cloud-sku (=0) re-includes the cloud-provider
+      # SDKs so the Anthropic / OpenAI / Google paths can run their tests.
+      matrix:
+        include:
+          - bundle: '1'
+            bundle_label: 'desktop-bundle'
+          - bundle: '0'
+            bundle_label: 'cloud-sku'
 
     steps:
       - uses: actions/checkout@v5
@@ -75,7 +87,18 @@ jobs:
           JARVIS_DISABLE_EMBEDDINGS: '1'
           JARVIS_WORKSPACE_PATH: /tmp/jarvis-ci
           ANTHROPIC_API_KEY: sk-ant-dummy-ci-key
+          # ADR 014 — matrix-controlled. Default '1' on every backend job
+          # was a non-starter: the api-key endpoint test would have failed
+          # in CI before we landed the gating because the conftest-level
+          # `app` instance is built once at module import. The matrix sets
+          # the env var BEFORE pytest collection so each job's app instance
+          # honours the build target.
+          JARVIS_DESKTOP_BUNDLE: ${{ matrix.bundle }}
         run: pytest --tb=short -q
+
+  # ─────────────────────────────────────────────
+  # Release — gates on both matrix entries below.
+  # ─────────────────────────────────────────────
 
   # ─────────────────────────────────────────────
   # Frontend — build & test

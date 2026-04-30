@@ -25,7 +25,14 @@ const currentProviderConfig = computed(() =>
   providers.find(p => p.id === activeProvider.value),
 )
 
-const availableProviders = computed(() => configuredProviders())
+// ADR 014 §B — desktop bundle filters cloud providers out of the picker.
+// Ollama remains; no cloud entries appear in the dropdown.
+const { isDesktopBundle } = useDesktopBundle()
+const availableProviders = computed(() => {
+  const all = configuredProviders()
+  if (!isDesktopBundle.value) return all
+  return all.filter(p => p.id === 'ollama')
+})
 
 function handleSelect(providerId: string, modelId: string): void {
   selectModel(providerId, modelId)

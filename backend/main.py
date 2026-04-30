@@ -23,6 +23,7 @@ from routers.enrichment import router as enrichment_router
 from routers.mcp import router as mcp_router
 from routers.retrieval_search import router as retrieval_router
 from routers.connections import router as connections_router
+from routers.bundle import router as bundle_router
 from services.enrichment_service import start_workers, stop_workers
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,17 @@ def create_app() -> FastAPI:
     app.include_router(retrieval_router)
     app.include_router(connections_router)
     app.include_router(mcp_router)
+    # ADR 014 §90 audit verification path 2 — `/api/bundle/capabilities`
+    # always registered (the response payload IS the audit signal).
+    app.include_router(bundle_router)
+    # ADR 014 §C — cloud-provider routers are skipped in the desktop bundle.
+    # The audit signal is *the route does not exist* (404), not "the route
+    # exists but is gated." Read the flag at app-construction time so unit
+    # tests can flip it via env-var monkeypatch + create_app().
+    from services.bundle import is_desktop_bundle
+    if not is_desktop_bundle():
+        from routers.api_keys import router as api_keys_router
+        app.include_router(api_keys_router)
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):

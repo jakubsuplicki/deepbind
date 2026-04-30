@@ -7,7 +7,8 @@
       </div>
 
       <!-- Phase: Choose -->
-      <template v-if="phase === 'choose'">
+      <!-- ADR 014 §B — desktop bundle skips the choice entirely (Local is the only option). -->
+      <template v-if="phase === 'choose' && !isDesktopBundle">
         <p class="onboarding__prompt">How would you like to power Jarvis?</p>
 
         <div class="onboarding__choices">
@@ -31,8 +32,8 @@
         </p>
       </template>
 
-      <!-- Phase: Cloud (existing flow) -->
-      <template v-if="phase === 'cloud'">
+      <!-- Phase: Cloud (existing flow) — never rendered when isDesktopBundle. -->
+      <template v-if="phase === 'cloud' && !isDesktopBundle">
         <KeyProtectionInfo title="Your keys stay in your browser" />
 
         <p class="onboarding__prompt">Add at least one AI provider to get started:</p>
@@ -107,7 +108,9 @@ import type { ProviderConfig } from '~/types'
 
 type OnboardingPhase = 'choose' | 'cloud' | 'local'
 
-const phase = ref<OnboardingPhase>('choose')
+const { isDesktopBundle } = useDesktopBundle()
+// ADR 014 §B — desktop bundle has no cloud branch; land directly in local flow.
+const phase = ref<OnboardingPhase>(isDesktopBundle.value ? 'local' : 'choose')
 const loading = ref(false)
 const error = ref('')
 const showAddKeyModal = ref(false)

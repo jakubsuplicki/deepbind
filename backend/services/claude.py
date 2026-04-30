@@ -4,8 +4,9 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-import anthropic
-
+# `anthropic` is imported lazily inside ClaudeService — ADR 014 excludes
+# the SDK from the desktop bundle, but StreamEvent / build_system_prompt
+# stay importable so the local-only path can use them.
 from services.context_builder import build_context
 
 logger = logging.getLogger(__name__)
@@ -187,11 +188,13 @@ def _handle_block_stop(tool: _ToolAccumulator) -> Optional[StreamEvent]:
 
 class ClaudeService:
     def __init__(self, api_key: str):
+        import anthropic  # lazy — ADR 014: excluded from desktop bundle.
         from services.privacy import assert_provider_allowed
 
         # Privacy gate (defense-in-depth) — blocks Anthropic when offline
         # mode is engaged or cloud providers are disabled in Settings.
         assert_provider_allowed("anthropic")
+        self._anthropic = anthropic
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
 
     async def close(self) -> None:
@@ -205,6 +208,7 @@ class ClaudeService:
         tools: list[dict],
     ) -> AsyncIterator[StreamEvent]:
         """Yields streaming events from Claude."""
+        anthropic = self._anthropic
         try:
             async for stream_event in self._iter_stream(messages, system_prompt, tools):
                 yield stream_event

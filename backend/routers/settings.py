@@ -25,14 +25,12 @@ async def get_settings_view():
     }
 
 
-@router.patch("/api-key")
-async def update_api_key(body: dict):
-    key = body.get("api_key", "").strip()
-    if not key:
-        raise HTTPException(status_code=422, detail="API key must not be empty")
-    # Keys are managed in the browser (localStorage/sessionStorage).
-    # This endpoint is a no-op kept for API compatibility.
-    return {"api_key_set": True}
+# NOTE — `PATCH /api/settings/api-key` historically lived here as a no-op
+# kept for API compatibility (keys are managed in the browser per ADR 002,
+# server never sees the raw key). It moved to the standalone
+# `routers/api_keys.py` so `main.py` can conditionally skip registering it
+# in the cloud-excluded desktop bundle (ADR 014 §C). When the bundle flag
+# is on, that route 404s — the audit signal a procurement reviewer expects.
 
 
 @router.patch("/voice")

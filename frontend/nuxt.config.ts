@@ -20,6 +20,14 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       backendWsUrl: 'ws://127.0.0.1:8000/api/chat/ws',
+      // ADR 014 §B — propagate the build-time bundle flag. Default '1' (the
+      // v1 desktop-bundle). Pages that gate cloud-provider UI read this
+      // via `useRuntimeConfig().public.desktopBundle === '1'` and skip
+      // rendering the AddKeyModal, the API-keys settings panel, the cloud
+      // entries in the chat-model picker. Set JARVIS_DESKTOP_BUNDLE=0 in
+      // the build environment to produce a bundle that re-includes the
+      // cloud-provider UI (used by CI's hybrid-SKU build target).
+      desktopBundle: process.env.JARVIS_DESKTOP_BUNDLE ?? '1',
     },
   },
   nitro: {

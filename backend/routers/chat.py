@@ -566,6 +566,31 @@ async def _handle_message(
     if not api_key and provider != "ollama":
         await _send_event(ws, "error", content="API key not configured")
         return
+
+    # ADR 014 §A — desktop bundle structurally excludes cloud-provider SDKs.
+    # When the bundle is built with `JARVIS_DESKTOP_BUNDLE=1` (the v1 default)
+    # the `anthropic` / `openai` / `google.generativeai` packages are not on
+    # disk; non-Ollama provider requests would fail later at LLM-construction
+    # time with a confusing ImportError. Catch it here and surface the
+    # structured "local-only" signal — same shape the future HTTP probe
+    # endpoint (/api/bundle/capabilities) reports, so audit scripts can
+    # detect both paths uniformly.
+    if (provider or "anthropic") != "ollama":
+        from services.bundle import cloud_providers_available
+        if not cloud_providers_available():
+            await _send_event(
+                ws,
+                "error",
+                content=(
+                    "This build excludes cloud providers — see ADR 014. "
+                    "Use the local Ollama provider, or rebuild with "
+                    "JARVIS_DESKTOP_BUNDLE=0."
+                ),
+                bundle_capability="local-only",
+            )
+            await _send_event(ws, "done", session_id=session_id)
+            return
+
     session_service.add_message(session_id, "user", content)
     strategy = context_strategy or DEFAULT_STRATEGY
     messages = strategy.assemble(session_service.get_messages(session_id))

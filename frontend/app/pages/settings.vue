@@ -2,7 +2,9 @@
   <div class="settings-page">
     <h1 class="settings-page__title">Settings</h1>
 
+    <!-- ADR 014 §B — desktop bundle excludes cloud-provider UI. -->
     <ProvidersSection
+      v-if="!isDesktopBundle"
       :settings-loaded="general.loaded.value"
       :server-key-configured="general.serverKeyConfigured.value"
       :key-storage="general.keyStorage.value"
@@ -58,6 +60,7 @@ import { useSettingsStatus } from '~/composables/settings/useSettingsStatus'
 
 const general = useGeneralSettings()
 const status = useSettingsStatus()
+const { isDesktopBundle } = useDesktopBundle()
 
 onMounted(async () => {
   await general.load()
