@@ -139,26 +139,17 @@ if [[ ! -f "$DMG" ]]; then
 fi
 
 echo
-echo "==> [4b/5] writing JarvisBundleCapabilities to Info.plist (ADR 014 §90)"
+echo "==> [4b/5] writing JarvisBundleCapabilities to Info.plist (ADR 015)"
 # Audit verification path 3 — buyer reads the capability array from the
-# .app's Info.plist without unpacking the binary. The array is computed
-# from the JARVIS_DESKTOP_BUNDLE flag; the desktop bundle's array omits
-# `cloud-llm` / `api-keys` / `external-providers`, the hybrid SKU build
-# adds them. PlistBuddy invocation uses `:Add` with `array` then per-item
-# adds; if the key already exists from a prior build, we delete it first
-# so re-running the script is idempotent.
+# .app's Info.plist without unpacking the binary. ADR 015 collapsed the
+# build to a single target (local-only), so the array is now static.
+# `Delete :Add` cycle keeps re-runs idempotent.
 INFO_PLIST="$APP/Contents/Info.plist"
-DESKTOP_BUNDLE_FLAG="${JARVIS_DESKTOP_BUNDLE:-1}"
 /usr/libexec/PlistBuddy -c "Delete :JarvisBundleCapabilities" "$INFO_PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :JarvisBundleCapabilities array" "$INFO_PLIST"
 for cap in local-llm vault-markdown knowledge-graph semantic-search; do
     /usr/libexec/PlistBuddy -c "Add :JarvisBundleCapabilities: string $cap" "$INFO_PLIST"
 done
-if [[ "$DESKTOP_BUNDLE_FLAG" == "0" ]]; then
-    for cap in cloud-llm api-keys external-providers; do
-        /usr/libexec/PlistBuddy -c "Add :JarvisBundleCapabilities: string $cap" "$INFO_PLIST"
-    done
-fi
 # Re-sign after touching Info.plist — modifying the plist invalidates the
 # existing bundle signature; without re-sign, notarization rejects.
 codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp \

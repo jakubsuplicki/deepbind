@@ -16,23 +16,11 @@ jobs:
   # Backend — build & test
   # ─────────────────────────────────────────────
   backend:
-    name: Backend — pytest (${{ matrix.bundle_label }})
+    name: Backend — pytest
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
-    strategy:
-      fail-fast: false
-      # ADR 014 §139 — both build targets exercised so the cloud-provider
-      # code path stays correct enough to ship. desktop-bundle (=1) is
-      # the v1 default; cloud-sku (=0) re-includes the cloud-provider
-      # SDKs so the Anthropic / OpenAI / Google paths can run their tests.
-      matrix:
-        include:
-          - bundle: '1'
-            bundle_label: 'desktop-bundle'
-          - bundle: '0'
-            bundle_label: 'cloud-sku'
 
     steps:
       - uses: actions/checkout@v5
@@ -49,9 +37,7 @@ jobs:
           cache-dependency-glob: backend/requirements.txt
 
       - name: Install dependencies
-        # --override forces python-dotenv 1.2.2 over litellm's transitive
-        # ==1.0.1 pin to eliminate CVE-2026-28684. See backend/overrides.txt.
-        run: uv pip install --system --override overrides.txt -r requirements.txt
+        run: uv pip install --system -r requirements.txt
 
       - name: Download spaCy models
         # Retry 3x with backoff to ride out transient GitHub 5xx errors when
@@ -86,14 +72,6 @@ jobs:
         env:
           JARVIS_DISABLE_EMBEDDINGS: '1'
           JARVIS_WORKSPACE_PATH: /tmp/jarvis-ci
-          ANTHROPIC_API_KEY: sk-ant-dummy-ci-key
-          # ADR 014 — matrix-controlled. Default '1' on every backend job
-          # was a non-starter: the api-key endpoint test would have failed
-          # in CI before we landed the gating because the conftest-level
-          # `app` instance is built once at module import. The matrix sets
-          # the env var BEFORE pytest collection so each job's app instance
-          # honours the build target.
-          JARVIS_DESKTOP_BUNDLE: ${{ matrix.bundle }}
         run: pytest --tb=short -q
 
   # ─────────────────────────────────────────────

@@ -52,12 +52,12 @@ HERE = Path(SPECPATH).resolve()
 REPO_ROOT = HERE.parent.parent
 BACKEND_ROOT = REPO_ROOT / "backend"
 
-# ADR 014 — desktop-bundle build flag. Default True per ADR §A: the v1
-# product *is* the cloud-excluded desktop bundle. Set
-# ``JARVIS_DESKTOP_BUNDLE=0`` before invoking PyInstaller to build the
-# hybrid SKU that re-includes the cloud-provider SDKs (used by CI's
-# second build target so the cloud paths stay correct enough to ship).
-DESKTOP_BUNDLE = os.environ.get("JARVIS_DESKTOP_BUNDLE", "1") == "1"
+# ADR 015 — single-target local-only build. The v1 product has no cloud
+# SDK code in the source repo, so the previous JARVIS_DESKTOP_BUNDLE flag
+# (which gated whether to exclude `anthropic`/`openai`/`litellm` from the
+# bundle) is no longer needed: there is nothing to exclude. The previous
+# `excludes` list survives below for `tkinter`/`matplotlib`/`PIL` (CPU
+# bloat, not capability gating).
 
 # --- Hidden imports ---------------------------------------------------------
 #
@@ -231,24 +231,7 @@ a = Analysis(
         "test",
         "IPython",
         "jupyter",
-    ] + ([
-        # ADR 014 §A — desktop-bundle structural exclusions. Default-ON;
-        # set JARVIS_DESKTOP_BUNDLE=0 to build the hybrid SKU that includes
-        # cloud-provider SDKs. Per the 2026-04-30 amendment we exclude the
-        # cloud SDKs *proper* (`anthropic`, `openai`, `google.generativeai`)
-        # plus the Anthropic-specific HTTP client, but keep `litellm` and
-        # `services.llm_service` since they're used by the Ollama path too.
-        # The audit signal: a procurement reviewer probing the unpacked
-        # bundle finds no Anthropic/OpenAI/Google SDK directories under
-        # _MEIPASS, AND any LiteLLM cloud-provider call fails at import
-        # time (the SDK is absent), AND `/api/bundle/capabilities` reports
-        # `cloud_providers_available: false`.
-        "anthropic",
-        "openai",
-        "google.generativeai",
-        "google.generativelanguage",
-        "services._anthropic_client",
-    ] if DESKTOP_BUNDLE else []),
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
