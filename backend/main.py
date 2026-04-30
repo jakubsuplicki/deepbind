@@ -62,6 +62,10 @@ async def lifespan(app: FastAPI):
     yield
     # Stop background pieces in reverse order of startup.
     await stop_workers()
+    # First-run orchestrator (ADR 005 §B) is user-triggered, not lifespan-
+    # triggered; we only need to cancel any in-flight task at shutdown.
+    from services import first_run_orchestrator
+    await first_run_orchestrator.cancel_and_wait()
     await reindex_supervisor.cancel_and_wait()
 
 

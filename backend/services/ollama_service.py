@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,13 @@ def _normalize_and_validate_ollama_base_url(base_url: str) -> str:
 
 # ── Default Ollama URL ───────────────────────────────────────────────────────
 
-DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+# The Tauri shell sets JARVIS_OLLAMA_BASE_URL at spawn time when the bundled
+# Ollama sidecar binds a non-default loopback port (ADR 003 §"Ollama
+# distribution" + §D, §"Coexistence with a system-installed Ollama"). For
+# `python main.py` and tests the legacy default applies.
+DEFAULT_OLLAMA_BASE_URL = os.environ.get(
+    "JARVIS_OLLAMA_BASE_URL", "http://localhost:11434"
+).strip() or "http://localhost:11434"
 
 # ── Pydantic Schemas ─────────────────────────────────────────────────────────
 
@@ -150,6 +156,28 @@ class ModelCatalogEntry(BaseModel):
     # explicit id is the difference between accurate budgets in Polish/Chinese
     # vs ~30% drift on non-English content (ADR 009 driver §3).
     tokenizer_id: Optional[str] = None
+    # ADR 005 §A — license metadata. Apache-2.0 / MIT entries pass the
+    # catalog discipline rule; "non-permissive" (Gemma TOU, Mistral Research
+    # License, Llama community license, etc.) entries are flagged here for
+    # the eventual picker-side filter. Today the field is metadata-only:
+    # filtering is enforced by `internal=True` on non-permissive entries.
+    # The license-driven filter graduates in a follow-up cleanup chunk that
+    # rewrites the catalog tests against ADR 005 §A's permissive-only set.
+    license: Literal["Apache-2.0", "MIT", "non-permissive"] = "Apache-2.0"
+    # ADR 005 §C — per-tier downgrade ladder slot. Maps tier letter ("A"/"B"/"C")
+    # → integer position where smaller = closer to the floor (e.g. position 1 is
+    # the smallest already-installed model, position 4 is the opt-in ceiling).
+    # Position 0 is reserved for the floor (refuse-with-error). An entry not
+    # present in `ladder_positions` for a tier is not on that tier's ladder.
+    ladder_positions: Dict[str, int] = Field(default_factory=dict)
+    # ADR 005 §A/§B — set of tiers for which this entry is the *first-run
+    # default* (i.e. the model the orchestrator pulls in the foreground on
+    # first launch). Empty for entries that are never the first-run default
+    # (legacy fast-tier, opt-in ceilings, plumbing models). Multiple tiers OK
+    # (e.g. a model could serve as primary for both Tier A and Tier B; in v1
+    # primaries are unique per tier — Qwen3-8B for A, Qwen3-30B-A3B for B,
+    # gpt-oss-120b for C — but the schema allows future overlap).
+    first_run_default_tiers: List[str] = Field(default_factory=list)
 
 
 class ModelRecommendation(BaseModel):
@@ -266,6 +294,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         attention_arch="transformer",
         effective_context_tokens=32768,
         tokenizer_id="Qwen/Qwen3-1.7B",
+        license="Apache-2.0",
+        # Not on any ADR 005 §A tier ladder — kept for the legacy "fast" preset
+        # and for low-RAM testing paths. Listed for completeness.
     ),
     ModelCatalogEntry(
         id="qwen3-4b",
@@ -288,6 +319,11 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         attention_arch="transformer",
         effective_context_tokens=32768,
         tokenizer_id="Qwen/Qwen3-4B",
+        license="Apache-2.0",
+        # ADR 005 §C — Tier B/C downgrade-ladder position 1 (the verified
+        # 32K-native variant). Tier A uses qwen3-4b-instruct-2507 as the
+        # ladder target (256K-native) per ADR §A.
+        ladder_positions={"B": 1, "C": 1},
     ),
     ModelCatalogEntry(
         id="qwen3-8b",
@@ -310,6 +346,11 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         attention_arch="transformer",
         effective_context_tokens=32768,
         tokenizer_id="Qwen/Qwen3-8B",
+        license="Apache-2.0",
+        # ADR 005 §A — Tier A first-run primary; ADR §C — ladder position 2
+        # in all three tiers (the universal mid-tier fallback).
+        first_run_default_tiers=["A"],
+        ladder_positions={"A": 2, "B": 2, "C": 2},
     ),
     ModelCatalogEntry(
         id="ministral-3-8b",
@@ -333,6 +374,11 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         # Ministral-3 advertises 256K native; conservative RULER-safe ceiling.
         effective_context_tokens=65536,
         tokenizer_id="mistralai/Ministral-3-8B",
+        # ADR 005 §A — Mistral Research License is non-permissive (research +
+        # eval only; commercial use requires a paid Mistral license). Today
+        # this is metadata only; the picker-side license filter and entry
+        # removal land in a follow-up ADR-aligned cleanup chunk.
+        license="non-permissive",
     ),
     ModelCatalogEntry(
         id="gemma4-e4b",
@@ -357,6 +403,10 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         # advertised 128K, not the full window.
         effective_context_tokens=65536,
         tokenizer_id="google/gemma-4-e4b",
+        # ADR 005 §A — Gemma Terms of Use are non-permissive (flow-down
+        # restrictions on derivative deployment). Metadata-only today; picker
+        # filter + removal in a follow-up ADR-aligned cleanup.
+        license="non-permissive",
     ),
     ModelCatalogEntry(
         id="devstral-small-2-24b",
@@ -380,6 +430,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         # 256K advertised; RULER-safe at the dense-transformer scale ~64K.
         effective_context_tokens=65536,
         tokenizer_id="mistralai/Devstral-Small-2-24B-2507",
+        # ADR 005 §A — Mistral Research License (same caveat as ministral-3-8b).
+        license="non-permissive",
     ),
     # ──────────────────────────────────────────────────────────────────────
     # Entries below carry `internal=True` because their Ollama registry tags
@@ -416,6 +468,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         # SWA at MoE 26B/4B-active scale; conservative half-window ceiling.
         effective_context_tokens=65536,
         tokenizer_id="google/gemma-4-26b-a4b",
+        # ADR 005 §A — Gemma Terms of Use are non-permissive.
+        license="non-permissive",
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — Qwen3 -2507 split fine-tunes use various
@@ -443,6 +497,11 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         # ceiling stays at the family ~32K floor.
         effective_context_tokens=32768,
         tokenizer_id="Qwen/Qwen3-4B-Instruct-2507",
+        license="Apache-2.0",
+        # ADR 005 §A — Tier A "downgrade ladder target" (the 256K-native
+        # variant chosen for light hardware where long-context capability
+        # matters more than raw throughput). Position 1 on the Tier A ladder.
+        ladder_positions={"A": 1},
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — `qwen3:14b` is plausible but unverified.
@@ -467,6 +526,10 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         attention_arch="transformer",
         effective_context_tokens=32768,
         tokenizer_id="Qwen/Qwen3-14B",
+        license="Apache-2.0",
+        # Not on any ADR 005 tier ladder — superseded by Qwen3-30B-A3B-Instruct-2507
+        # as the v1 best-local target. Kept for the chat-model probe canonical
+        # role per ADR 010 Issue 4 until per-machine selection (ADR 012) lands.
     ),
     ModelCatalogEntry(
         # Verified absent on Ollama 0.18.0 (2026-04-28): `ollama pull qwen3:30b-a3b-instruct-2507`
@@ -504,6 +567,12 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         # ceiling. Conservative 64K stays safe.
         effective_context_tokens=65536,
         tokenizer_id="Qwen/Qwen3-30B-A3B-Instruct-2507",
+        license="Apache-2.0",
+        # ADR 005 §A — Tier B first-run primary; ADR §C — ladder position 3
+        # in all three tiers (Tier A treats it as opt-in ceiling; Tier B/C
+        # use it as the standard mid-tier).
+        first_run_default_tiers=["B"],
+        ladder_positions={"A": 3, "B": 3, "C": 3},
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — IBM Granite 4.0 tag conventions vary
@@ -531,6 +600,9 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         # is operational, not half.
         effective_context_tokens=32768,
         tokenizer_id="ibm-granite/granite-4.0-h-micro",
+        license="Apache-2.0",
+        # ADR 005 §D — bundling deferred to v1.1; existing rule-based plumbing
+        # classifier is good enough for v1. Not on a chat ladder.
     ),
     ModelCatalogEntry(
         id="granite-4-h-tiny",
@@ -554,6 +626,10 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         attention_arch="mamba",
         effective_context_tokens=131072,
         tokenizer_id="ibm-granite/granite-4.0-h-tiny",
+        license="Apache-2.0",
+        # ADR 005 §A — Tier B opt-in plumbing upgrade (replaces bundled
+        # embedding/NER for users who want higher quality). Not on the chat
+        # downgrade ladder.
     ),
     ModelCatalogEntry(
         id="granite-4-h-small",
@@ -577,6 +653,79 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         attention_arch="mamba",
         effective_context_tokens=131072,
         tokenizer_id="ibm-granite/granite-4.0-h-small",
+        license="Apache-2.0",
+        # Not in ADR 005 §A v1 catalog — kept for plumbing-tier
+        # experimentation; not user-pickable.
+    ),
+    # ──────────────────────────────────────────────────────────────────────
+    # ADR 005 — entries added 2026-04-30 to support first-run policy + downgrade
+    # ladder. Both carry `internal=True` until their Ollama tags verify; the
+    # orchestrator's first_run_default_for/downgrade_ladder_for helpers ignore
+    # `internal` (the catalog is the source of tier assignments) but the user
+    # picker continues to filter them out.
+    # ──────────────────────────────────────────────────────────────────────
+    ModelCatalogEntry(
+        # TODO: verify Ollama tag — `qwen3:30b-a3b-thinking-2507` is the
+        # plausible canonical form; HF mirror also exists at
+        # hf.co/Qwen/Qwen3-30B-A3B-Thinking-2507-GGUF as a fallback pull path.
+        id="qwen3-30b-a3b-thinking-2507",
+        preset="reasoning",
+        ollama_model="qwen3:30b-a3b-thinking-2507",
+        litellm_model="ollama_chat/qwen3:30b-a3b-thinking-2507",
+        label="Qwen3 30B-A3B Thinking 2507",
+        download_size_gb=18.0,
+        context_window="256K",
+        context_tokens=262144,
+        recommended_ram_min_gb=24,
+        recommended_ram_max_gb=48,
+        min_disk_gb=26,
+        cpu_friendly=False,
+        gpu_preferred=True,
+        strengths=["MoE 30B/3B-active", "reasoning", "256K native", "duel-mode opt-in"],
+        best_for=["reasoning tasks", "duel mode", "complex analysis"],
+        native_tools=True,
+        internal=True,
+        bytes_per_kv_token=4096,
+        attention_arch="transformer",
+        # Same architecture as the Instruct sibling — same effective ceiling.
+        effective_context_tokens=65536,
+        tokenizer_id="Qwen/Qwen3-30B-A3B-Thinking-2507",
+        license="Apache-2.0",
+        # ADR 005 §A — Tier B reasoning primary (duel-mode opt-in). Not on
+        # the conversational downgrade ladder; reasoning is a separate axis.
+    ),
+    ModelCatalogEntry(
+        # TODO: verify Ollama tag — gpt-oss-120b is published on Ollama under
+        # `gpt-oss:120b` (native MXFP4). Pull path needs verification against
+        # the live registry plus a SHA-pinned manifest entry per ADR 005 §B.
+        id="gpt-oss-120b",
+        preset="best-local",
+        ollama_model="gpt-oss:120b",
+        litellm_model="ollama_chat/gpt-oss:120b",
+        label="gpt-oss 120B",
+        download_size_gb=63.0,
+        context_window="128K",
+        context_tokens=131072,
+        recommended_ram_min_gb=80,
+        recommended_ram_max_gb=128,
+        min_disk_gb=80,
+        cpu_friendly=False,
+        gpu_preferred=True,
+        strengths=["frontier-quality", "MoE 117B/5.1B-active", "native MXFP4", "Apache 2.0"],
+        best_for=["frontier local quality", "workstation", "compliance buyers"],
+        native_tools=True,
+        internal=True,
+        bytes_per_kv_token=2048,
+        attention_arch="transformer",
+        # Conservative half-window ceiling at frontier-MoE scale.
+        effective_context_tokens=65536,
+        tokenizer_id="openai/gpt-oss-120b",
+        license="Apache-2.0",
+        # ADR 005 §A — Tier C first-run primary; ADR §C — ladder position 4
+        # in Tier B (opt-in) and Tier C (the ceiling). The single H100 / 96+ GB
+        # unified-memory target.
+        first_run_default_tiers=["C"],
+        ladder_positions={"B": 4, "C": 4},
     ),
 ]
 
@@ -632,6 +781,95 @@ def effective_footprint_bytes(entry: ModelCatalogEntry, ctx_len_now: int) -> int
     """
     weights = int(entry.download_size_gb * (1024 ** 3))
     return weights + entry.bytes_per_kv_token * max(0, ctx_len_now)
+
+
+# ── ADR 005 — Hardware-tiered first-run + downgrade ladder helpers ──────────
+
+
+def tier_for_hardware(hw: HardwareProfile) -> Literal["A", "B", "C"]:
+    """Map a HardwareProfile to the ADR 005 §B tier ("A" / "B" / "C").
+
+    Boundary rules per ADR 005 §A catalog tier definitions:
+      - Tier C (workstation-class): 96+ GB RAM, OR datacenter VRAM ≥ 80 GB
+        (H100 / A100 80 GB / MI300X class).
+      - Tier B (high-spec): discrete GPU ≥ 24 GB VRAM (RTX 4090+ / dual 3090),
+        OR 48+ GB unified Apple Silicon.
+      - Tier A (default): everything else — 16/24/32 GB unified, RTX 4060/4070
+        (8 GB), 32 GB CPU-only. ADR §A drives most buyers' first-run flow here.
+
+    Conservative on the boundary: 32 GB unified Apple Silicon stays in Tier A
+    (a ~20 GB Tier-B primary on a 32 GB machine OOMs once the OS + browser
+    consume their share). Promotion to Tier B requires evidence the larger
+    primary actually fits — the chat-model probe (ADR 012) is the right place
+    for that, not first-run defaults.
+    """
+    ram = hw.total_ram_gb
+    vram = hw.gpu_vram_gb or 0.0
+    if ram >= 96 or vram >= 80:
+        return "C"
+    if vram >= 24:
+        return "B"
+    if ram >= 48 and hw.is_apple_silicon:
+        return "B"
+    return "A"
+
+
+def first_run_default_for(tier: str) -> Optional[ModelCatalogEntry]:
+    """Return the first-run default chat model for a tier, or None if absent.
+
+    Per ADR 005 §A: Tier A → Qwen3-8B, Tier B → Qwen3-30B-A3B-Instruct-2507,
+    Tier C → gpt-oss-120b. Tiers without a registered first-run default
+    return None — the orchestrator (G4b2) treats this as a configuration
+    error and surfaces a "no chat model — pick one in settings" empty state.
+
+    Looks at every catalog entry (including `internal=True`) because the
+    tier assignments are the source of truth for first-run, not the user-
+    picker filter. The user picker filters separately on `internal`.
+    """
+    for entry in MODEL_CATALOG:
+        if tier in entry.first_run_default_tiers:
+            return entry
+    return None
+
+
+def downgrade_ladder_for(
+    tier: str,
+    *,
+    include_opt_in: bool = True,
+) -> List[ModelCatalogEntry]:
+    """Return the ADR 005 §C downgrade ladder for a tier, top → floor.
+
+    Entries are ordered by `ladder_positions[tier]` descending (largest
+    position = top of the ladder = checked first when degrading). The floor
+    (refuse-with-error) is implicit at position 0 and is not represented as
+    a catalog entry.
+
+    `include_opt_in=False` filters out the ceiling positions that require an
+    explicit user opt-in (per ADR §A: Qwen3-30B-A3B on Tier A; gpt-oss-120b
+    on Tier B). The orchestrator passes True so the ladder is complete; the
+    runtime auto-downgrade caller passes True too — opt-in models are only on
+    the ladder if the user already pulled them, so the filter is moot at run
+    time. Reserved for future "what would the ladder look like if I opt in?"
+    UI surfaces.
+    """
+    members = [
+        entry for entry in MODEL_CATALOG
+        if tier in entry.ladder_positions
+    ]
+    members.sort(key=lambda e: e.ladder_positions[tier], reverse=True)
+    if include_opt_in:
+        return members
+    # Opt-in entries are those that aren't the first-run default for *any*
+    # tier and sit above the first-run default's position in this tier.
+    primary = first_run_default_for(tier)
+    if primary is None:
+        return members
+    primary_pos = primary.ladder_positions.get(tier, -1)
+    return [
+        e for e in members
+        if e.ladder_positions[tier] <= primary_pos
+        or tier in e.first_run_default_tiers
+    ]
 
 
 # ── Hardware Probe ───────────────────────────────────────────────────────────
@@ -1094,10 +1332,27 @@ async def build_catalog(
 
 # ── Model Pull (Streaming) ──────────────────────────────────────────────────
 
-async def pull_model_stream(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL):
-    """Pull a model from Ollama, yielding SSE-formatted progress lines.
+async def pull_model_events(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL):
+    """Pull a model from Ollama, yielding raw progress event dicts.
 
-    Yields strings like: 'data: {"status": "pulling manifest"}\n\n'
+    Two consumers in the codebase:
+      - `pull_model_stream()` wraps each event as an SSE frame for the
+        `/api/local/models/pull` endpoint.
+      - `services/first_run_orchestrator.py` consumes the dicts directly
+        to update its `primary_progress` / `fallback_progress` snapshots.
+
+    Single source of truth for the pull loop keeps the SSE endpoint and the
+    orchestrator's progress signals in lockstep — they can never disagree on
+    Ollama's reported state.
+
+    Yields dicts mirroring Ollama's `/api/pull` event shape:
+      {"status": "pulling manifest"}
+      {"status": "downloading", "completed": 1234, "total": 5678, "digest": "sha256:..."}
+      {"status": "verifying sha256 digest"}
+      {"status": "writing manifest"}
+      {"status": "success"}
+    Plus an internal error event when the upstream POST fails:
+      {"status": "error", "error": "Ollama returned status 404: ..."}
     """
     base_url = _normalize_and_validate_ollama_base_url(base_url)
     async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
@@ -1108,21 +1363,31 @@ async def pull_model_stream(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL)
         ) as resp:
             if resp.status_code != 200:
                 error_body = await resp.aread()
-                yield 'data: %s\n\n' % json.dumps({
+                yield {
                     "status": "error",
                     "error": "Ollama returned status %d: %s" % (resp.status_code, error_body.decode()[:200]),
-                })
+                }
                 return
 
             async for line in resp.aiter_lines():
                 if not line.strip():
                     continue
                 try:
-                    data = json.loads(line)
-                    yield "data: %s\n\n" % json.dumps(data)
+                    yield json.loads(line)
                 except json.JSONDecodeError:
                     continue
 
+
+async def pull_model_stream(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL):
+    """Pull a model from Ollama, yielding SSE-formatted progress lines.
+
+    Thin wrapper over `pull_model_events()` — adds the `data: ` prefix and
+    `\n\n` framing required by the EventSource protocol, plus a terminal
+    `{"status": "done"}` sentinel the frontend uses to know the stream
+    finished cleanly. See `pull_model_events()` for the underlying event shape.
+    """
+    async for event in pull_model_events(model, base_url):
+        yield "data: %s\n\n" % json.dumps(event)
     yield 'data: {"status": "done"}\n\n'
 
 

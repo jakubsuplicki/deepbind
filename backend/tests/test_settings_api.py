@@ -95,3 +95,42 @@ async def test_settings_survives_restart(client, patch_settings):
     await client.patch("/api/settings/voice", json={"tts_voice": "alloy"})
     resp = await client.get("/api/settings")
     assert resp.json()["voice"]["tts_voice"] == "alloy"
+
+
+# ── Lightweight mode (ADR 005 §C trigger 3) ─────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_lightweight_mode_default_off(client, patch_settings):
+    resp = await client.get("/api/settings/lightweight-mode")
+    assert resp.status_code == 200
+    assert resp.json() == {"enabled": False}
+
+
+@pytest.mark.anyio
+async def test_lightweight_mode_toggle_on_persists(client, patch_settings):
+    resp = await client.patch("/api/settings/lightweight-mode", json={"enabled": True})
+    assert resp.status_code == 200
+    assert resp.json() == {"enabled": True}
+    # Survive a re-read.
+    resp2 = await client.get("/api/settings/lightweight-mode")
+    assert resp2.json() == {"enabled": True}
+
+
+@pytest.mark.anyio
+async def test_lightweight_mode_toggle_off(client, patch_settings):
+    await client.patch("/api/settings/lightweight-mode", json={"enabled": True})
+    resp = await client.patch("/api/settings/lightweight-mode", json={"enabled": False})
+    assert resp.json() == {"enabled": False}
+
+
+@pytest.mark.anyio
+async def test_lightweight_mode_rejects_non_bool(client, patch_settings):
+    resp = await client.patch("/api/settings/lightweight-mode", json={"enabled": "yes"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_lightweight_mode_rejects_missing_field(client, patch_settings):
+    resp = await client.patch("/api/settings/lightweight-mode", json={})
+    assert resp.status_code == 422

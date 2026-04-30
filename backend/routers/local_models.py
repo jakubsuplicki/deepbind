@@ -18,6 +18,7 @@ from services.chat_model_probe import (
     set_user_override,
 )
 from services.chat_model_probe import ProbeEvidence, ProbeResult
+from services import first_run_orchestrator
 from services.ollama_service import (
     HardwareProfile,
     ModelRecommendation,
@@ -274,4 +275,53 @@ async def set_chat_model_probe_override(req: ChatModelProbeOverrideRequest):
         "status": "ok",
         "user_override": record.get("user_override"),
         "recommended_model": record.get("recommended_model"),
+    }
+
+
+# ── First-run pull orchestrator (ADR 005 §B) ───────────────────────────────
+
+
+class FirstRunStartRequest(BaseModel):
+    """Optional body for ``POST /api/local/first-run/start``.
+
+    ``skip=True`` is the user's "I'll pick my own model later" path: writes
+    no marker, sets state='skipped', returns immediately. Per ADR 005 §B
+    "Skip / opt-out" — next launch re-prompts.
+    """
+    skip: bool = False
+    base_url: str = DEFAULT_OLLAMA_BASE_URL
+
+
+@router.post("/first-run/start")
+async def start_first_run(req: Optional[FirstRunStartRequest] = None):
+    """Kick off the first-run pull pipeline (probe → primary → fallback → probe).
+
+    Idempotent: concurrent calls while a job runs return ``already_running``
+    without spawning a second task. Calls after completion (marker file
+    present) return ``already_complete``. The skip path is the only flow
+    that does NOT write the marker.
+    """
+    body = req or FirstRunStartRequest()
+    result = await first_run_orchestrator.start_async(
+        skip=body.skip,
+        base_url=body.base_url,
+    )
+    return result
+
+
+@router.get("/first-run/status")
+async def get_first_run_status():
+    """Snapshot the orchestrator state machine + per-pull progress.
+
+    Frontend polls this once per second while the modal is open to drive
+    the progress UI. Same shape contract as ``/api/memory/reindex/status``
+    (G5) — `state` / `started_at` / `finished_at` / `last_error` plus the
+    pipeline-specific fields. Marker presence is reflected in
+    `marker_written` so the frontend can decide whether the modal needs to
+    show at all on next mount.
+    """
+    status = first_run_orchestrator.current_status()
+    return {
+        **status.to_dict(),
+        "marker_present": first_run_orchestrator.is_first_run_complete(),
     }

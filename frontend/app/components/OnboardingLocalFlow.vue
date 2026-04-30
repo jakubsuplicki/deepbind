@@ -1,4 +1,22 @@
 <script setup lang="ts">
+/**
+ * OnboardingLocalFlow — first-run pull pipeline UI for the bundled-Ollama
+ * desktop product (ADR 005 §B). Two layered paths:
+ *
+ *   Layer 1 — orchestrator-driven (default in the bundled build).
+ *   Drives `useFirstRun` against `/api/local/first-run/*`. Auto-kicks the
+ *   pipeline on mount when there is no marker file. Releases the user into
+ *   chat the moment the foreground primary pull lands; the background
+ *   fallback pull and the chat-model probe continue silently.
+ *
+ *   Layer 2 — manual model picker.
+ *   Engaged when the user clicks "Pick my own model later" (the §B Skip /
+ *   opt-out path) or when Ollama is not yet reachable in dev mode (no
+ *   bundled sidecar). Drives the existing `useLocalSetupFlow` state
+ *   machine — kept verbatim from the legacy onboarding flow for the
+ *   `LocalModelsSection.vue` (Settings) consumer.
+ */
+
 const emit = defineEmits<{
   (e: 'model-ready'): void
   (e: 'back'): void
@@ -7,31 +25,85 @@ const emit = defineEmits<{
 const localModels = useLocalModels()
 const flow = useLocalSetupFlow()
 const probe = useChatModelProbe()
+const firstRun = useFirstRun()
+
 const showAll = ref(false)
 const showManualSetup = ref(false)
 const probeFinished = ref(false)
 
+// 'orchestrator' = ADR 005 §B Layer 1; 'manual' = legacy picker (Layer 2).
+// Mode flips to 'manual' on the user's skip click or when the runtime is
+// not reachable yet (dev/non-bundled mode).
+type WizardMode = 'orchestrator' | 'manual'
+const mode = ref<WizardMode>('orchestrator')
+
 const linuxCommand = 'curl -fsSL https://ollama.com/install.sh | sh'
 const copiedCommand = ref(false)
 
-onMounted(() => {
-  flow.initialize()
+onMounted(async () => {
+  await flow.initialize()
+  await firstRun.fetchOnce()
   probe.fetchStatus()
+
+  // Marker present (or already complete) → release immediately.
+  if (firstRun.status.value.marker_present || firstRun.status.value.state === 'complete') {
+    emit('model-ready')
+    return
+  }
+
+  // Pure manual fallback: Ollama isn't reachable. Stay in legacy install
+  // wizard until it comes up. The dev case where users `ollama serve`
+  // themselves; in the bundled build the Tauri sidecar guarantees this is
+  // already true when we mount.
+  if (!localModels.isOllamaReady()) {
+    mode.value = 'manual'
+    return
+  }
+
+  // Already mid-pipeline (e.g. user navigated away and came back)? Just
+  // observe — the composable's poll picks up where it left off.
+  if (firstRun.active.value) return
+
+  // Idle + reachable + no marker → kick the §B pipeline.
+  if (firstRun.status.value.state === 'idle') {
+    await firstRun.start()
+  }
 })
 
 onUnmounted(() => {
   flow.cleanup()
 })
 
-// Auto-run the chat-model self-test the first time we hit model_ready.
-// The user has just downloaded a model; ADR 012 says we validate before
-// the user actually opens the chat surface, so any per-environment
-// failure is caught here rather than mid-conversation.
+// Once the orchestrator hits `complete`, run the probe panel for the user
+// to see the validation outcome (mirrors the legacy `model_ready` watcher).
+watch(
+  () => firstRun.status.value.state,
+  async (state) => {
+    if (state !== 'complete') return
+    if (probeFinished.value) return
+    const status = probe.status.value ?? await probe.fetchStatus()
+    if (status?.persisted && !status.needs_rerun) {
+      probeFinished.value = true
+      return
+    }
+    // The orchestrator runs the probe server-side too; we only re-run
+    // here if its persisted record doesn't cover the current environment.
+    if (!firstRun.status.value.probe_failed) {
+      probeFinished.value = true
+      return
+    }
+    await probe.runProbe()
+    probeFinished.value = true
+  },
+)
+
+// In legacy manual mode, mirror the previous auto-probe-on-model-ready
+// behaviour so downloads from the picker still validate.
 watch(
   () => flow.state.value,
   async (state) => {
+    if (mode.value !== 'manual') return
     if (state === 'model_ready' && !probeFinished.value && !probe.running.value) {
-      // Skip if a fresh persisted record already covers this environment.
       const status = probe.status.value ?? await probe.fetchStatus()
       if (status?.persisted && !status.needs_rerun) {
         probeFinished.value = true
@@ -50,10 +122,7 @@ function copyLinuxCommand() {
 }
 
 async function handlePull(modelId: string) {
-  const ok = await flow.downloadModel(modelId)
-  if (ok) {
-    // Don't auto-emit — let user see the success screen
-  }
+  await flow.downloadModel(modelId)
 }
 
 async function handleSelect(modelId: string) {
@@ -66,12 +135,22 @@ function handleFinish() {
 
 function handleDownloadAnother() {
   flow.state.value = 'model_selection'
+  mode.value = 'manual'
 }
 
-const displayModels = computed(() => {
-  if (showAll.value) return localModels.catalog.value
-  return localModels.recommendedModels.value.slice(0, 3)
-})
+async function handleSkip() {
+  // §B Skip / opt-out — no marker is written; user lands in the manual
+  // picker and can choose to take responsibility for the chat model.
+  await firstRun.start({ skip: true })
+  await localModels.fetchCatalog()
+  flow.state.value = 'model_selection'
+  mode.value = 'manual'
+}
+
+async function handleRetry() {
+  // Idempotent — concurrent /start while running returns already_running.
+  await firstRun.start()
+}
 
 const downloadingModel = computed(() => {
   if (!flow.downloadingModelId.value) return null
@@ -79,6 +158,57 @@ const downloadingModel = computed(() => {
 })
 
 const readyModel = computed(() => localModels.activeModel.value)
+
+// Catalog entry that matches the orchestrator's primary pull, used for
+// the "Downloading X — ~Y GB" subhead. Fall back to the raw ollama tag.
+const primaryEntry = computed(() => {
+  const tag = firstRun.status.value.primary_ollama_model
+  if (!tag) return null
+  return localModels.catalog.value.find(m => m.ollama_model === tag) ?? null
+})
+
+const fallbackEntry = computed(() => {
+  const tag = firstRun.status.value.fallback_ollama_model
+  if (!tag) return null
+  return localModels.catalog.value.find(m => m.ollama_model === tag) ?? null
+})
+
+const formattedPrimaryProgress = computed(() => {
+  const p = firstRun.status.value.primary
+  if (p.total === 0) return null
+  return `${formatBytes(p.completed)} / ${formatBytes(p.total)}`
+})
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+  return `${value.toFixed(unit >= 2 ? 1 : 0)} ${units[unit]}`
+}
+
+const tierLabel = computed(() => {
+  const tier = firstRun.status.value.tier
+  if (!tier) return null
+  return { A: 'Tier A · Lightweight', B: 'Tier B · Balanced', C: 'Tier C · Workstation' }[tier]
+})
+
+// Step indicators: 1. Detect hardware, 2. Download primary, 3. Ready.
+// Maps both orchestrator state and manual flow.state onto a single
+// 1..3 progress so the indicator strip stays stable across mode flips.
+const wizardStep = computed<1 | 2 | 3>(() => {
+  if (mode.value === 'orchestrator') {
+    const s = firstRun.status.value.state
+    if (s === 'idle' || s === 'probing') return 1
+    if (s === 'pulling_primary') return 2
+    return 3
+  }
+  return flow.wizardStep.value
+})
 </script>
 
 <template>
@@ -88,310 +218,386 @@ const readyModel = computed(() => localModels.activeModel.value)
     <!-- Step indicators -->
     <div class="local-flow__steps">
       <div class="local-flow__step" :class="{
-        'local-flow__step--active': flow.wizardStep.value === 1,
-        'local-flow__step--done': flow.wizardStep.value > 1
+        'local-flow__step--active': wizardStep === 1,
+        'local-flow__step--done': wizardStep > 1
       }">
-        <span class="local-flow__step-num">{{ flow.wizardStep.value > 1 ? '✓' : '1' }}</span>
-        <span class="local-flow__step-label">Install local runtime</span>
+        <span class="local-flow__step-num">{{ wizardStep > 1 ? '✓' : '1' }}</span>
+        <span class="local-flow__step-label">Detect hardware</span>
       </div>
-      <div class="local-flow__step-line" :class="{ 'local-flow__step-line--done': flow.wizardStep.value > 1 }" />
+      <div class="local-flow__step-line" :class="{ 'local-flow__step-line--done': wizardStep > 1 }" />
       <div class="local-flow__step" :class="{
-        'local-flow__step--active': flow.wizardStep.value === 2,
-        'local-flow__step--done': flow.wizardStep.value > 2
+        'local-flow__step--active': wizardStep === 2,
+        'local-flow__step--done': wizardStep > 2
       }">
-        <span class="local-flow__step-num">{{ flow.wizardStep.value > 2 ? '✓' : '2' }}</span>
-        <span class="local-flow__step-label">Choose a model</span>
+        <span class="local-flow__step-num">{{ wizardStep > 2 ? '✓' : '2' }}</span>
+        <span class="local-flow__step-label">Download model</span>
       </div>
-      <div class="local-flow__step-line" :class="{ 'local-flow__step-line--done': flow.wizardStep.value > 2 }" />
-      <div class="local-flow__step" :class="{ 'local-flow__step--active': flow.wizardStep.value === 3 }">
+      <div class="local-flow__step-line" :class="{ 'local-flow__step-line--done': wizardStep > 2 }" />
+      <div class="local-flow__step" :class="{ 'local-flow__step--active': wizardStep === 3 }">
         <span class="local-flow__step-num">3</span>
         <span class="local-flow__step-label">Start using Jarvis</span>
       </div>
     </div>
 
-    <!-- Loading state -->
+    <!-- Loading state — initial hardware/runtime detection -->
     <div v-if="localModels.loading.value" class="local-flow__loading">
       <div class="local-flow__spinner" />
       Detecting your hardware...
     </div>
 
-    <!-- ==================== STATE: runtime_missing ==================== -->
-    <template v-else-if="flow.state.value === 'runtime_missing'">
-      <div class="local-flow__install">
-        <h3 class="local-flow__section-title">Ollama powers local AI on your computer</h3>
-        <p class="local-flow__section-desc">
-          <template v-if="flow.detectedOS.value === 'macos'">Install it from the official website, then open the app once. Jarvis will detect it automatically.</template>
-          <template v-else-if="flow.detectedOS.value === 'windows'">Install it from the official website. It runs automatically in the background after install.</template>
-          <template v-else>Install it using the command below, then run <code>ollama serve</code> to start it.</template>
-        </p>
+    <!-- ============================================================ -->
+    <!-- Layer 1 — Orchestrator (ADR 005 §B)                          -->
+    <!-- ============================================================ -->
+    <template v-else-if="mode === 'orchestrator'">
 
-        <!-- Hardware badge -->
-        <div v-if="flow.hardwareSummary.value" class="local-flow__hw-badge">
-          {{ flow.hardwareSummary.value.label }}
-        </div>
-
-        <!-- Platform-specific install -->
-        <div class="local-flow__platform">
-          <button class="local-flow__install-btn" @click="flow.openOllamaDownload()">
-            <template v-if="flow.detectedOS.value === 'macos'">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-            </template>
-            <template v-else-if="flow.detectedOS.value === 'windows'">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
-            </template>
-            Open official Ollama download
-            <svg class="local-flow__external-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-          </button>
-        </div>
-
-        <p class="local-flow__helper-text">
-          <template v-if="flow.detectedOS.value === 'macos'">After installing, open Ollama.app once — it will start the local server at <code>localhost:11434</code>.</template>
-          <template v-else-if="flow.detectedOS.value === 'windows'">After installing, Ollama starts automatically in the background.</template>
-          <template v-else>After installing, run <code>ollama serve</code> in a terminal to start the server.</template>
-        </p>
-
-        <!-- Installed but not running -->
-        <div v-if="localModels.runtime.value?.installed && !localModels.runtime.value?.running" class="local-flow__start-hint">
-          <span class="local-flow__dot local-flow__dot--yellow" />
-          <div>
-            <p class="local-flow__start-hint-title">Ollama is installed but not running</p>
-            <p class="local-flow__start-hint-desc">Open the Ollama app or run <code>ollama serve</code></p>
-          </div>
-        </div>
-
-        <!-- Secondary actions -->
-        <div class="local-flow__install-actions">
-          <button class="local-flow__secondary-btn" @click="flow.checkAgain()">
-            I've installed Ollama
-          </button>
-          <button class="local-flow__link-btn" @click="showManualSetup = !showManualSetup">
-            Manual setup
-          </button>
-        </div>
-
-        <!-- Manual setup (expandable) -->
-        <div v-if="showManualSetup" class="local-flow__manual">
-          <template v-if="flow.detectedOS.value === 'linux'">
-            <p class="local-flow__manual-label">Run this command in your terminal:</p>
-            <div class="local-flow__cmd-block">
-              <code class="local-flow__cmd-text">{{ linuxCommand }}</code>
-              <button class="local-flow__cmd-copy" @click="copyLinuxCommand" :title="copiedCommand ? 'Copied!' : 'Copy command'">
-                <template v-if="copiedCommand">✓</template>
-                <template v-else>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                </template>
-              </button>
+      <!-- probing / starting -->
+      <template v-if="firstRun.status.value.state === 'probing' || firstRun.status.value.state === 'idle'">
+        <div class="local-flow__downloading">
+          <h3 class="local-flow__section-title">Detecting your hardware</h3>
+          <p class="local-flow__section-desc">Picking the right local model for your machine.</p>
+          <div class="local-flow__download-progress">
+            <div class="local-flow__download-starting">
+              <div class="local-flow__spinner" />
+              <span>{{ firstRun.stageLabel.value || 'Starting…' }}</span>
             </div>
-          </template>
-          <p class="local-flow__manual-note">
-            After installing, open Ollama once so it starts its local server at
-            <code>http://localhost:11434</code>
-          </p>
-        </div>
-      </div>
-    </template>
-
-    <!-- ==================== STATE: runtime_waiting ==================== -->
-    <template v-else-if="flow.state.value === 'runtime_waiting'">
-      <div class="local-flow__waiting">
-        <h3 class="local-flow__section-title">Waiting for Ollama</h3>
-        <p class="local-flow__section-desc">
-          <template v-if="flow.detectedOS.value === 'macos'">Open <strong>Ollama.app</strong> once after installing — Jarvis will detect it automatically.</template>
-          <template v-else-if="flow.detectedOS.value === 'windows'">Ollama should be running in the background. If not, try restarting it from the system tray.</template>
-          <template v-else>Run <code>ollama serve</code> in your terminal, then click Check again.</template>
-        </p>
-
-        <!-- Status box -->
-        <div class="local-flow__status-box">
-          <div class="local-flow__status-row">
-            <div class="local-flow__spinner local-flow__spinner--small" />
-            <span class="local-flow__status-label">Checking localhost:11434</span>
-          </div>
-          <span class="local-flow__status-value">Not detected yet</span>
-        </div>
-
-        <!-- Installed but not running -->
-        <div v-if="localModels.runtime.value?.installed && !localModels.runtime.value?.running" class="local-flow__start-hint">
-          <span class="local-flow__dot local-flow__dot--yellow" />
-          <div>
-            <p class="local-flow__start-hint-title">Ollama is installed but not running</p>
-            <p class="local-flow__start-hint-desc">Open the Ollama app or run <code>ollama serve</code></p>
           </div>
         </div>
+      </template>
 
-        <div class="local-flow__install-actions">
-          <button class="local-flow__secondary-btn" @click="flow.checkAgain()">
-            Check again
-          </button>
-          <button class="local-flow__link-btn" @click="showManualSetup = !showManualSetup">
-            Troubleshooting
-          </button>
-          <button class="local-flow__link-btn" @click="flow.state.value = 'runtime_missing'">
-            Back
-          </button>
-        </div>
-
-        <div v-if="showManualSetup" class="local-flow__manual">
-          <p class="local-flow__manual-note">
-            Make sure Ollama is running. It should be available at
-            <code>http://localhost:11434</code>
+      <!-- pulling_primary — foreground, blocking -->
+      <template v-else-if="firstRun.status.value.state === 'pulling_primary'">
+        <div class="local-flow__downloading">
+          <div v-if="tierLabel" class="local-flow__hw-badge">{{ tierLabel }}</div>
+          <h3 class="local-flow__section-title">
+            Downloading {{ primaryEntry?.label ?? firstRun.status.value.primary_ollama_model ?? 'model' }}
+          </h3>
+          <p class="local-flow__section-desc">
+            Jarvis runs entirely on your machine — this happens once.
           </p>
-          <p class="local-flow__manual-note">
-            On macOS/Windows: open the Ollama app once after install.<br>
-            On Linux: run <code>ollama serve</code> in a terminal.
-          </p>
-        </div>
-      </div>
-    </template>
 
-    <!-- ==================== STATE: model_selection ==================== -->
-    <template v-else-if="flow.state.value === 'model_selection' || flow.state.value === 'runtime_ready'">
-      <div class="local-flow__choose">
-        <!-- Hardware summary card -->
-        <div v-if="flow.hardwareSummary.value" class="local-flow__hw-card">
-          <div class="local-flow__hw-card-header">
-            <span class="local-flow__dot local-flow__dot--green" />
-            <span class="local-flow__hw-card-title">Your computer</span>
-            <span class="local-flow__hw-card-version">
-              <template v-if="localModels.runtime.value?.version">Ollama v{{ localModels.runtime.value.version }}</template>
-              <template v-if="localModels.runtime.value?.version && flow.hardwareSummary.value?.effectiveContext"> · </template>
-              <template v-if="flow.hardwareSummary.value?.effectiveContext">Runtime context {{ flow.hardwareSummary.value.effectiveContext }}</template>
-            </span>
+          <div class="local-flow__download-progress">
+            <div class="local-flow__progress-bar">
+              <div
+                class="local-flow__progress-fill"
+                :style="{ width: `${firstRun.status.value.primary.progress_pct}%` }"
+              />
+            </div>
+            <div class="local-flow__progress-meta">
+              <span class="local-flow__progress-status">{{ firstRun.status.value.primary.status }}</span>
+              <span v-if="formattedPrimaryProgress" class="local-flow__progress-bytes">
+                {{ formattedPrimaryProgress }}
+                ·
+                {{ firstRun.status.value.primary.progress_pct }}%
+              </span>
+            </div>
           </div>
-          <p class="local-flow__hw-card-specs">{{ flow.hardwareSummary.value.label }}</p>
-          <p class="local-flow__hw-card-rec">
-            Runs comfortably: {{ flow.hardwareSummary.value.runsComfortably }}
-          </p>
-          <p v-if="flow.bestPicks.value.length" class="local-flow__hw-card-picks">
-            Best picks: {{ flow.bestPicks.value.join(', ') }}
-          </p>
+
+          <button class="local-flow__link-btn local-flow__skip-btn" @click="handleSkip">
+            I'll pick my own model later
+          </button>
         </div>
+      </template>
 
-        <h3 class="local-flow__section-title">Choose a local model</h3>
-        <p class="local-flow__section-desc">You can download more models later in Settings.</p>
+      <!-- chatReady but pipeline still has fallback / probe to do -->
+      <!-- OR pipeline complete — both render the same ready surface; the   -->
+      <!-- background indicator differs.                                    -->
+      <template v-else-if="firstRun.chatReady.value">
+        <div class="local-flow__ready">
+          <div class="local-flow__ready-check">✓</div>
+          <h3 class="local-flow__section-title">
+            {{ firstRun.status.value.state === 'complete' ? 'Jarvis is ready' : 'Chat is ready' }}
+          </h3>
+          <p class="local-flow__ready-model">
+            Using {{ primaryEntry?.label ?? firstRun.status.value.primary_ollama_model }} locally on this computer
+          </p>
 
-        <!-- Recommended models (top 3) -->
-        <div v-if="localModels.recommendedModels.value.length > 0" class="local-flow__model-list">
-          <LocalModelCard
-            v-for="m in localModels.recommendedModels.value.slice(0, 3)"
-            :key="m.model_id"
-            :model="m"
-            :pulling="localModels.pulling.value === m.model_id"
-            :progress="localModels.pulling.value === m.model_id ? localModels.pullProgress.value : null"
-            @pull="handlePull"
-            @select="handleSelect"
-            @cancel="flow.cancelDownload()"
+          <ChatModelProbePanel
+            v-if="probe.running.value || probe.events.value.length > 0"
+            variant="onboarding"
+            externally-driven
           />
-        </div>
 
-        <!-- Show all models (collapsed) -->
-        <details v-if="localModels.catalog.value.length > 3" class="local-flow__all-models">
-          <summary class="local-flow__show-all">
-            Show all local models ({{ localModels.catalog.value.length }})
-          </summary>
-          <div class="local-flow__model-list local-flow__model-list--compact">
+          <!-- Background fallback / probe indicator. Non-blocking. -->
+          <div
+            v-if="firstRun.status.value.state === 'pulling_fallback' || firstRun.status.value.state === 'running_probe'"
+            class="local-flow__bg-indicator"
+          >
+            <div class="local-flow__spinner local-flow__spinner--small" />
+            <span>{{ firstRun.stageLabel.value }}</span>
+          </div>
+
+          <div
+            v-else-if="firstRun.status.value.state === 'complete' && firstRun.status.value.fallback_failed"
+            class="local-flow__warn-indicator"
+          >
+            Background fallback model failed to download — chat works, but the runtime ladder is not fully primed.
+          </div>
+
+          <div class="local-flow__ready-details">
+            <div class="local-flow__ready-detail">
+              <span class="local-flow__ready-detail-label">Runtime</span>
+              <span class="local-flow__ready-detail-value">Ollama</span>
+            </div>
+            <div class="local-flow__ready-detail">
+              <span class="local-flow__ready-detail-label">Primary</span>
+              <span class="local-flow__ready-detail-value">{{ primaryEntry?.label ?? '—' }}</span>
+            </div>
+            <div class="local-flow__ready-detail">
+              <span class="local-flow__ready-detail-label">Fallback</span>
+              <span class="local-flow__ready-detail-value">
+                {{ fallbackEntry?.label ?? '—'
+                  }}<template v-if="firstRun.status.value.state === 'pulling_fallback'"> · downloading</template>
+              </span>
+            </div>
+            <div class="local-flow__ready-detail">
+              <span class="local-flow__ready-detail-label">Privacy</span>
+              <span class="local-flow__ready-detail-value">On-device</span>
+            </div>
+          </div>
+
+          <button class="local-flow__primary-btn" @click="handleFinish">Open Jarvis</button>
+
+          <div class="local-flow__ready-actions">
+            <button class="local-flow__link-btn" @click="handleDownloadAnother">
+              Download another model
+            </button>
+            <span class="local-flow__ready-sep">·</span>
+            <span class="local-flow__ready-hint">Change later in Settings</span>
+          </div>
+        </div>
+      </template>
+
+      <!-- failed — fatal pre-marker error (primary pull errored) -->
+      <template v-else-if="firstRun.status.value.state === 'failed'">
+        <div class="local-flow__downloading">
+          <h3 class="local-flow__section-title">First-run setup failed</h3>
+          <p class="local-flow__section-desc">
+            {{ firstRun.status.value.last_error ?? 'The primary model could not be downloaded.' }}
+          </p>
+          <div class="local-flow__install-actions">
+            <button class="local-flow__secondary-btn" @click="handleRetry">Retry</button>
+            <button class="local-flow__link-btn" @click="handleSkip">Pick a model manually</button>
+          </div>
+        </div>
+      </template>
+
+      <!-- skipped — fall through into manual picker (mode flips on skip) -->
+    </template>
+
+    <!-- ============================================================ -->
+    <!-- Layer 2 — Manual picker (legacy)                              -->
+    <!-- ============================================================ -->
+    <template v-else-if="mode === 'manual'">
+
+      <!-- runtime_missing — Ollama not bundled (dev mode) -->
+      <template v-if="flow.state.value === 'runtime_missing'">
+        <div class="local-flow__install">
+          <h3 class="local-flow__section-title">Ollama isn't running yet</h3>
+          <p class="local-flow__section-desc">
+            <template v-if="flow.detectedOS.value === 'macos'">Open Ollama.app once after installing — Jarvis will detect it automatically.</template>
+            <template v-else-if="flow.detectedOS.value === 'windows'">Install it from the official website. It runs automatically in the background after install.</template>
+            <template v-else>Install it using the command below, then run <code>ollama serve</code> to start it.</template>
+          </p>
+
+          <div v-if="flow.hardwareSummary.value" class="local-flow__hw-badge">
+            {{ flow.hardwareSummary.value.label }}
+          </div>
+
+          <div class="local-flow__platform">
+            <button class="local-flow__install-btn" @click="flow.openOllamaDownload()">
+              Open official Ollama download
+              <svg class="local-flow__external-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
+          </div>
+
+          <div v-if="localModels.runtime.value?.installed && !localModels.runtime.value?.running" class="local-flow__start-hint">
+            <span class="local-flow__dot local-flow__dot--yellow" />
+            <div>
+              <p class="local-flow__start-hint-title">Ollama is installed but not running</p>
+              <p class="local-flow__start-hint-desc">Open the Ollama app or run <code>ollama serve</code></p>
+            </div>
+          </div>
+
+          <div class="local-flow__install-actions">
+            <button class="local-flow__secondary-btn" @click="flow.checkAgain()">
+              I've installed Ollama
+            </button>
+            <button class="local-flow__link-btn" @click="showManualSetup = !showManualSetup">
+              Manual setup
+            </button>
+          </div>
+
+          <div v-if="showManualSetup" class="local-flow__manual">
+            <template v-if="flow.detectedOS.value === 'linux'">
+              <p class="local-flow__manual-label">Run this command in your terminal:</p>
+              <div class="local-flow__cmd-block">
+                <code class="local-flow__cmd-text">{{ linuxCommand }}</code>
+                <button class="local-flow__cmd-copy" @click="copyLinuxCommand" :title="copiedCommand ? 'Copied!' : 'Copy command'">
+                  <template v-if="copiedCommand">✓</template>
+                  <template v-else>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </template>
+                </button>
+              </div>
+            </template>
+            <p class="local-flow__manual-note">
+              After installing, open Ollama once so it starts its local server at
+              <code>http://localhost:11434</code>
+            </p>
+          </div>
+        </div>
+      </template>
+
+      <!-- runtime_waiting -->
+      <template v-else-if="flow.state.value === 'runtime_waiting'">
+        <div class="local-flow__waiting">
+          <h3 class="local-flow__section-title">Waiting for Ollama</h3>
+          <p class="local-flow__section-desc">
+            <template v-if="flow.detectedOS.value === 'macos'">Open <strong>Ollama.app</strong> once after installing — Jarvis will detect it automatically.</template>
+            <template v-else-if="flow.detectedOS.value === 'windows'">Ollama should be running in the background. If not, try restarting it from the system tray.</template>
+            <template v-else>Run <code>ollama serve</code> in your terminal, then click Check again.</template>
+          </p>
+
+          <div class="local-flow__status-box">
+            <div class="local-flow__status-row">
+              <div class="local-flow__spinner local-flow__spinner--small" />
+              <span class="local-flow__status-label">Checking localhost:11434</span>
+            </div>
+            <span class="local-flow__status-value">Not detected yet</span>
+          </div>
+
+          <div class="local-flow__install-actions">
+            <button class="local-flow__secondary-btn" @click="flow.checkAgain()">
+              Check again
+            </button>
+            <button class="local-flow__link-btn" @click="flow.state.value = 'runtime_missing'">
+              Back
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <!-- model_selection — manual picker -->
+      <template v-else-if="flow.state.value === 'model_selection' || flow.state.value === 'runtime_ready'">
+        <div class="local-flow__choose">
+          <div v-if="flow.hardwareSummary.value" class="local-flow__hw-card">
+            <div class="local-flow__hw-card-header">
+              <span class="local-flow__dot local-flow__dot--green" />
+              <span class="local-flow__hw-card-title">Your computer</span>
+              <span class="local-flow__hw-card-version">
+                <template v-if="localModels.runtime.value?.version">Ollama v{{ localModels.runtime.value.version }}</template>
+              </span>
+            </div>
+            <p class="local-flow__hw-card-specs">{{ flow.hardwareSummary.value.label }}</p>
+            <p class="local-flow__hw-card-rec">
+              Runs comfortably: {{ flow.hardwareSummary.value.runsComfortably }}
+            </p>
+            <p v-if="flow.bestPicks.value.length" class="local-flow__hw-card-picks">
+              Best picks: {{ flow.bestPicks.value.join(', ') }}
+            </p>
+          </div>
+
+          <h3 class="local-flow__section-title">Choose a local model</h3>
+          <p class="local-flow__section-desc">You can download more models later in Settings.</p>
+
+          <div v-if="localModels.recommendedModels.value.length > 0" class="local-flow__model-list">
             <LocalModelCard
-              v-for="m in localModels.catalog.value"
+              v-for="m in localModels.recommendedModels.value.slice(0, 3)"
               :key="m.model_id"
               :model="m"
               :pulling="localModels.pulling.value === m.model_id"
               :progress="localModels.pulling.value === m.model_id ? localModels.pullProgress.value : null"
-              compact
               @pull="handlePull"
               @select="handleSelect"
               @cancel="flow.cancelDownload()"
             />
           </div>
-        </details>
-      </div>
-    </template>
 
-    <!-- ==================== STATE: model_downloading ==================== -->
-    <template v-else-if="flow.state.value === 'model_downloading'">
-      <div class="local-flow__downloading">
-        <h3 class="local-flow__section-title">
-          Downloading {{ downloadingModel?.label ?? 'model' }}
-        </h3>
-        <p class="local-flow__section-desc">
-          Jarvis is downloading the model to your computer.
-        </p>
-
-        <div class="local-flow__download-progress">
-          <PullProgress
-            v-if="localModels.pullProgress.value"
-            :model-name="downloadingModel?.ollama_model ?? ''"
-            :progress="localModels.pullProgress.value"
-          />
-          <div v-else class="local-flow__download-starting">
-            <div class="local-flow__spinner" />
-            <span>Preparing download...</span>
-          </div>
+          <details v-if="localModels.catalog.value.length > 3" class="local-flow__all-models">
+            <summary class="local-flow__show-all">
+              Show all local models ({{ localModels.catalog.value.length }})
+            </summary>
+            <div class="local-flow__model-list local-flow__model-list--compact">
+              <LocalModelCard
+                v-for="m in localModels.catalog.value"
+                :key="m.model_id"
+                :model="m"
+                :pulling="localModels.pulling.value === m.model_id"
+                :progress="localModels.pulling.value === m.model_id ? localModels.pullProgress.value : null"
+                compact
+                @pull="handlePull"
+                @select="handleSelect"
+                @cancel="flow.cancelDownload()"
+              />
+            </div>
+          </details>
         </div>
+      </template>
 
-        <button class="local-flow__cancel-btn" @click="flow.cancelDownload()">
-          Cancel download
-        </button>
-      </div>
-    </template>
+      <!-- model_downloading -->
+      <template v-else-if="flow.state.value === 'model_downloading'">
+        <div class="local-flow__downloading">
+          <h3 class="local-flow__section-title">
+            Downloading {{ downloadingModel?.label ?? 'model' }}
+          </h3>
+          <p class="local-flow__section-desc">
+            Jarvis is downloading the model to your computer.
+          </p>
 
-    <!-- ==================== STATE: model_ready ==================== -->
-    <template v-else-if="flow.state.value === 'model_ready' || flow.state.value === 'local_active'">
-      <div class="local-flow__ready">
-        <div class="local-flow__ready-check">✓</div>
-        <h3 class="local-flow__section-title">
-          {{ probe.running.value ? 'Validating your setup…' : 'Jarvis is ready' }}
-        </h3>
-        <p class="local-flow__ready-model">
-          {{ probe.running.value
-            ? 'Running quick self-test — this takes 30–60 seconds.'
-            : `Using ${readyModel?.label ?? 'local model'} locally on this computer` }}
-        </p>
-
-        <ChatModelProbePanel
-          v-if="probe.running.value || probe.events.value.length > 0"
-          variant="onboarding"
-          externally-driven
-        />
-
-        <div v-if="!probe.running.value" class="local-flow__ready-details">
-          <div class="local-flow__ready-detail">
-            <span class="local-flow__ready-detail-label">Runtime</span>
-            <span class="local-flow__ready-detail-value">Ollama</span>
+          <div class="local-flow__download-progress">
+            <PullProgress
+              v-if="localModels.pullProgress.value"
+              :model-name="downloadingModel?.ollama_model ?? ''"
+              :progress="localModels.pullProgress.value"
+            />
+            <div v-else class="local-flow__download-starting">
+              <div class="local-flow__spinner" />
+              <span>Preparing download...</span>
+            </div>
           </div>
-          <div class="local-flow__ready-detail">
-            <span class="local-flow__ready-detail-label">Model</span>
-            <span class="local-flow__ready-detail-value">{{ probe.effectiveModel.value ?? readyModel?.label ?? 'Local' }}</span>
-          </div>
-          <div class="local-flow__ready-detail">
-            <span class="local-flow__ready-detail-label">Self-test</span>
-            <span class="local-flow__ready-detail-value">
-              {{ probe.status.value?.persisted?.recommended_model
-                ? '✓ Passed'
-                : probe.status.value?.persisted ? '⚠ Fallback' : 'Pending' }}
-            </span>
-          </div>
-          <div class="local-flow__ready-detail">
-            <span class="local-flow__ready-detail-label">Privacy</span>
-            <span class="local-flow__ready-detail-value">On-device</span>
-          </div>
-        </div>
 
-        <button
-          class="local-flow__primary-btn"
-          :disabled="probe.running.value"
-          @click="handleFinish"
-        >
-          {{ probe.running.value ? 'Probing…' : 'Open Jarvis' }}
-        </button>
-
-        <div v-if="!probe.running.value" class="local-flow__ready-actions">
-          <button class="local-flow__link-btn" @click="handleDownloadAnother">
-            Download another model
+          <button class="local-flow__cancel-btn" @click="flow.cancelDownload()">
+            Cancel download
           </button>
-          <span class="local-flow__ready-sep">·</span>
-          <span class="local-flow__ready-hint">Change later in Settings</span>
         </div>
-      </div>
+      </template>
+
+      <!-- model_ready / local_active -->
+      <template v-else-if="flow.state.value === 'model_ready' || flow.state.value === 'local_active'">
+        <div class="local-flow__ready">
+          <div class="local-flow__ready-check">✓</div>
+          <h3 class="local-flow__section-title">
+            {{ probe.running.value ? 'Validating your setup…' : 'Jarvis is ready' }}
+          </h3>
+          <p class="local-flow__ready-model">
+            {{ probe.running.value
+              ? 'Running quick self-test — this takes 30–60 seconds.'
+              : `Using ${readyModel?.label ?? 'local model'} locally on this computer` }}
+          </p>
+
+          <ChatModelProbePanel
+            v-if="probe.running.value || probe.events.value.length > 0"
+            variant="onboarding"
+            externally-driven
+          />
+
+          <button
+            class="local-flow__primary-btn"
+            :disabled="probe.running.value"
+            @click="handleFinish"
+          >
+            {{ probe.running.value ? 'Probing…' : 'Open Jarvis' }}
+          </button>
+
+          <div v-if="!probe.running.value" class="local-flow__ready-actions">
+            <button class="local-flow__link-btn" @click="handleDownloadAnother">
+              Download another model
+            </button>
+            <span class="local-flow__ready-sep">·</span>
+            <span class="local-flow__ready-hint">Change later in Settings</span>
+          </div>
+        </div>
+      </template>
     </template>
 
     <!-- Error -->
@@ -692,6 +898,12 @@ const readyModel = computed(() => localModels.activeModel.value)
   color: var(--neon-cyan-60);
 }
 
+.local-flow__skip-btn {
+  display: block;
+  margin: 0.85rem auto 0;
+  font-size: 0.78rem;
+}
+
 /* ---- Manual setup expandable ---- */
 .local-flow__manual {
   margin-top: 0.85rem;
@@ -921,6 +1133,68 @@ const readyModel = computed(() => localModels.activeModel.value)
 .local-flow__cancel-btn:hover {
   color: rgba(248, 113, 113, 0.9);
   border-color: rgba(248, 113, 113, 0.3);
+}
+
+/* ---- Orchestrator pull-progress bar (ADR 005 §B) ---- */
+.local-flow__progress-bar {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.local-flow__progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--neon-cyan-30), var(--neon-cyan));
+  transition: width 0.4s ease;
+  box-shadow: 0 0 8px var(--neon-cyan-08);
+}
+
+.local-flow__progress-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.local-flow__progress-status {
+  text-transform: lowercase;
+}
+
+.local-flow__progress-bytes {
+  text-align: right;
+}
+
+/* ---- Background fallback / probe indicator ---- */
+.local-flow__bg-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.85rem;
+  border-radius: 6px;
+  background: var(--neon-cyan-08);
+  border: 1px solid var(--neon-cyan-15);
+  font-size: 0.78rem;
+  color: var(--neon-cyan-60);
+}
+
+.local-flow__warn-indicator {
+  margin: 0.75rem 0;
+  padding: 0.55rem 0.85rem;
+  border-radius: 6px;
+  background: rgba(251, 191, 36, 0.06);
+  border: 1px solid rgba(251, 191, 36, 0.18);
+  font-size: 0.78rem;
+  color: #fbbf24;
+  text-align: left;
+  line-height: 1.4;
 }
 
 /* ---- Step 3: Ready / model_ready ---- */

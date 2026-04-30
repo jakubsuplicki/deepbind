@@ -199,6 +199,48 @@ async def get_retrieval_settings():
     return {"graph_expansion": _read_graph_expansion_config(ws)}
 
 
+# ---------------------------------------------------------------------------
+# Lightweight mode (ADR 005 §C trigger 3)
+# ---------------------------------------------------------------------------
+
+LIGHTWEIGHT_MODE_KEY = "lightweight_mode"
+
+
+def _read_lightweight_mode(ws) -> bool:
+    """Read the persisted lightweight-mode flag (default off)."""
+    prefs = preference_service.load_preferences(workspace_path=ws)
+    return prefs.get(LIGHTWEIGHT_MODE_KEY, "false") == "true"
+
+
+@router.get("/lightweight-mode")
+async def get_lightweight_mode():
+    """Return whether lightweight mode is enabled.
+
+    When on, the chat router pins dispatch to the smallest installed entry
+    on the user's tier ladder regardless of memory pressure (ADR 005 §C
+    trigger 3) — useful when the user is running other RAM-heavy apps and
+    wants chat to "just work" without the auto-downgrade chatter.
+    """
+    return {"enabled": _read_lightweight_mode(get_settings().workspace_path)}
+
+
+@router.patch("/lightweight-mode")
+async def update_lightweight_mode(body: dict):
+    """Toggle lightweight mode. Body: ``{"enabled": bool}``."""
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="Body must be an object")
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=422, detail="enabled must be a boolean")
+    ws = get_settings().workspace_path
+    preference_service.save_preference(
+        LIGHTWEIGHT_MODE_KEY,
+        "true" if enabled else "false",
+        workspace_path=ws,
+    )
+    return {"enabled": _read_lightweight_mode(ws)}
+
+
 @router.patch("/retrieval")
 async def update_retrieval_settings(body: dict):
     ws = get_settings().workspace_path

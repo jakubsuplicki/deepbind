@@ -10,6 +10,8 @@
 
     <LocalModelsSection />
 
+    <PerformanceSection />
+
     <WorkspaceSection :path="general.workspacePath.value" />
 
     <McpSection />
@@ -41,6 +43,7 @@
 import { onMounted } from 'vue'
 import ProvidersSection from '~/components/settings/ProvidersSection.vue'
 import LocalModelsSection from '~/components/settings/LocalModelsSection.vue'
+import PerformanceSection from '~/components/settings/PerformanceSection.vue'
 import WorkspaceSection from '~/components/settings/WorkspaceSection.vue'
 import McpSection from '~/components/settings/McpSection.vue'
 import VoiceSection from '~/components/settings/VoiceSection.vue'

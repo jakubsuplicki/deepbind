@@ -178,6 +178,179 @@ class TestRecommendTop3:
         assert "gemma4-26b-a4b" in ids
 
 
+# ── ADR 005 — Tier-for-hardware mapping ─────────────────────────────────────
+
+
+class TestTierForHardware:
+    """Boundary cases per ADR 005 §A catalog tier definitions.
+
+    The mapping rule:
+      - Tier C: 96+ GB unified RAM, OR datacenter VRAM ≥ 80 GB.
+      - Tier B: discrete GPU ≥ 24 GB (RTX 4090+), OR 48+ GB unified Apple Silicon.
+      - Tier A: everything else.
+    """
+
+    @staticmethod
+    def _hw(ram, gpu="apple", vram=None, apple=True, os_="macos"):
+        from services.ollama_service import HardwareProfile
+        return HardwareProfile(
+            os=os_, arch="arm64" if apple else "x64",
+            total_ram_gb=ram, free_disk_gb=200, cpu_cores=10,
+            gpu_vendor=gpu, gpu_vram_gb=vram, is_apple_silicon=apple,
+            tier="strong",
+        )
+
+    def test_low_ram_apple_silicon(self):
+        from services.ollama_service import tier_for_hardware
+        assert tier_for_hardware(self._hw(8)) == "A"
+        assert tier_for_hardware(self._hw(16)) == "A"
+
+    def test_24gb_apple_silicon_is_tier_a(self):
+        from services.ollama_service import tier_for_hardware
+        # ADR §A: "24 GB Apple Silicon is firmly Tier A"
+        assert tier_for_hardware(self._hw(24)) == "A"
+
+    def test_32gb_apple_silicon_stays_tier_a(self):
+        from services.ollama_service import tier_for_hardware
+        # ADR §A: "32 GB unified is Tier A unless GPU >= 16 GB". Apple Silicon
+        # has no separate VRAM signal — stays in A.
+        assert tier_for_hardware(self._hw(32)) == "A"
+
+    def test_32gb_cpu_with_rtx_4060_stays_tier_a(self):
+        from services.ollama_service import tier_for_hardware
+        # ADR §A explicitly lists "RTX 4060/4070 8 GB" under Tier A.
+        assert tier_for_hardware(self._hw(32, "nvidia", 8.0, apple=False)) == "A"
+
+    def test_32gb_cpu_with_rtx_4090_graduates_to_tier_b(self):
+        from services.ollama_service import tier_for_hardware
+        # 24 GB VRAM is the Tier B cutoff (RTX 4090). RAM doesn't constrain
+        # promotion when the discrete GPU has the headroom.
+        assert tier_for_hardware(self._hw(32, "nvidia", 24.0, apple=False)) == "B"
+
+    def test_48gb_apple_silicon_is_tier_b(self):
+        from services.ollama_service import tier_for_hardware
+        # ADR §A: "48–64 GB unified" is Tier B.
+        assert tier_for_hardware(self._hw(48)) == "B"
+
+    def test_64gb_apple_silicon_is_tier_b(self):
+        from services.ollama_service import tier_for_hardware
+        assert tier_for_hardware(self._hw(64)) == "B"
+
+    def test_96gb_apple_silicon_is_tier_c(self):
+        from services.ollama_service import tier_for_hardware
+        # ADR §A: "96+ GB unified" is Tier C.
+        assert tier_for_hardware(self._hw(96)) == "C"
+
+    def test_128gb_with_a100_is_tier_c(self):
+        from services.ollama_service import tier_for_hardware
+        assert tier_for_hardware(self._hw(128, "nvidia", 80.0, apple=False)) == "C"
+
+    def test_single_h100_promotes_modest_ram_to_tier_c(self):
+        from services.ollama_service import tier_for_hardware
+        # H100 80 GB on a 64 GB CPU box → Tier C (the H100 is the constraint
+        # gpt-oss-120b is sized against, not host RAM).
+        assert tier_for_hardware(self._hw(64, "nvidia", 80.0, apple=False)) == "C"
+
+    def test_rtx_4080_16gb_does_not_graduate_to_tier_b(self):
+        from services.ollama_service import tier_for_hardware
+        # ADR §A draws Tier B at "RTX 4090 24 GB", not 16-GB-class cards.
+        # An RTX 4080 (16 GB) on a 32 GB box stays Tier A.
+        assert tier_for_hardware(self._hw(32, "nvidia", 16.0, apple=False)) == "A"
+
+
+# ── ADR 005 — First-run defaults + downgrade ladder ─────────────────────────
+
+
+class TestFirstRunDefault:
+    def test_tier_a_primary_is_qwen3_8b(self):
+        from services.ollama_service import first_run_default_for
+        assert first_run_default_for("A").id == "qwen3-8b"
+
+    def test_tier_b_primary_is_qwen3_30b_a3b_instruct_2507(self):
+        from services.ollama_service import first_run_default_for
+        assert first_run_default_for("B").id == "qwen3-30b-a3b-instruct-2507"
+
+    def test_tier_c_primary_is_gpt_oss_120b(self):
+        from services.ollama_service import first_run_default_for
+        assert first_run_default_for("C").id == "gpt-oss-120b"
+
+    def test_unknown_tier_returns_none(self):
+        from services.ollama_service import first_run_default_for
+        assert first_run_default_for("Z") is None
+
+
+class TestDowngradeLadder:
+    def test_tier_a_ladder_top_to_floor(self):
+        from services.ollama_service import downgrade_ladder_for
+        ladder = downgrade_ladder_for("A")
+        ids = [e.id for e in ladder]
+        # ADR 005 §A — Tier A ladder: opt-in 30B-A3B → 8B → 4B-Instruct-2507
+        # (the -2507 variant per §A "downgrade ladder target", not plain qwen3-4b).
+        assert ids == ["qwen3-30b-a3b-instruct-2507", "qwen3-8b", "qwen3-4b-instruct-2507"]
+
+    def test_tier_b_ladder_top_to_floor(self):
+        from services.ollama_service import downgrade_ladder_for
+        ladder = downgrade_ladder_for("B")
+        ids = [e.id for e in ladder]
+        # ADR 005 §C — Tier B: opt-in gpt-oss-120b → 30B-A3B → 8B → 4B
+        assert ids == ["gpt-oss-120b", "qwen3-30b-a3b-instruct-2507", "qwen3-8b", "qwen3-4b"]
+
+    def test_tier_c_ladder_top_to_floor(self):
+        from services.ollama_service import downgrade_ladder_for
+        ladder = downgrade_ladder_for("C")
+        ids = [e.id for e in ladder]
+        # ADR 005 §C — Tier C: gpt-oss-120b → 30B-A3B → 8B → 4B
+        assert ids == ["gpt-oss-120b", "qwen3-30b-a3b-instruct-2507", "qwen3-8b", "qwen3-4b"]
+
+    def test_unknown_tier_returns_empty_ladder(self):
+        from services.ollama_service import downgrade_ladder_for
+        assert downgrade_ladder_for("Z") == []
+
+    def test_ladder_positions_descend_strictly(self):
+        from services.ollama_service import downgrade_ladder_for
+        for tier in ("A", "B", "C"):
+            positions = [e.ladder_positions[tier] for e in downgrade_ladder_for(tier)]
+            assert positions == sorted(positions, reverse=True)
+            assert len(positions) == len(set(positions)), \
+                f"Duplicate ladder position in tier {tier}"
+
+    def test_exclude_opt_in_drops_tier_b_ceiling(self):
+        from services.ollama_service import downgrade_ladder_for
+        # gpt-oss-120b is opt-in for Tier B (it's the first-run default for C,
+        # not B). Excluding opt-in entries from the Tier B ladder should drop it.
+        ids_full = [e.id for e in downgrade_ladder_for("B")]
+        ids_no_opt_in = [e.id for e in downgrade_ladder_for("B", include_opt_in=False)]
+        assert "gpt-oss-120b" in ids_full
+        assert "gpt-oss-120b" not in ids_no_opt_in
+        # The Tier B primary itself must remain.
+        assert "qwen3-30b-a3b-instruct-2507" in ids_no_opt_in
+
+
+class TestCatalogLicenseAnnotation:
+    def test_qwen_and_granite_entries_apache_2(self):
+        from services.ollama_service import MODEL_CATALOG
+        for entry in MODEL_CATALOG:
+            if entry.id.startswith("qwen3-") or entry.id.startswith("granite-"):
+                assert entry.license == "Apache-2.0", \
+                    f"{entry.id} should be Apache-2.0, got {entry.license}"
+
+    def test_gpt_oss_120b_apache_2(self):
+        from services.ollama_service import get_model_by_id
+        # gpt-oss is OpenAI's Apache 2.0 release; license filter must pass it.
+        assert get_model_by_id("gpt-oss-120b").license == "Apache-2.0"
+
+    def test_gemma_and_mistral_entries_marked_non_permissive(self):
+        from services.ollama_service import MODEL_CATALOG
+        non_permissive_expected = {
+            "gemma4-e4b", "gemma4-26b-a4b",  # Gemma TOU
+            "ministral-3-8b", "devstral-small-2-24b",  # Mistral Research License
+        }
+        for entry in MODEL_CATALOG:
+            if entry.id in non_permissive_expected:
+                assert entry.license == "non-permissive", \
+                    f"{entry.id} should be non-permissive per ADR 005 §A"
+
+
 # ── Hardware Probe ───────────────────────────────────────────────────────────
 
 

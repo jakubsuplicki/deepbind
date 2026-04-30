@@ -264,13 +264,165 @@ async def _stream_follow_up(
     return text
 
 
+async def _apply_memory_pressure_swap(
+    *,
+    ws: WebSocket,
+    provider: Optional[str],
+    model: Optional[str],
+    base_url: Optional[str],
+    ctx_len_tokens: Optional[int],
+) -> tuple[Optional[str], bool]:
+    """Pre-flight memory-pressure swap (ADR 005 §C trigger 2).
+
+    Returns ``(new_model_litellm, floor_refused)``. ``model`` is unchanged
+    when no swap is needed, swapped to the next runnable ladder entry when
+    free RAM can't fit the requested model, or set to ``None`` (with
+    ``floor_refused=True``) when even the floor refuses to fit. On floor
+    refusal the caller MUST short-circuit — this helper does NOT emit the
+    error+done sequence so the caller controls cleanup ordering.
+
+    No-op for non-Ollama providers (cloud APIs manage their own RAM) and
+    for Ollama models that aren't in the catalog (custom user pulls).
+    """
+    if provider != "ollama" or not model:
+        return model, False
+
+    from services import memory_pressure_monitor as mpm
+    from services.ollama_service import DEFAULT_OLLAMA_BASE_URL, list_installed_models
+
+    requested_entry = mpm.find_entry_by_litellm_or_ollama(model)
+    if requested_entry is None:
+        return model, False
+
+    try:
+        installed_raw = await list_installed_models(base_url or DEFAULT_OLLAMA_BASE_URL)
+    except Exception:  # noqa: BLE001 — network/runtime — skip the check, not the turn
+        logger.warning("memory_pressure: list_installed_models failed; skipping pre-flight swap")
+        return model, False
+
+    installed_tags = [m.get("name", "") for m in installed_raw if m.get("name")]
+    ctx_len = ctx_len_tokens or requested_entry.effective_context_tokens
+
+    try:
+        tier = mpm.current_tier()
+    except Exception:  # noqa: BLE001 — psutil/sysctl env-dependent
+        logger.warning("memory_pressure: tier probe failed; skipping pre-flight swap")
+        return model, False
+
+    # ADR 005 §C trigger 3 — Lightweight mode hard-pins the active model to
+    # the smallest installed rung on the tier's ladder, *regardless* of
+    # current free RAM. The user explicitly asked for "just works under
+    # memory pressure"; the auto-downgrade path's "fits but smaller than
+    # requested" warning is the wrong UX for that case. Short-circuit the
+    # pressure check entirely when the toggle is on and the floor differs
+    # from the requested model.
+    if _is_lightweight_mode_on():
+        floor = mpm.floor_entry_for_tier(tier, installed_ollama_tags=installed_tags)
+        if floor is not None and floor.id != requested_entry.id:
+            await _send_event(
+                ws,
+                "warning",
+                content=f"Lightweight mode — using {floor.label or floor.id}",
+            )
+            return f"ollama_chat/{floor.ollama_model}", False
+        # floor == requested OR no installed-on-ladder fallback → fall through
+
+    swap = mpm.pick_runnable_model(
+        requested_entry,
+        tier=tier,
+        ctx_len_tokens=ctx_len,
+        installed_ollama_tags=installed_tags,
+    )
+    if swap.chosen is None:
+        return None, True
+    if swap.did_swap:
+        await _send_event(ws, "warning", content=swap.reason or "Switched models due to memory pressure")
+        return f"ollama_chat/{swap.chosen.ollama_model}", False
+    return model, False
+
+
+def _is_lightweight_mode_on() -> bool:
+    """Read the lightweight-mode flag from the workspace preferences.
+
+    Lazy import to dodge the test-fixture chicken-and-egg: ``get_settings``
+    is monkey-patched per test, so we resolve through it on every call
+    rather than caching at module import.
+    """
+    try:
+        from config import get_settings
+        from services import preference_service
+        prefs = preference_service.load_preferences(
+            workspace_path=get_settings().workspace_path,
+        )
+        return prefs.get("lightweight_mode", "false") == "true"
+    except Exception:  # noqa: BLE001 — env-dependent; never fail a turn over this
+        return False
+
+
+async def _ladder_step_after_oom(
+    *,
+    provider: Optional[str],
+    model: Optional[str],
+    base_url: Optional[str],
+    ctx_len_tokens: Optional[int],
+) -> tuple[Optional[str], Optional[str]]:
+    """Pick the next ladder step after an OOM (§C trigger 1).
+
+    Returns ``(new_model_litellm, warning_text)`` on success, or
+    ``(None, None)`` when no smaller installed model fits — caller surfaces
+    a user-facing error in that case.
+
+    Different from the pre-flight swap in two ways: (1) only Ollama OOM
+    paths reach here, so the provider check is implicit; (2) the picker is
+    seeded with the *failed* model — by re-checking against current free
+    RAM (which can have dropped further since the dispatch attempt) the
+    same model that just OOMed will be filtered as `over_footprint` and
+    skipped. If the picker still returns the same model, treat it as no
+    fallback.
+    """
+    if provider != "ollama" or not model:
+        return None, None
+
+    from services import memory_pressure_monitor as mpm
+    from services.ollama_service import DEFAULT_OLLAMA_BASE_URL, list_installed_models
+
+    failed_entry = mpm.find_entry_by_litellm_or_ollama(model)
+    if failed_entry is None:
+        return None, None
+
+    try:
+        installed_raw = await list_installed_models(base_url or DEFAULT_OLLAMA_BASE_URL)
+        tier = mpm.current_tier()
+    except Exception:  # noqa: BLE001
+        return None, None
+
+    installed_tags = [m.get("name", "") for m in installed_raw if m.get("name")]
+    ctx_len = ctx_len_tokens or failed_entry.effective_context_tokens
+
+    swap = mpm.pick_runnable_model(
+        failed_entry,
+        tier=tier,
+        ctx_len_tokens=ctx_len,
+        installed_ollama_tags=installed_tags,
+    )
+    if swap.chosen is None or swap.chosen.id == failed_entry.id:
+        return None, None
+
+    warning = (
+        f"Out of memory on {failed_entry.label or failed_entry.id} — "
+        f"switched to {swap.chosen.label or swap.chosen.id}"
+    )
+    return f"ollama_chat/{swap.chosen.ollama_model}", warning
+
+
 def _make_llm(provider: Optional[str], model: Optional[str], api_key: str, base_url: Optional[str] = None):
     """Create an LLMService for the given provider, or ClaudeService as fallback.
 
     Privacy gate enforced here so every caller (chat handler, duel handler,
-    tests) gets it once. The future memory-pressure auto-downgrade will live
-    upstream of this construction step (it picks *which* model to ask for);
-    `_make_llm` itself stays a thin "build the configured client" helper.
+    tests) gets it once. The memory-pressure auto-downgrade lives upstream
+    of this construction step (it picks *which* model to ask for) — see
+    [`_apply_memory_pressure_swap`](memory_pressure_monitor.py); `_make_llm`
+    itself stays a thin "build the configured client" helper.
     """
     from services.privacy import assert_provider_allowed
 
@@ -414,7 +566,6 @@ async def _handle_message(
     if not api_key and provider != "ollama":
         await _send_event(ws, "error", content="API key not configured")
         return
-
     session_service.add_message(session_id, "user", content)
     strategy = context_strategy or DEFAULT_STRATEGY
     messages = strategy.assemble(session_service.get_messages(session_id))
@@ -462,6 +613,27 @@ async def _handle_message(
         await _send_event(ws, "warning", content=f"Approaching daily token budget ({budget['percent']:.0f}% used).")
 
     from services.privacy import PrivacyBlockedError
+
+    # Memory-pressure pre-flight swap (ADR 005 §C trigger 2). Runs before
+    # _make_llm so the constructed LLMService points at a model that
+    # actually fits in current free RAM. No-op for non-Ollama providers.
+    swapped_model, floor_refused = await _apply_memory_pressure_swap(
+        ws=ws,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        ctx_len_tokens=prompt_stats.get("context_tokens"),
+    )
+    if floor_refused:
+        await _send_event(
+            ws,
+            "error",
+            content="Insufficient RAM: no installed local model fits in available memory. Free up RAM or pick a smaller model in Settings.",
+        )
+        await _send_event(ws, "done", session_id=session_id)
+        return
+    model = swapped_model
+
     try:
         claude = get_llm(api_key or "", provider, model, base_url) if get_llm else _make_llm(provider, model, api_key or "", base_url)
     except PrivacyBlockedError as exc:
@@ -483,28 +655,76 @@ async def _handle_message(
     tool_acc = [0, 0]
     pending_tools: list[StreamEvent] = []
 
-    async for event in claude.stream_response(
-        messages=messages,
-        system_prompt=system_prompt,
-        tools=tools,
-    ):
-        if event.type == "text_delta":
-            content = event.content
-            if attribution_prefix:
-                content = attribution_prefix + content
-                attribution_prefix = ""  # Only prepend once
-            assistant_text += content
-            await _send_event(ws, "text_delta", content=content)
+    # OOM-retry loop (ADR 005 §C trigger 1). Up to one walk-the-ladder
+    # retry, only if Ollama errors with an OOM signature *before* any
+    # text streams. Once text has been emitted, we don't retry — the user
+    # already saw output and a re-stream would double up.
+    from services import memory_pressure_monitor as mpm
+    text_started = False
+    oom_retry_done = False
+    while True:
+        saw_oom_pre_text = False
+        async for event in claude.stream_response(
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=tools,
+        ):
+            if event.type == "text_delta":
+                text_started = True
+                content = event.content
+                if attribution_prefix:
+                    content = attribution_prefix + content
+                    attribution_prefix = ""  # Only prepend once
+                assistant_text += content
+                await _send_event(ws, "text_delta", content=content)
 
-        elif event.type == "tool_use":
-            pending_tools.append(event)
+            elif event.type == "tool_use":
+                pending_tools.append(event)
 
-        elif event.type == "usage":
-            usage_acc[0] += event.input_tokens
-            usage_acc[1] += event.output_tokens
+            elif event.type == "usage":
+                usage_acc[0] += event.input_tokens
+                usage_acc[1] += event.output_tokens
 
-        elif event.type == "error":
-            await _send_event(ws, "error", content=event.content)
+            elif event.type == "error":
+                if (
+                    provider == "ollama"
+                    and not text_started
+                    and not oom_retry_done
+                    and mpm.looks_like_oom(event.content or "")
+                ):
+                    saw_oom_pre_text = True
+                    break
+                await _send_event(ws, "error", content=event.content)
+
+        if not saw_oom_pre_text:
+            break
+
+        oom_retry_done = True
+        new_model, warning = await _ladder_step_after_oom(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            ctx_len_tokens=prompt_stats.get("context_tokens"),
+        )
+        if new_model is None:
+            await _send_event(
+                ws,
+                "error",
+                content="Out of memory and no smaller installed model fits. Free up RAM and try again.",
+            )
+            break
+        model = new_model
+        await _send_event(ws, "warning", content=warning or "Switched to smaller model after OOM")
+        try:
+            claude = (
+                get_llm(api_key or "", provider, model, base_url)
+                if get_llm else
+                _make_llm(provider, model, api_key or "", base_url)
+            )
+        except PrivacyBlockedError as exc:
+            await _send_event(ws, "error", content=str(exc))
+            break
+        # Loop back: retry the stream against the smaller model.
 
     # Handle tool call chain (up to MAX_TOOL_ROUNDS)
     if pending_tools:
