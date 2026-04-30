@@ -711,21 +711,22 @@ class TestLLMServiceResolveModel:
 
 
 class TestMakeLlm:
-    def test_ollama_returns_llm_service(self):
+    def test_ollama_returns_dispatcher(self):
+        # ADR 015 §B — Ollama path now uses `OllamaDispatcher` (official
+        # `ollama` Python client), no longer `LLMService` / LiteLLM.
         from routers.chat import _make_llm
-        from services.llm_service import LLMService
+        from services.ollama_dispatcher import OllamaDispatcher
 
         llm = _make_llm("ollama", "ollama_chat/qwen3:8b", "")
-        assert isinstance(llm, LLMService)
-        assert llm.config.provider == "ollama"
+        assert isinstance(llm, OllamaDispatcher)
         assert llm.config.api_base == "http://localhost:11434"
 
     def test_ollama_custom_base_url(self):
         from routers.chat import _make_llm
-        from services.llm_service import LLMService
+        from services.ollama_dispatcher import OllamaDispatcher
 
         llm = _make_llm("ollama", "ollama_chat/qwen3:8b", "", base_url="http://myhost:9999")
-        assert isinstance(llm, LLMService)
+        assert isinstance(llm, OllamaDispatcher)
         assert llm.config.api_base == "http://myhost:9999"
 
     def test_ollama_timeout_is_1800(self):

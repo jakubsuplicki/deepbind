@@ -13,7 +13,8 @@ markdownify==1.2.2
 lxml_html_clean==0.4.4
 pypdfium2==5.7.1  # PDF text extraction (Apache-2.0/BSD-3, ~9× faster than pdfplumber per ADR 013 knob-1)
 defusedxml==0.7.1  # safe XML parsing for Jira imports (step 22a)
-litellm==1.83.7
+litellm==1.83.7  # superseded by ollama==0.6.2 per ADR 015 chunk 2; deleted in chunk 4
+ollama==0.6.2  # official Ollama Python client (Apache-2.0). ADR 015 §B.
 fastembed==0.8.0  # local embeddings for semantic search
 psutil==7.2.2  # hardware detection for local model recommendations
 cryptography==47.0.0  # Ed25519 sign/verify for ADR 006 offline license

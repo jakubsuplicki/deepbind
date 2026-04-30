@@ -10,6 +10,7 @@ from services import specialist_service
 from services.chat import DEFAULT_STRATEGY, ContextStrategy
 from services.claude import ClaudeService, StreamEvent, build_system_prompt, build_system_prompt_with_stats
 from services.llm_service import LLMConfig, LLMService, DEFAULT_MODELS
+from services.ollama_dispatcher import OllamaDispatchConfig, OllamaDispatcher
 from services.tools import TOOLS, ToolNotFoundError, execute_tool
 from services.token_tracking import check_budget, log_usage
 from services.workspace_service import get_api_key
@@ -431,14 +432,15 @@ def _make_llm(provider: Optional[str], model: Optional[str], api_key: str, base_
 
     if provider == "ollama":
         from services.ollama_service import DEFAULT_OLLAMA_BASE_URL
-        config = LLMConfig(
-            provider="ollama",
+        # ADR 015 §B — Ollama dispatch uses the official `ollama` Python client
+        # via `OllamaDispatcher`, no LiteLLM. Cloud-provider branches below stay
+        # in place for chunk-coexistence; chunk 4 deletes them along with the
+        # whole multi-provider machinery.
+        config = OllamaDispatchConfig(
             model=model or DEFAULT_MODELS.get("ollama", "ollama_chat/qwen3:8b"),
-            api_key="ollama",  # LiteLLM needs a non-empty string
             api_base=base_url or DEFAULT_OLLAMA_BASE_URL,
-            timeout=1800,
         )
-        return LLMService(config)
+        return OllamaDispatcher(config)
     if provider and provider != "anthropic":
         config = LLMConfig(
             provider=provider,

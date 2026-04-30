@@ -53,9 +53,13 @@ The duel feature was viable when there were two cloud providers with genuinely d
 ### B. No LiteLLM
 - `litellm` removed from `backend/requirements.txt`.
 - A new module [`backend/services/ollama_dispatcher.py`](../../../backend/services/ollama_dispatcher.py) replaces the LiteLLM dispatch path in `services/llm_service.py`.
-- The dispatcher speaks Ollama's `POST /api/chat` directly: streaming JSON-lines parser, tool-call event decoder, error mapping into the existing `StreamEvent` shape.
-- Token counting via `tiktoken` (already bundled).
-- Exception types defined locally in the dispatcher module (no LiteLLM exception inheritance).
+- The dispatcher uses the **official `ollama` Python package** (Apache 2.0, maintained upstream by Ollama, ~15 KB wheel). Audit-clean: every transitive dependency (`httpx`, `httpcore`, `h11`, `pydantic`, `pydantic-core`, `annotated-types`, `typing-extensions`, `typing-inspection`, `anyio`, `idna`, `certifi`) is already in our requirements via FastAPI/httpx — net new is just the `ollama` wheel itself, no cloud SDKs anywhere in the tree.
+- The dispatcher's responsibility is narrow: adapter from `ollama.AsyncClient.chat(stream=True)` events → our existing `StreamEvent` shape. Roughly 80 lines of pure mapping logic plus Anthropic-style ↔ Ollama-style message converter.
+- Token counting via `tiktoken` (already bundled). The official client's `prompt_eval_count` / `eval_count` fields on the final chunk are the authoritative post-hoc counts; `tiktoken` remains for prompt-budgeting predictions.
+- Exception types are the official client's (`ollama.RequestError`, `ollama.ResponseError`) plus `httpx.TimeoutException` / `httpx.ConnectError` for transport failures — all mapped into `StreamEvent(type="error", content=...)` at the adapter boundary.
+- **Tool-call IDs synthesized locally.** Ollama's wire format does not carry tool-call ids (only `function.name` + `function.arguments`). The dispatcher synthesizes a stable id per tool call at emit time (UUID-derived) so downstream `tool_use` ↔ `tool_result` correlation remains intact. The Anthropic→Ollama message converter consumes these ids when round-tripping `tool_result` blocks back as `{role: "tool", tool_name: ..., content: ...}` messages.
+
+**Why the official client over a hand-rolled httpx wrapper:** the streaming JSON-lines parsing, tool-call chunk handling, and connection lifecycle are upstream-tested code that tracks the Ollama server we're already pinned to. Hand-rolling adds ~150 lines of code we'd own and chase against future Ollama versions, with no audit-signal benefit (both options have zero cloud-SDK transitive deps). The official client is also Apache 2.0, satisfying [ADR 002](002-pure-local-product-shape.md) §4's strict-OSI policy.
 
 ### C. No multi-provider machinery
 - No "provider" abstraction anywhere — chat dispatch always targets Ollama.
@@ -182,8 +186,9 @@ The work is sequenced so the test suite passes after each chunk and the bundle i
 - Continue work on `main` (or a dedicated `adr-015` branch that merges back).
 
 ### Chunk 2 — New Ollama dispatcher (backend)
-- Write [`backend/services/ollama_dispatcher.py`](../../../backend/services/ollama_dispatcher.py) — direct Ollama HTTP, streaming JSON-lines parser, tool-call decoder, exception mapping, `tiktoken` token counter.
-- Write [`backend/tests/test_ollama_dispatcher.py`](../../../backend/tests/test_ollama_dispatcher.py) — unit tests against a mocked Ollama HTTP server (existing test fixtures already do this for the LiteLLM path; the shape carries over).
+- Add `ollama` to [`backend/requirements.txt`](../../../backend/requirements.txt). Net new transitive deps: zero (the package's deps are already pulled in by FastAPI/httpx).
+- Write [`backend/services/ollama_dispatcher.py`](../../../backend/services/ollama_dispatcher.py) — adapter from `ollama.AsyncClient.chat(stream=True)` events → `StreamEvent` shape. Includes Anthropic-style ↔ Ollama-style message converter, tool-call id synthesis, error mapping. ~80 lines of mapping logic plus ~80 lines of message converter.
+- Write [`backend/tests/test_ollama_dispatcher.py`](../../../backend/tests/test_ollama_dispatcher.py) — unit tests against a mocked `ollama.AsyncClient` (mock yields a sequence of `ChatResponse`-shaped objects; the adapter is the only thing under test).
 - Both `LLMService` (LiteLLM) and `OllamaDispatcher` (new) coexist briefly so chunk 3 can swap.
 
 ### Chunk 3 — Wire dispatcher into chat router
