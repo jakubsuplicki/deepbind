@@ -1,0 +1,15 @@
+{
+  "name": "deepfilesai-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tauri shell + Python sidecar packaging for DeepFilesAI desktop distribution (ADR 003).",
+  "scripts": {
+    "tauri": "tauri",
+    "build-sidecar": "bash scripts/build-sidecar.sh",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0"
+  }
+}

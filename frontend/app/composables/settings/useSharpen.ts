@@ -102,7 +102,7 @@ export function useSharpen() {
 
   async function refreshQueue() {
     try {
-      queue.value = await $fetch<SharpenQueue>('/api/enrichment/queue')
+      queue.value = await $fetch<SharpenQueue>(apiUrl('/api/enrichment/queue'))
     } catch { /* non-critical */ }
   }
 
@@ -135,7 +135,7 @@ export function useSharpen() {
     clearState()
     stopPolling()
     try {
-      const result = await $fetch<SharpenResult>('/api/enrichment/sharpen-all', {
+      const result = await $fetch<SharpenResult>(apiUrl('/api/enrichment/sharpen-all'), {
         method: 'POST',
         body: { reason: 'manual_sharpen_all', include_notes: true, include_jira: includeJira },
       })
@@ -160,7 +160,7 @@ export function useSharpen() {
     if (cancelling.value) return null
     cancelling.value = true
     try {
-      const resp = await $fetch<{ removed: number }>('/api/enrichment/queue', { method: 'DELETE' })
+      const resp = await $fetch<{ removed: number }>(apiUrl('/api/enrichment/queue'), { method: 'DELETE' })
       await refreshQueue()
       active.value = false
       saveState()
@@ -179,7 +179,7 @@ export function useSharpen() {
         allow_on_battery: boolean
         on_battery: boolean
         model_id: string
-      }>('/api/settings/enrichment')
+      }>(apiUrl('/api/settings/enrichment'))
       allowOnBattery.value = resp.allow_on_battery
       onBattery.value = resp.on_battery
       enrichmentModelId.value = resp.model_id
@@ -191,7 +191,7 @@ export function useSharpen() {
   async function changeEnrichmentModel(litellmModel: string): Promise<boolean> {
     enrichmentModelId.value = litellmModel
     try {
-      await $fetch('/api/settings/enrichment', {
+      await $fetch(apiUrl('/api/settings/enrichment'), {
         method: 'PATCH',
         body: { model_id: litellmModel },
       })
@@ -204,7 +204,7 @@ export function useSharpen() {
 
   async function updateBatterySetting(): Promise<void> {
     try {
-      await $fetch('/api/settings/enrichment', {
+      await $fetch(apiUrl('/api/settings/enrichment'), {
         method: 'PATCH',
         body: { allow_on_battery: allowOnBattery.value },
       })

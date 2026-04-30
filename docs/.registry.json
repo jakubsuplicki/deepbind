@@ -448,8 +448,9 @@
         "workspace-onboarding",
         "api-key-management"
       ],
-      "last_updated": "2026-04-26",
-      "status": "current"
+      "last_updated": "2026-04-29",
+      "status": "current",
+      "_note_2026_04_29": "config.py extended for ADR 003 graduation: app_data_path field added (separate from workspace_path so uninstall can wipe app-data without touching the user's vault), cors_origins now accepts comma-separated env values via NoDecode + before-validator (Tauri shell sets JARVIS_CORS_ORIGINS=tauri://localhost,https://tauri.localhost,http://localhost:3000 at sidecar spawn). Defaults unchanged."
     },
     "app-shell": {
       "doc": "docs/features/app-shell.md",
@@ -882,6 +883,100 @@
       ],
       "last_updated": "2025-07-27",
       "status": "current"
+    },
+    "desktop-shell-spike": {
+      "doc": "docs/features/desktop-shell-spike.md",
+      "type": "spike",
+      "sources": [
+        "desktop/package.json",
+        "desktop/frontend-spike/index.html",
+        "desktop/sidecar/hello.py",
+        "desktop/sidecar/hello.spec",
+        "desktop/scripts/build-sidecar.sh",
+        "desktop/scripts/build-notarized.sh",
+        "desktop/scripts/dev.sh",
+        "desktop/src-tauri/Cargo.toml",
+        "desktop/src-tauri/tauri.conf.json",
+        "desktop/src-tauri/src/lib.rs",
+        "desktop/src-tauri/src/main.rs",
+        "desktop/src-tauri/capabilities/default.json",
+        "desktop/src-tauri/macos/Entitlements.plist",
+        "backend/scripts/run_frozen.py"
+      ],
+      "depends_on": [],
+      "last_updated": "2026-04-29",
+      "status": "spike"
+    },
+    "desktop-shell-graduation": {
+      "doc": "docs/features/desktop-shell-graduation.md",
+      "type": "tracker",
+      "sources": [
+        "backend/main.py",
+        "backend/models/schemas.py",
+        "backend/requirements.txt",
+        "backend/routers/memory.py",
+        "backend/scripts/run_frozen.py",
+        "backend/services/embedding_service.py",
+        "backend/services/reindex_supervisor.py",
+        "backend/tests/test_memory_reindex_status.py",
+        "backend/tests/test_reindex_supervisor.py",
+        "backend/utils/pil_stub.py",
+        "desktop/scripts/build-notarized.sh",
+        "desktop/scripts/build-sidecar.sh",
+        "desktop/scripts/dev.sh",
+        "desktop/scripts/fetch-bundled-models.sh",
+        "desktop/scripts/fetch-ollama.sh",
+        "desktop/sidecar/jarvis-sidecar.spec",
+        "desktop/src-tauri/macos/Entitlements.plist",
+        "desktop/src-tauri/src/lib.rs",
+        "desktop/src-tauri/tauri.conf.json",
+        "frontend/app/components/ImportDialog.vue",
+        "frontend/app/components/SmartConnectStatus.vue",
+        "frontend/app/components/StatusBar.vue",
+        "frontend/app/components/settings/SmartConnectSection.vue",
+        "frontend/app/composables/settings/useBudgetSettings.ts",
+        "frontend/app/composables/settings/useGeneralSettings.ts",
+        "frontend/app/composables/settings/useGraphExpansionSettings.ts",
+        "frontend/app/composables/settings/usePrivacySettings.ts",
+        "frontend/app/composables/settings/useSharpen.ts",
+        "frontend/app/composables/useApi.ts",
+        "frontend/app/composables/useChatModelProbe.ts",
+        "frontend/app/composables/useIngestStatus.ts",
+        "frontend/app/composables/useLocalModels.ts",
+        "frontend/app/composables/useMcp.ts",
+        "frontend/app/composables/useReindexStatus.ts",
+        "frontend/app/composables/useWebSocket.ts",
+        "frontend/app/utils/apiUrl.ts",
+        "frontend/nuxt.config.ts"
+      ],
+      "depends_on": [
+        "desktop-shell-spike"
+      ],
+      "last_updated": "2026-04-30",
+      "status": "in-progress",
+      "_chunk_state": {
+        "G1_env_driven_backend_config": "done",
+        "G3_frontend_graduation": "done",
+        "G5_background_reindex": "done",
+        "G2a_bundle_compiles_boots": "done",
+        "G2b_bundle_weights_inside_installer": "done",
+        "G2c_notarize_new_bundle": "done",
+        "G4a_ollama_process_plumbing": "done",
+        "G4b1_catalog_freeze_and_tier_mapping": "done",
+        "G4b2_first_run_orchestrator": "done",
+        "G4b3_first_run_modal_frontend": "done",
+        "G4b4_memory_pressure_monitor_and_ladder": "done",
+        "G4b5_lightweight_mode_toggle": "done",
+        "G4b6_cold_launch_e2e_automated": "done",
+        "G4b6_cold_launch_e2e_manual": "pending-user-authorization",
+        "G4a_notarize_bundle": "pending-user-authorization",
+        "ADR014_backend_gating": "done",
+        "ADR014_pyinstaller_excludes": "done",
+        "ADR014_frontend_tree_shake": "done",
+        "ADR014_info_plist_capabilities": "done",
+        "ADR014_ci_matrix": "done"
+      },
+      "_note_2026_04_30": "G4a landed: bundled Ollama 0.22.0 (pinned by SHA in fetch-ollama.sh) ships as a runtime directory under bundle.resources (not externalBin — Ollama 0.22.0 is no longer a self-contained CLI on macOS, dlopens libggml + mlx_metal_v3/v4 dylibs at startup; Apple notary requires every Mach-O signed so fetch-ollama.sh codesigns all 16 with our Developer ID + hardened runtime). Tauri shell's lib.rs is now a two-child supervisor: spawns ollama via std::process::Command on 127.0.0.1:11435, TCP-probes readiness (50 ms backoff / 10 s deadline), then spawns jarvis-sidecar with JARVIS_OLLAMA_BASE_URL=http://127.0.0.1:11435 so backend/services/ollama_service.py routes at our bundle. RunEvent::Exit kills+reaps both children; canonical Cmd+Q verified clean. ADR 003 §B updated with Amendment 2026-04-30 §L (macOS payload shape) + §M (bundle.resources primitive). Removed the 600 MB installer-size budget framing from ADR 003 driver #4 + §A/§B/§C amendments + graduation doc + SELF-CONTAINED-APP-REVIEW.md per user feedback (it wasn't a real constraint and was driving spurious trade-off decisions). Two new ADRs landed alongside G4a: ADR 005 (hardware-tiered model stack + first-run pull policy + downgrade ladder — locks the Tier A/B/C catalog from research-4.md, defines probe→pull-primary→bg-pull-fallback→chat-model-probe pipeline, defines the graceful-downgrade ladder triggered by OOM / pre-flight memory check / user lightweight-mode toggle) and ADR 014 (desktop bundle structurally excludes cloud-provider code paths via JARVIS_DESKTOP_BUNDLE=1 build flag; PyInstaller excludes litellm/anthropic/openai SDKs, frontend tree-shakes the API-keys UI, backend skips the api-keys router; restoration is a single-flag rebuild with code unchanged in repo). G4b (first-run pull UX) implementation is now unblocked but pending — multi-file backend + frontend work (catalog freeze, tier_for_hardware helper, first_run_orchestrator service, /api/local/first-run/* endpoints, OnboardingLocalFlow modal, memory_pressure_monitor service, lightweight-mode toggle). Re-notarization of the new ~745 MB G4a bundle remains a separate user-authorized step."
     }
   }
 }

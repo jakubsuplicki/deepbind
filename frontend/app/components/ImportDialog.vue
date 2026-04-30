@@ -401,7 +401,7 @@ async function importJira(file: File) {
       bytes_processed: number
       project_keys: string[]
     }
-  }>('/api/jira/import', {
+  }>(apiUrl('/api/jira/import'), {
     method: 'POST',
     body: formData,
   })
@@ -420,7 +420,7 @@ async function loadRecentImports() {
   recentLoading.value = true
   recentError.value = ''
   try {
-    const rows = await $fetch<JiraImportRow[]>('/api/jira/imports?limit=10')
+    const rows = await $fetch<JiraImportRow[]>(apiUrl('/api/jira/imports?limit=10'))
     recentImports.value = rows
   } catch (err: unknown) {
     recentError.value =

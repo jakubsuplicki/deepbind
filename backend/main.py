@@ -39,11 +39,17 @@ async def lifespan(app: FastAPI):
     db_path = settings.workspace_path / "app" / "jarvis.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     await init_database(db_path)
-    # Reindex memory files so the DB stays in sync with files on disk
+    # Markdown -> SQLite reindex stays synchronous: it's a single SQL truncate
+    # plus a directory walk, well under a second on multi-thousand-note vaults.
     from services.memory_service import reindex_all
     count = await reindex_all()
     if count > 0:
         logger.info("Startup reindex: %d notes indexed", count)
+    # Embedding reindex (fastembed CPU inference) goes to the background task
+    # supervisor — see ADR 003 §I and services/reindex_supervisor.py. Frontend
+    # polls /api/memory/reindex/status to surface a non-blocking toast.
+    from services import reindex_supervisor
+    await reindex_supervisor.start_async()
     # Seed built-in specialists for existing workspaces
     try:
         from services.specialist_service import seed_builtin_specialists
@@ -54,7 +60,9 @@ async def lifespan(app: FastAPI):
         logger.debug("Specialist seeding skipped: %s", exc)
     await start_workers()
     yield
+    # Stop background pieces in reverse order of startup.
     await stop_workers()
+    await reindex_supervisor.cancel_and_wait()
 
 
 def create_app() -> FastAPI:

@@ -11,6 +11,7 @@ Content hash ensures we skip re-embedding unchanged notes.
 import hashlib
 import logging
 import struct
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -23,13 +24,33 @@ _MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 _DIMENSIONS = 384
 
 
+def _bundled_cache_dir() -> Optional[str]:
+    """Locate the bundled fastembed cache when running inside PyInstaller.
+
+    PyInstaller's onefile bundle unpacks all data files under sys._MEIPASS.
+    desktop/sidecar/jarvis-sidecar.spec ships backend/_bundled_models/fastembed
+    as `_bundled_models/fastembed` so we look there first. When not frozen
+    (dev / pytest), return None and let fastembed use its default ~/.cache.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return None
+    candidate = Path(meipass) / "_bundled_models" / "fastembed"
+    return str(candidate) if candidate.is_dir() else None
+
+
 def _get_model():
     """Lazy-load embedding model on first use."""
     global _model
     if _model is None:
         from fastembed import TextEmbedding
-        logger.info("Loading embedding model %s...", _MODEL_NAME)
-        _model = TextEmbedding(model_name=_MODEL_NAME)
+        cache_dir = _bundled_cache_dir()
+        if cache_dir:
+            logger.info("Loading embedding model %s from bundled cache %s...", _MODEL_NAME, cache_dir)
+            _model = TextEmbedding(model_name=_MODEL_NAME, cache_dir=cache_dir)
+        else:
+            logger.info("Loading embedding model %s (default cache)...", _MODEL_NAME)
+            _model = TextEmbedding(model_name=_MODEL_NAME)
         logger.info("Embedding model loaded.")
     return _model
 

@@ -13,14 +13,22 @@ export function useWebSocket() {
   const _reconnectCallbacks = new Set<() => void>()
 
   function _getWsUrl(sessionId?: string): string {
-    const configured = useRuntimeConfig().public.backendWsUrl as string | undefined
+    // Tauri shell injects window.__JARVIS_CONFIG__ via init_script before page
+    // load (ADR 003 §D). It carries the bound port the sidecar got from the
+    // OS, so we always prefer it over the build-time runtimeConfig fallback.
+    const tauriBase = (typeof window !== 'undefined' && window.__JARVIS_CONFIG__?.wsUrl) || ''
     let base: string
-    if (configured) {
-      base = configured
+    if (tauriBase) {
+      base = `${tauriBase}/api/chat/ws`
     } else {
-      const loc = window.location
-      const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:'
-      base = `${protocol}//${loc.host}/api/chat/ws`
+      const configured = useRuntimeConfig().public.backendWsUrl as string | undefined
+      if (configured) {
+        base = configured
+      } else {
+        const loc = window.location
+        const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:'
+        base = `${protocol}//${loc.host}/api/chat/ws`
+      }
     }
     if (sessionId) {
       const sep = base.includes('?') ? '&' : '?'

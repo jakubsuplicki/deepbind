@@ -47,26 +47,26 @@ export function useBudgetSettings() {
 
   async function load() {
     try {
-      usage.value = await $fetch<UsageStats>('/api/settings/usage')
+      usage.value = await $fetch<UsageStats>(apiUrl('/api/settings/usage'))
     } catch { /* non-critical */ }
     try {
-      const b = await $fetch<BudgetSnapshot>('/api/settings/budget')
+      const b = await $fetch<BudgetSnapshot>(apiUrl('/api/settings/budget'))
       budget.value = b
       budgetValue.value = b.daily_budget
     } catch { /* non-critical */ }
     try {
-      const h = await $fetch<UsageHistoryEntry[]>('/api/settings/usage/history')
+      const h = await $fetch<UsageHistoryEntry[]>(apiUrl('/api/settings/usage/history'))
       history.value = h.slice(0, 14)
     } catch { /* non-critical */ }
   }
 
   async function save(): Promise<boolean> {
     try {
-      await $fetch('/api/settings/budget', {
+      await $fetch(apiUrl('/api/settings/budget'), {
         method: 'PATCH',
         body: { daily_token_budget: budgetValue.value },
       })
-      const b = await $fetch<BudgetSnapshot>('/api/settings/budget')
+      const b = await $fetch<BudgetSnapshot>(apiUrl('/api/settings/budget'))
       budget.value = b
       return true
     } catch {

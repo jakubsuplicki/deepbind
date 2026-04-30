@@ -12,7 +12,7 @@ function _wrapError(error: unknown): never {
 
 async function _api<T>(url: string, opts?: Parameters<typeof $fetch>[1]): Promise<T> {
   try {
-    return await $fetch<T>(url, opts)
+    return await $fetch<T>(apiUrl(url), opts)
   } catch (error: unknown) {
     _wrapError(error)
   }

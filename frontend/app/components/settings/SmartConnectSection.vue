@@ -108,7 +108,7 @@ async function runBackfill(payload: Record<string, unknown>) {
   try {
     // NOTE: Native EventSource only supports GET, so we MUST use fetch() +
     // ReadableStream to consume the SSE stream from this POST endpoint.
-    const resp = await fetch('/api/connections/backfill', {
+    const resp = await fetch(apiUrl('/api/connections/backfill'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

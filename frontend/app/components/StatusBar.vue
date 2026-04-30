@@ -39,6 +39,37 @@
     </span>
 
     <span
+      v-if="reindex.visible.value"
+      class="status-bar__reindex"
+      :class="{
+        'status-bar__reindex--failed': reindex.status.value.state === 'failed',
+        'status-bar__reindex--idle': reindex.status.value.state === 'idle',
+      }"
+      :title="reindexTooltip"
+    >
+      <span
+        v-if="reindex.status.value.state === 'running'"
+        class="status-bar__reindex-spinner"
+      />
+      <span
+        v-else-if="reindex.status.value.state === 'failed'"
+        class="status-bar__reindex-icon"
+      >!</span>
+      <span v-else class="status-bar__reindex-icon">✓</span>
+      <span class="status-bar__reindex-text">{{ reindexText }}</span>
+      <button
+        v-if="reindex.status.value.state === 'failed'"
+        class="status-bar__reindex-retry"
+        @click="reindex.retry"
+      >Retry</button>
+      <button
+        class="status-bar__reindex-dismiss"
+        aria-label="Dismiss reindex notice"
+        @click="reindex.dismiss"
+      >×</button>
+    </span>
+
+    <span
       class="status-bar__indicator"
       :class="backendStatus"
     >
@@ -62,12 +93,38 @@
 import { useLocalModels } from '~/composables/useLocalModels'
 import { useApiKeys } from '~/composables/useApiKeys'
 import { useIngestStatus } from '~/composables/useIngestStatus'
+import { useReindexStatus } from '~/composables/useReindexStatus'
 
 const { backendStatus, chatActive } = useAppState()
 const menuOpen = ref(false)
 const { activeProvider } = useApiKeys()
 const localModels = useLocalModels()
 const ingest = useIngestStatus()
+const reindex = useReindexStatus()
+
+const reindexText = computed(() => {
+  const s = reindex.status.value
+  if (s.state === 'running') {
+    if (s.total > 0) return `Indexing ${s.scanned} / ${s.total}`
+    return 'Indexing your vault…'
+  }
+  if (s.state === 'failed') return 'Index failed'
+  if (s.state === 'idle' && s.last_run_count > 0) {
+    return `Indexed ${s.last_run_count}`
+  }
+  return 'Indexing'
+})
+
+const reindexTooltip = computed(() => {
+  const s = reindex.status.value
+  if (s.state === 'failed' && s.last_error) {
+    return `Reindex failed: ${s.last_error}`
+  }
+  if (s.state === 'running') {
+    return `Embedding ${s.scanned} of ${s.total} notes (${s.progress_pct}%)`
+  }
+  return ''
+})
 
 const route = useRoute()
 watch(() => route.path, () => {
@@ -322,6 +379,84 @@ const ingestTooltip = computed(() => {
 .status-bar__ingest-text {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ── Reindex (cold-start embedding) pill ── */
+.status-bar__reindex {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-right: 0.5rem;
+  padding: 0.18rem 0.45rem 0.18rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--neon-cyan);
+  background-color: var(--neon-cyan-08);
+  border: 1px solid var(--neon-cyan-30);
+  border-radius: 9999px;
+  white-space: nowrap;
+  text-shadow: 0 0 6px var(--neon-cyan-30);
+}
+
+.status-bar__reindex--idle {
+  color: var(--neon-green);
+  background-color: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.25);
+  text-shadow: 0 0 6px rgba(34, 197, 94, 0.3);
+}
+
+.status-bar__reindex--failed {
+  color: var(--neon-red, #ef4444);
+  background-color: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.3);
+  text-shadow: 0 0 6px rgba(239, 68, 68, 0.3);
+}
+
+.status-bar__reindex-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--neon-cyan-30);
+  border-top-color: var(--neon-cyan);
+  border-radius: 50%;
+  animation: status-bar__spin 0.9s linear infinite;
+}
+
+.status-bar__reindex-icon {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.status-bar__reindex-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-bar__reindex-retry,
+.status-bar__reindex-dismiss {
+  background: none;
+  border: 1px solid currentColor;
+  color: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0 0.45rem;
+  line-height: 1.4;
+  border-radius: 9999px;
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 0.15s ease;
+}
+
+.status-bar__reindex-retry:hover,
+.status-bar__reindex-dismiss:hover {
+  opacity: 1;
+}
+
+.status-bar__reindex-dismiss {
+  border: none;
+  font-size: 1rem;
+  padding: 0 0.3rem;
 }
 
 @keyframes status-bar__spin {

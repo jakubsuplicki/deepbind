@@ -94,7 +94,7 @@ const COMPLETION_KEY = 'sc-completion-shown-at'
 
 async function fetchCoverage() {
   try {
-    const res = await fetch('/api/connections/coverage')
+    const res = await fetch(apiUrl('/api/connections/coverage'))
     if (!res.ok) return
     const next = (await res.json()) as Coverage
     const prev = coverage.value

@@ -43,7 +43,7 @@ const error = ref<string | null>(null)
 async function refreshInfo(): Promise<void> {
   loading.value = true
   try {
-    info.value = await $fetch<McpInfo>('/api/mcp/info')
+    info.value = await $fetch<McpInfo>(apiUrl('/api/mcp/info'))
     error.value = null
   } catch (e) {
     error.value = (e as { statusMessage?: string })?.statusMessage ?? 'Failed to fetch MCP info'

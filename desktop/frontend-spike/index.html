@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeepFilesAI — Spike</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --fg: #e6e9ef;
+        --muted: #6e7689;
+        --ok: #7ee0a3;
+        --warn: #f5b35c;
+        --err: #ff6f7d;
+        --border: #1b2030;
+        --accent: #5cc8ff;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        display: grid;
+        place-items: center;
+        padding: 32px;
+      }
+      .card {
+        width: 100%;
+        max-width: 540px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 24px 28px;
+        background: linear-gradient(180deg, #10141d 0%, #0c0f17 100%);
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 18px;
+        letter-spacing: 0.2px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 20px;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 110px 1fr;
+        gap: 8px 14px;
+        font-size: 13px;
+        margin-bottom: 6px;
+        align-items: baseline;
+      }
+      .row .k { color: var(--muted); }
+      .row .v { font-variant-numeric: tabular-nums; }
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        border: 1px solid var(--border);
+      }
+      .ok   { color: var(--ok);   border-color: rgba(126,224,163,0.4); }
+      .warn { color: var(--warn); border-color: rgba(245,179,92,0.4); }
+      .err  { color: var(--err);  border-color: rgba(255,111,125,0.4); }
+      pre {
+        margin: 12px 0 0;
+        padding: 12px 14px;
+        background: #07090e;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #c8cdd9;
+        overflow: auto;
+      }
+      footer {
+        margin-top: 18px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>DeepFilesAI · spike</h1>
+      <div class="sub">Tauri shell ↔ Python sidecar handshake (ADR 003 §K).</div>
+
+      <div class="row"><span class="k">Shell</span>     <span class="v">Tauri 2</span></div>
+      <div class="row"><span class="k">Backend</span>   <span class="v" id="backend-url">resolving…</span></div>
+      <div class="row"><span class="k">Health</span>    <span class="v" id="health">checking…</span></div>
+      <div class="row"><span class="k">Sidecar</span>   <span class="v" id="sidecar-version">—</span></div>
+
+      <pre id="raw">Awaiting <code>window.__JARVIS_CONFIG__</code>…</pre>
+
+      <footer>Notarization gate — see ADR 003 §K. This page exists to verify Tauri ↔ sidecar wiring before real frontend/backend integration.</footer>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function setPill(el, text, cls) {
+        el.innerHTML = '<span class="pill ' + cls + '">' + text + '</span>';
+      }
+
+      async function probe() {
+        const cfg = window.__JARVIS_CONFIG__;
+        if (!cfg || !cfg.backendUrl) {
+          setPill($('health'), 'no-config', 'err');
+          $('backend-url').textContent = '(missing)';
+          $('raw').textContent = 'window.__JARVIS_CONFIG__ was not injected by the shell.';
+          return;
+        }
+
+        $('backend-url').textContent = cfg.backendUrl;
+
+        try {
+          const res = await fetch(cfg.backendUrl + '/api/health');
+          if (!res.ok) {
+            setPill($('health'), 'http ' + res.status, 'err');
+            return;
+          }
+          const body = await res.json();
+          setPill($('health'), 'ok', 'ok');
+          $('sidecar-version').textContent = body.version || '(unknown)';
+          $('raw').textContent = JSON.stringify(body, null, 2);
+        } catch (err) {
+          setPill($('health'), 'unreachable', 'err');
+          $('raw').textContent = String(err);
+        }
+      }
+
+      probe();
+    </script>
+  </body>
+</html>

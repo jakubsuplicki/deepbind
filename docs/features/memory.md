@@ -16,7 +16,7 @@ sources:
   - frontend/app/components/LinkIngestDialog.vue
 depends_on: [database, preferences-settings, ingest-benchmark]
 last_reviewed: 2026-04-26
-last_updated: 2026-04-28
+last_updated: 2026-04-29
 ---
 
 
@@ -39,7 +39,9 @@ Every note carries a YAML frontmatter block with `title`, `created_at`, `updated
 
 ### Semantic search (local embeddings)
 
-`embedding_service.py` provides local, on-device semantic search via **fastembed** (ONNX Runtime). No API calls, no keys, no data leaving the machine. The model — `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384 dims, ~220MB) — is multilingual and handles Polish alongside English. It is lazy-loaded on first use (~3–4s cold start, ~400MB RAM).
+`embedding_service.py` provides local, on-device semantic search via **fastembed** (ONNX Runtime). No API calls, no keys, no data leaving the machine. The model — `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384 dims, ~235 MB) — is multilingual and handles Polish alongside English. It is lazy-loaded on first use (~3–4s cold start, ~400 MB RAM).
+
+In the **desktop bundle** (per [ADR 003 §A](../architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md)) the model weights ship inside the installer rather than downloading on first run. `_bundled_cache_dir()` resolves to `<sys._MEIPASS>/_bundled_models/fastembed` when frozen and is passed to `TextEmbedding(cache_dir=...)`; in dev (non-frozen) the call falls through to fastembed's default `~/.cache`. Cache is populated at build time by [`desktop/scripts/fetch-bundled-models.sh`](../../desktop/scripts/fetch-bundled-models.sh) — see [desktop-shell-graduation §G2b](desktop-shell-graduation.md#g2b--bundle-fastembed--spacy-weights-inside-the-installer).
 
 - **On-write embedding.** `memory_service._index_note()` calls `embed_note()` after writing a Markdown file. The note's title, tags, and body are combined (title weighted by repetition) and passed to the model. Output vectors are packed as float32 BLOBs and stored in the `note_embeddings` table alongside a content-SHA256 hash. If the hash hasn't changed, `embed_note()` skips re-embedding — a cheap no-op for unchanged notes.
 - **Graceful degradation.** The embed call is wrapped in a try/except and guarded by the `JARVIS_DISABLE_EMBEDDINGS` env var. If `fastembed` isn't installed (ImportError) or the call fails, indexing still succeeds — only the embedding step is skipped. Tests set `JARVIS_DISABLE_EMBEDDINGS=1` in `conftest.py` to avoid loading the model for every run.

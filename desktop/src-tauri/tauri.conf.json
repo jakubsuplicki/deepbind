@@ -1,0 +1,39 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "DeepFilesAI",
+  "version": "0.1.0",
+  "identifier": "app.deepfilesai.desktop",
+  "build": {
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "../../frontend/.output/public"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/jarvis-sidecar"],
+    "resources": {
+      "binaries/ollama-runtime": "ollama-runtime"
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "entitlements": "macos/Entitlements.plist",
+      "hardenedRuntime": true
+    },
+    "category": "Productivity",
+    "shortDescription": "AI workspace that remembers what matters.",
+    "longDescription": "DeepFilesAI desktop shell — Tauri 2 + Python sidecar + bundled Ollama. ADR 003 graduation build."
+  }
+}

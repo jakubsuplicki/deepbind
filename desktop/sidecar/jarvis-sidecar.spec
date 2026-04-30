@@ -1,0 +1,280 @@
+# PyInstaller spec — real Jarvis backend bundle (ADR 003 §F + §J).
+#
+# Build with:
+#     pyinstaller --noconfirm desktop/sidecar/jarvis-sidecar.spec
+#
+# Output: desktop/sidecar/dist/jarvis-sidecar (single-file binary, native arch).
+#
+# This replaces the spike's hello.spec when graduation chunk G2 lands. Where
+# hello.spec was a minimal FastAPI hello-world, this one bundles:
+#
+#     1. backend/scripts/run_frozen.py as the entrypoint (which imports
+#        backend/main.py and serves the full FastAPI app).
+#     2. The whole `backend/` package — routers + services + models + utils +
+#        mcp_server. We use collect_submodules so PyInstaller doesn't miss
+#        modules that are imported lazily (inside route handlers, e.g.
+#        `from services.embedding_service import reindex_all` inside
+#        routers/memory.py).
+#     3. Hidden imports for libraries with dynamic plugin loaders that
+#        PyInstaller's static analysis doesn't see — fastembed (ONNX runtime
+#        model loader), spacy (lang-pack registries), keyring (per-OS
+#        backends per ADR 003 §J), uvicorn (loop/protocol registries).
+#
+# What this spec does NOT do (yet):
+#     - Bundle the Ollama CLI. That's G4.
+#
+# G2b additions (2026-04-29) — fulfilling ADR 003 §A "self-contained from
+# minute zero":
+#
+#     1. fastembed ONNX weights (~240 MB) bundled from
+#        backend/_bundled_models/fastembed/ (populated by
+#        desktop/scripts/fetch-bundled-models.sh — call it from CI/build
+#        before invoking PyInstaller).
+#
+#     2. spaCy NER model packages (pl_core_news_sm, en_core_web_sm) — these
+#        install as regular Python packages from requirements.txt, so we just
+#        collect_submodules + collect_data_files like any other backend dep.
+#        Their entrypoint __init__.py registers `<lang>_<size>` with spaCy's
+#        pkg-resources scanner, so spacy.load("pl_core_news_sm") resolves
+#        inside the bundle without any path gymnastics.
+
+# ruff: noqa
+# type: ignore
+
+import os
+import sys
+from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+
+block_cipher = None
+
+HERE = Path(SPECPATH).resolve()
+REPO_ROOT = HERE.parent.parent
+BACKEND_ROOT = REPO_ROOT / "backend"
+
+# ADR 014 — desktop-bundle build flag. Default True per ADR §A: the v1
+# product *is* the cloud-excluded desktop bundle. Set
+# ``JARVIS_DESKTOP_BUNDLE=0`` before invoking PyInstaller to build the
+# hybrid SKU that re-includes the cloud-provider SDKs (used by CI's
+# second build target so the cloud paths stay correct enough to ship).
+DESKTOP_BUNDLE = os.environ.get("JARVIS_DESKTOP_BUNDLE", "1") == "1"
+
+# --- Hidden imports ---------------------------------------------------------
+#
+# PyInstaller follows static `import` statements but misses three patterns we
+# use heavily:
+#   (a) Lazy imports inside function bodies (FastAPI route handlers do this
+#       for cold-start friendliness).
+#   (b) Plugin-registry imports — fastembed picks an ONNX model class by
+#       name string at runtime; spacy loads language packs the same way.
+#   (c) keyring's per-OS backend resolution (per ADR 003 §J — keychain on
+#       mac, Credential Manager on win, encrypted-file fallback elsewhere).
+
+backend_pkgs = [
+    "config",
+    "main",
+    "models",
+    "routers",
+    "services",
+    "services.chat",
+    "services.enrichment",
+    "services.graph_service",
+    "services.retrieval",
+    "utils",
+    "mcp_server",
+    # Production code imports from tests.eval.latency (chat_model_probe.py:52).
+    # Until that's untangled, the eval harness ships in the bundle. Including
+    # only the latency subtree — not the whole tests/ — keeps weight down.
+    "tests.eval.latency",
+    # spaCy NER model packages — walk every submodule so the lang-specific
+    # tagger/ner/lemmatizer pipelines come along.
+    "pl_core_news_sm",
+    "en_core_web_sm",
+]
+hidden = []
+for pkg in backend_pkgs:
+    try:
+        hidden.extend(collect_submodules(pkg))
+    except Exception:
+        # Some submodules (e.g. test-only) may not be importable in a clean
+        # build env — collect_submodules raises rather than skipping.
+        pass
+
+hidden.extend([
+    # spaCy NER model packages — installed via requirements.txt direct wheel
+    # URLs. Each package registers itself with spacy's entry-point scanner so
+    # spacy.load("pl_core_news_sm") finds them at runtime inside the bundle.
+    "pl_core_news_sm",
+    "en_core_web_sm",
+    # uvicorn loop / protocol / lifespan registries
+    "uvicorn",
+    "uvicorn.logging",
+    "uvicorn.loops",
+    "uvicorn.loops.auto",
+    "uvicorn.loops.uvloop",
+    "uvicorn.protocols",
+    "uvicorn.protocols.http",
+    "uvicorn.protocols.http.auto",
+    "uvicorn.protocols.http.h11_impl",
+    "uvicorn.protocols.websockets",
+    "uvicorn.protocols.websockets.auto",
+    "uvicorn.protocols.websockets.websockets_impl",
+    "uvicorn.lifespan",
+    "uvicorn.lifespan.on",
+    # FastAPI / Pydantic v2 transitives
+    "fastapi",
+    "pydantic",
+    "pydantic_settings",
+    "pydantic.deprecated.decorator",
+    # fastembed (ONNX model loader)
+    "fastembed",
+    "fastembed.text",
+    "onnxruntime",
+    "tokenizers",
+    # spaCy + the language models the backend explicitly loads
+    # (services/entity_extraction.py:31-33). These wheels register submodules
+    # that spacy.load() resolves by string name.
+    "spacy",
+    "spacy.lang.en",
+    "spacy.lang.pl",
+    # keyring per-OS backends — ADR 003 §J
+    "keyring",
+    "keyring.backends",
+    "keyring.backends.macOS",
+    "keyring.backends.Windows",
+    "keyring.backends.SecretService",
+    "keyring.backends.fail",
+    "keyrings.alt",
+    "keyrings.alt.file",
+    # LiteLLM provider modules — these get imported on first call, not load
+    "litellm",
+    "litellm.llms",
+    # Misc transitives PyInstaller has historically missed for our deps
+    "tiktoken_ext",
+    "tiktoken_ext.openai_public",
+    "aiosqlite",
+])
+
+# --- Datas ------------------------------------------------------------------
+#
+# fastembed/onnxruntime/litellm ship runtime data files (vocab, JSON configs,
+# version banners) that PyInstaller's bytecode-only analysis won't pick up.
+# `collect_data_files` walks the package on disk and includes them.
+#
+# spaCy model packages (pl_core_news_sm, en_core_web_sm) carry their actual
+# weights as data files inside the package directory (e.g. tagger/model,
+# ner/cfg, vocab/strings.json). collect_data_files picks them up.
+
+datas = []
+for pkg in [
+    "fastembed",
+    "litellm",
+    "tiktoken",
+    "tiktoken_ext",
+    "pl_core_news_sm",
+    "en_core_web_sm",
+]:
+    try:
+        datas.extend(collect_data_files(pkg))
+    except Exception:
+        pass
+
+# Bundled fastembed ONNX cache (populated by
+# desktop/scripts/fetch-bundled-models.sh per ADR 003 §A). At runtime the
+# bundle is unpacked under sys._MEIPASS, and embedding_service.py resolves
+# the cache_dir to <_MEIPASS>/_bundled_models/fastembed (see G2b.4).
+BUNDLED_MODELS_DIR = REPO_ROOT / "backend" / "_bundled_models"
+if (BUNDLED_MODELS_DIR / "fastembed").exists():
+    datas.append((str(BUNDLED_MODELS_DIR / "fastembed"), "_bundled_models/fastembed"))
+else:
+    raise SystemExit(
+        "error: backend/_bundled_models/fastembed/ is missing. Run "
+        "`bash desktop/scripts/fetch-bundled-models.sh` before building the "
+        "sidecar so the installer is offline-capable on first run (ADR 003 §A)."
+    )
+
+# --- Analysis ---------------------------------------------------------------
+
+a = Analysis(
+    [str(BACKEND_ROOT / "scripts" / "run_frozen.py")],
+    # pathex so `from main import app` and `from routers... import ...` resolve
+    # both during PyInstaller analysis and at runtime (the bundle re-injects
+    # the bundle root onto sys.path).
+    pathex=[str(BACKEND_ROOT)],
+    binaries=[],
+    datas=datas,
+    hiddenimports=sorted(set(hidden)),
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[
+        # Things we DON'T need in the sidecar binary. Keeps the bundle honest.
+        # NOTE: cannot exclude 'tests' here — production code imports
+        # tests.eval.latency from chat_model_probe.py:52. The collect_submodules
+        # call above only picks the latency subtree, not the whole tree.
+        # NOTE: PIL is excluded by design. fastembed.common.types does
+        # `from PIL import Image` at module top even on the text-only path,
+        # but we never embed images. backend/utils/pil_stub.py installs a
+        # 5-line PIL.Image stub at frozen-entrypoint startup so the import
+        # succeeds. Including real Pillow drags in ~30 MB of libjpeg/libtiff/
+        # libwebp dylibs which causes amfid to hang `_dyld_start` for 24+ min
+        # on first launch of ad-hoc-signed bundles on macOS Tahoe (verified
+        # 2026-04-29 during G2b). Notarized builds (G2c) skip that scan path
+        # but local dev iteration becomes impossible — keep PIL out.
+        "tkinter",
+        "matplotlib",
+        "PIL",
+        "PIL.Image",
+        "pandas",
+        "scipy.tests",
+        "numpy.tests",
+        "test",
+        "IPython",
+        "jupyter",
+    ] + ([
+        # ADR 014 §A — desktop-bundle structural exclusions. Default-ON;
+        # set JARVIS_DESKTOP_BUNDLE=0 to build the hybrid SKU that includes
+        # cloud-provider SDKs. Per the 2026-04-30 amendment we exclude the
+        # cloud SDKs *proper* (`anthropic`, `openai`, `google.generativeai`)
+        # plus the Anthropic-specific HTTP client, but keep `litellm` and
+        # `services.llm_service` since they're used by the Ollama path too.
+        # The audit signal: a procurement reviewer probing the unpacked
+        # bundle finds no Anthropic/OpenAI/Google SDK directories under
+        # _MEIPASS, AND any LiteLLM cloud-provider call fails at import
+        # time (the SDK is absent), AND `/api/bundle/capabilities` reports
+        # `cloud_providers_available: false`.
+        "anthropic",
+        "openai",
+        "google.generativeai",
+        "google.generativelanguage",
+        "services._anthropic_client",
+    ] if DESKTOP_BUNDLE else []),
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name="jarvis-sidecar",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,  # UPX confuses macOS hardened-runtime + notarization. Never UPX.
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,  # headless — keep the console so stdout (READY line) flows.
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,  # signed by Tauri's bundler later.
+    entitlements_file=None,
+)

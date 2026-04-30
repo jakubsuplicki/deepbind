@@ -60,6 +60,21 @@ class ReindexResponse(BaseModel):
     indexed: int
 
 
+class ReindexStatusResponse(BaseModel):
+    """Snapshot returned by GET /api/memory/reindex/status. Mirrors the
+    `services.reindex_supervisor.ReindexStatus` dataclass shape — see
+    ADR 003 §I for why this is a separate poll endpoint."""
+
+    state: Literal["idle", "running", "failed"]
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    scanned: int = 0
+    total: int = 0
+    progress_pct: float = 0.0
+    last_error: Optional[str] = None
+    last_run_count: int = 0
+
+
 # --- Chat ---
 
 class ChatMessage(BaseModel):

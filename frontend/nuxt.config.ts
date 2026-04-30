@@ -23,6 +23,13 @@ export default defineNuxtConfig({
     },
   },
   nitro: {
+    // Static SPA bundle for the Tauri shell (ADR 003 §G). `nuxt generate`
+    // emits a self-contained .output/public/ that the Rust shell points
+    // its WebviewWindowBuilder at. No Node server needed.
+    preset: 'static',
+    // Dev-only: the browser dev server proxies /api/* to the local backend.
+    // Tauri shell never sees these — it injects backendUrl via
+    // window.__JARVIS_CONFIG__ and frontend code routes through apiUrl().
     devProxy: {
       '/api': {
         target: 'http://127.0.0.1:8000/api',

@@ -30,7 +30,7 @@ export function useChatModelProbe() {
   async function fetchStatus(baseUrl?: string): Promise<ChatModelProbeStatus | null> {
     try {
       const params = baseUrl ? { base_url: baseUrl } : {}
-      const data = await $fetch<ChatModelProbeStatus>('/api/local/chat-model-probe', { params })
+      const data = await $fetch<ChatModelProbeStatus>(apiUrl('/api/local/chat-model-probe'), { params })
       status.value = data
       error.value = null
       return data
@@ -56,7 +56,7 @@ export function useChatModelProbe() {
     _abort = new AbortController()
 
     try {
-      const url = `/api/local/chat-model-probe/run${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ''}`
+      const url = apiUrl(`/api/local/chat-model-probe/run${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ''}`)
       const response = await fetch(url, {
         method: 'POST',
         signal: _abort.signal,
@@ -122,7 +122,7 @@ export function useChatModelProbe() {
   /** Set or clear the user override. ``model: null`` reverts to recommendation. */
   async function setOverride(model: string | null): Promise<void> {
     try {
-      await $fetch('/api/local/chat-model-probe/override', {
+      await $fetch(apiUrl('/api/local/chat-model-probe/override'), {
         method: 'POST',
         body: { model },
       })

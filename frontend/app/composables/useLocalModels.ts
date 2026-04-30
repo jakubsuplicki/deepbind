@@ -26,7 +26,7 @@ export function useLocalModels() {
 
   async function fetchHardware(): Promise<void> {
     try {
-      hardware.value = await $fetch<HardwareProfile>('/api/local/hardware')
+      hardware.value = await $fetch<HardwareProfile>(apiUrl('/api/local/hardware'))
     } catch (e: unknown) {
       error.value = 'Failed to fetch hardware info'
     }
@@ -34,7 +34,7 @@ export function useLocalModels() {
 
   async function fetchRuntime(): Promise<void> {
     try {
-      runtime.value = await $fetch<RuntimeStatus>('/api/local/runtime', {
+      runtime.value = await $fetch<RuntimeStatus>(apiUrl('/api/local/runtime'), {
         params: { base_url: baseUrl.value },
       })
     } catch (e: unknown) {
@@ -50,7 +50,7 @@ export function useLocalModels() {
 
   async function fetchCatalog(): Promise<void> {
     try {
-      catalog.value = await $fetch<ModelRecommendation[]>('/api/local/models/catalog', {
+      catalog.value = await $fetch<ModelRecommendation[]>(apiUrl('/api/local/models/catalog'), {
         params: { base_url: baseUrl.value },
       })
       // If the chat-side provider is ollama but the selected model is not installed,
@@ -94,7 +94,7 @@ export function useLocalModels() {
     _pullAbortController = new AbortController()
 
     try {
-      const response = await fetch('/api/local/models/pull', {
+      const response = await fetch(apiUrl('/api/local/models/pull'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: _pullAbortController.signal,
@@ -170,7 +170,7 @@ export function useLocalModels() {
     if (!model) return
 
     try {
-      await $fetch('/api/local/models/select', {
+      await $fetch(apiUrl('/api/local/models/select'), {
         method: 'POST',
         body: {
           model_id: model.model_id,
@@ -194,7 +194,7 @@ export function useLocalModels() {
 
   async function deleteModel(ollamaModel: string): Promise<void> {
     try {
-      await $fetch(`/api/local/models/${encodeURIComponent(ollamaModel)}`, {
+      await $fetch(apiUrl(`/api/local/models/${encodeURIComponent(ollamaModel)}`), {
         method: 'DELETE',
         params: { base_url: baseUrl.value },
       })
@@ -225,7 +225,7 @@ export function useLocalModels() {
 
   async function warmUpModel(ollamaModel: string): Promise<void> {
     try {
-      await $fetch('/api/local/models/warm-up', {
+      await $fetch(apiUrl('/api/local/models/warm-up'), {
         method: 'POST',
         body: { model: ollamaModel, base_url: baseUrl.value },
       })

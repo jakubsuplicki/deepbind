@@ -49,3 +49,18 @@ app/mcp_token
 
 # Bun (we use npm in CI)
 bun.lock
+
+# Desktop bundle build caches — fetched at build time by
+# desktop/scripts/fetch-bundled-models.sh and fetch-ollama.sh
+backend/_bundled_models/
+desktop/.ollama-cache/
+
+# Desktop build artifacts (Tauri/PyInstaller/Cargo output)
+desktop/sidecar/build/
+desktop/sidecar/dist/
+desktop/src-tauri/binaries/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+
+# TypeScript build cache
+*.tsbuildinfo

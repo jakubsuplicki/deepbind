@@ -12,6 +12,7 @@ from models.schemas import (
     NoteDetailResponse,
     NoteMetadataResponse,
     ReindexResponse,
+    ReindexStatusResponse,
     UrlIngestRequest,
 )
 from services.memory_service import (
@@ -79,25 +80,49 @@ async def delete_note_endpoint(note_path: str):
 
 @router.post("/reindex", response_model=ReindexResponse)
 async def reindex_endpoint():
+    """Markdown -> SQLite reindex. Synchronous because it's fast (a single
+    truncate + directory walk). Also kicks the embedding supervisor in the
+    background so the two halves don't drift after a manual reindex.
+    """
     count = await reindex_all()
+    from services import reindex_supervisor
+    await reindex_supervisor.start_async()
     return ReindexResponse(indexed=count)
+
+
+@router.get("/reindex/status", response_model=ReindexStatusResponse)
+async def reindex_status_endpoint() -> ReindexStatusResponse:
+    """Snapshot of the embedding-reindex supervisor (ADR 003 §I). Frontend
+    polls this while a reindex is in flight to surface a non-blocking toast.
+    """
+    from services import reindex_supervisor
+    return ReindexStatusResponse(**reindex_supervisor.current_status().to_dict())
 
 
 @router.post("/reindex-embeddings")
 async def reindex_embeddings_endpoint():
-    """Rebuild all note embeddings from markdown files."""
+    """Kick a fresh embedding-reindex pass through the supervisor.
+
+    Returns immediately with the supervisor's reaction:
+        {"status": "started"}          — a new pass kicked off
+        {"status": "already_running"}  — a pass was already in flight
+    Use GET /api/memory/reindex/status for progress.
+    """
     try:
-        from services.embedding_service import reindex_all as reindex_embeddings_all
+        from services.embedding_service import is_available
     except ImportError:
         raise HTTPException(
             status_code=503,
             detail="Embedding service unavailable (fastembed not installed)",
         )
-    try:
-        count = await reindex_embeddings_all()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Reindex failed: {exc}")
-    return {"status": "ok", "notes_embedded": count}
+    if not is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Embedding service unavailable (fastembed not installed)",
+        )
+    from services import reindex_supervisor
+    result = await reindex_supervisor.start_async()
+    return {"status": result}
 
 
 @router.get("/semantic-search")

@@ -19,7 +19,7 @@ export function useGraphExpansionSettings() {
 
   async function load() {
     try {
-      const data = await $fetch<{ graph_expansion: GraphExpansionConfig }>('/api/settings/retrieval')
+      const data = await $fetch<{ graph_expansion: GraphExpansionConfig }>(apiUrl('/api/settings/retrieval'))
       config.value = { ...DEFAULT_CONFIG, ...data.graph_expansion }
     } catch {
       error.value = 'Failed to load retrieval settings'
@@ -30,7 +30,7 @@ export function useGraphExpansionSettings() {
     saving.value = true
     error.value = ''
     try {
-      const data = await $fetch<{ graph_expansion: GraphExpansionConfig }>('/api/settings/retrieval', {
+      const data = await $fetch<{ graph_expansion: GraphExpansionConfig }>(apiUrl('/api/settings/retrieval'), {
         method: 'PATCH',
         body: { graph_expansion: { [key]: value } },
       })

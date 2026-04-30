@@ -63,7 +63,7 @@ function dropUploadLater(id: string, ms: number): void {
 
 async function poll(): Promise<void> {
   try {
-    const data = await $fetch<IngestStatusResponse>('/api/memory/ingest/status')
+    const data = await $fetch<IngestStatusResponse>(apiUrl('/api/memory/ingest/status'))
     serverActive.value = data.active || []
     serverRecent.value = data.recent || []
 
@@ -212,7 +212,7 @@ export function useIngestStatus() {
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', url)
+      xhr.open('POST', apiUrl(url))
       xhr.responseType = 'json'
 
       xhr.upload.onprogress = (e: ProgressEvent) => {

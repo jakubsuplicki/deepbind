@@ -17,7 +17,7 @@ export function useGeneralSettings() {
 
   async function load() {
     try {
-      const resp = await $fetch<GeneralSettings>('/api/settings')
+      const resp = await $fetch<GeneralSettings>(apiUrl('/api/settings'))
       workspacePath.value = resp.workspace_path
       serverKeyConfigured.value = resp.api_key_set
       keyStorage.value = resp.key_storage
@@ -31,7 +31,7 @@ export function useGeneralSettings() {
 
   async function updateVoice(): Promise<void> {
     try {
-      await $fetch('/api/settings/voice', {
+      await $fetch(apiUrl('/api/settings/voice'), {
         method: 'PATCH',
         body: { auto_speak: String(autoSpeak.value) },
       })
@@ -40,14 +40,14 @@ export function useGeneralSettings() {
 
   async function reindexMemory(): Promise<number | null> {
     try {
-      const resp = await $fetch<{ indexed: number }>('/api/memory/reindex', { method: 'POST' })
+      const resp = await $fetch<{ indexed: number }>(apiUrl('/api/memory/reindex'), { method: 'POST' })
       return resp.indexed
     } catch { return null }
   }
 
   async function rebuildGraph(): Promise<boolean> {
     try {
-      await $fetch('/api/graph/rebuild', { method: 'POST' })
+      await $fetch(apiUrl('/api/graph/rebuild'), { method: 'POST' })
       return true
     } catch { return false }
   }

@@ -16,7 +16,7 @@ export function usePrivacySettings() {
 
   async function load() {
     try {
-      privacy.value = await $fetch<PrivacyState>('/api/settings/privacy')
+      privacy.value = await $fetch<PrivacyState>(apiUrl('/api/settings/privacy'))
     } catch {
       error.value = 'Failed to load privacy settings'
     }
@@ -26,7 +26,7 @@ export function usePrivacySettings() {
     saving.value = true
     error.value = ''
     try {
-      privacy.value = await $fetch<PrivacyState>('/api/settings/privacy', {
+      privacy.value = await $fetch<PrivacyState>(apiUrl('/api/settings/privacy'), {
         method: 'PATCH',
         body: { [key]: value },
       })
