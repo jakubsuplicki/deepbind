@@ -623,88 +623,12 @@ class TestModelCatalog:
         assert get_model_by_id("nonexistent") is None
 
 
-# ── LLMConfig Changes ───────────────────────────────────────────────────────
-
-
-class TestLLMConfig:
-    def test_api_base_field(self):
-        from services.llm_service import LLMConfig
-
-        config = LLMConfig(
-            provider="ollama",
-            model="ollama_chat/qwen3:8b",
-            api_key="ollama",
-            api_base="http://localhost:11434",
-        )
-        assert config.api_base == "http://localhost:11434"
-
-    def test_timeout_field(self):
-        from services.llm_service import LLMConfig
-
-        config = LLMConfig(
-            provider="ollama",
-            model="ollama_chat/qwen3:8b",
-            api_key="ollama",
-            timeout=600,
-        )
-        assert config.timeout == 600
-
-    def test_defaults_are_none(self):
-        from services.llm_service import LLMConfig
-
-        config = LLMConfig(
-            provider="openai",
-            model="gpt-4o",
-            api_key="sk-test",
-        )
-        assert config.api_base is None
-        assert config.timeout is None
-
-
-class TestLLMServiceResolveModel:
-    def test_ollama_model_keeps_prefix(self):
-        from services.llm_service import LLMConfig, LLMService
-
-        config = LLMConfig(
-            provider="ollama",
-            model="ollama_chat/qwen3:8b",
-            api_key="ollama",
-        )
-        svc = LLMService(config)
-        assert svc._litellm_model == "ollama_chat/qwen3:8b"
-
-    def test_ollama_model_adds_prefix(self):
-        from services.llm_service import LLMConfig, LLMService
-
-        config = LLMConfig(
-            provider="ollama",
-            model="qwen3:8b",
-            api_key="ollama",
-        )
-        svc = LLMService(config)
-        assert svc._litellm_model == "ollama_chat/qwen3:8b"
-
-    def test_openai_model_unchanged(self):
-        from services.llm_service import LLMConfig, LLMService
-
-        config = LLMConfig(
-            provider="openai",
-            model="gpt-4o",
-            api_key="sk-test",
-        )
-        svc = LLMService(config)
-        assert svc._litellm_model == "gpt-4o"
-
-    def test_google_model_gets_prefix(self):
-        from services.llm_service import LLMConfig, LLMService
-
-        config = LLMConfig(
-            provider="google",
-            model="gemini-2.5-flash",
-            api_key="test",
-        )
-        svc = LLMService(config)
-        assert svc._litellm_model == "gemini/gemini-2.5-flash"
+# ── LLMConfig / LLMService — deleted with ADR 015 ─────────────────────────────
+# The TestLLMConfig and TestLLMServiceResolveModel classes that lived here
+# previously tested the LiteLLM-era multi-provider config and model-string
+# resolution. Both are replaced by `OllamaDispatchConfig` / `OllamaDispatcher`
+# (covered in `tests/test_ollama_dispatcher.py`) — single-target, no
+# multi-provider model-string mangling needed.
 
 
 # ── Chat.py _make_llm ───────────────────────────────────────────────────────
@@ -735,35 +659,21 @@ class TestMakeLlm:
         llm = _make_llm("ollama", "ollama_chat/qwen3:8b", "")
         assert llm.config.timeout == 1800
 
-    def test_anthropic_returns_claude_service(self):
+    def test_default_returns_dispatcher(self):
+        # ADR 015: with no explicit provider/model the router still
+        # constructs an OllamaDispatcher pointed at the default model.
         from routers.chat import _make_llm
-        from services.claude import ClaudeService
+        from services.ollama_dispatcher import OllamaDispatcher
 
-        llm = _make_llm(None, None, "sk-ant-test")
-        assert isinstance(llm, ClaudeService)
-
-    def test_openai_returns_llm_service(self):
-        from routers.chat import _make_llm
-        from services.llm_service import LLMService
-
-        llm = _make_llm("openai", "gpt-4o", "sk-test")
-        assert isinstance(llm, LLMService)
-        assert llm.config.provider == "openai"
+        llm = _make_llm(None, None, "")
+        assert isinstance(llm, OllamaDispatcher)
 
 
-# ── Provider Timeout Map ────────────────────────────────────────────────────
-
-
-class TestProviderTimeouts:
-    def test_ollama_timeout(self):
-        from services.llm_service import PROVIDER_TIMEOUTS
-        assert PROVIDER_TIMEOUTS["ollama"] == 1800
-
-    def test_cloud_timeouts(self):
-        from services.llm_service import PROVIDER_TIMEOUTS
-        assert PROVIDER_TIMEOUTS["anthropic"] == 120
-        assert PROVIDER_TIMEOUTS["openai"] == 120
-        assert PROVIDER_TIMEOUTS["google"] == 120
+# ── Provider Timeout Map — deleted with ADR 015 ────────────────────────────
+# The TestProviderTimeouts class that lived here previously tested
+# `PROVIDER_TIMEOUTS` from the LiteLLM service. Single-target now: timeout
+# is `OllamaDispatchConfig.timeout` and is exercised in
+# `tests/test_ollama_dispatcher.py::test_default_config_uses_module_defaults`.
 
 
 # ── Active Model Config ─────────────────────────────────────────────────────

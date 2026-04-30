@@ -181,7 +181,7 @@ async def test_chat_ws_emits_trace_event_before_done(monkeypatch):
     from starlette.testclient import TestClient
 
     from main import app
-    from services.claude import StreamEvent
+    from services.system_prompt import StreamEvent
 
     fake_trace = [{
         "path": "inbox/alpha.md",
@@ -205,7 +205,7 @@ async def test_chat_ws_emits_trace_event_before_done(monkeypatch):
     )
 
     with patch("routers.chat.get_api_key", return_value="sk-ant-test"), \
-         patch("routers.chat.ClaudeService") as mock_cls:
+         patch("routers.chat.OllamaDispatcher") as mock_cls:
         async def _gen(**kwargs):
             yield StreamEvent(type="text_delta", content="ok")
         mock_cls.return_value.stream_response = _gen

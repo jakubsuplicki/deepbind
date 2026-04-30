@@ -323,23 +323,20 @@ async def test_ingest_rejects_traversal_folder(client):
 
 
 @pytest.mark.anyio
-async def test_update_api_key_404_in_desktop_bundle(client):
-    """ADR 014 §C — the desktop bundle (default `JARVIS_DESKTOP_BUNDLE=1`)
-    skips registering the api-keys router; the route returns 404. The
-    historical "no-op endpoint" path is exercised in tests/test_bundle_modes.py
-    against a fresh app built with `JARVIS_DESKTOP_BUNDLE=0`.
-    """
+async def test_update_api_key_404_in_local_only_build(client):
+    """ADR 015 — the api-keys router is not registered (no cloud
+    providers means no API keys to manage); the route returns 404."""
     r = await client.patch(
         "/api/settings/api-key",
-        json={"api_key": "sk-ant-test123"},
+        json={"api_key": "sk-test123"},
     )
     assert r.status_code == 404
 
 
 @pytest.mark.anyio
-async def test_update_api_key_404_for_empty_in_desktop_bundle(client):
-    """Symmetric to the populated-key case — the route does not exist in the
-    desktop bundle so payload validation never runs (404 instead of 422)."""
+async def test_update_api_key_404_for_empty_in_local_only_build(client):
+    """Symmetric to the populated-key case — the route does not exist
+    so payload validation never runs (404 instead of 422)."""
     r = await client.patch(
         "/api/settings/api-key",
         json={"api_key": ""},

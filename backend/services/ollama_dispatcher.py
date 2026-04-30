@@ -1,9 +1,9 @@
-"""Direct Ollama dispatcher — replaces the LiteLLM dispatch path per ADR 015.
+"""Direct Ollama dispatcher — sole chat dispatch path per ADR 015.
 
 The dispatcher's job is narrow: adapt the official `ollama.AsyncClient.chat`
-streaming API onto the existing `StreamEvent` shape that the chat router and
-frontend already consume. No multi-provider machinery, no LiteLLM, no cloud
-SDKs — single-target local-only dispatch against the bundled Ollama runtime.
+streaming API onto the `StreamEvent` shape that the chat router and frontend
+listener consume. No multi-provider machinery, no LiteLLM, no cloud SDKs —
+single-target local-only dispatch against the bundled Ollama runtime.
 
 Design notes (recorded here so they survive the LiteLLM removal in chunk 4):
 
@@ -40,7 +40,7 @@ from typing import Any, Optional
 import httpx
 import ollama
 
-from services.claude import StreamEvent
+from services.system_prompt import StreamEvent
 
 logger = logging.getLogger(__name__)
 

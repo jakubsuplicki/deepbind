@@ -170,21 +170,28 @@ async def test_import_large_file_handled(ws_db, large_file):
     assert result["size"] > 100_000
 
 
+def _mock_ollama_response(text: str):
+    """Build a minimal `ChatResponse`-like mock that satisfies smart_enrich."""
+    from unittest.mock import MagicMock
+    resp = MagicMock()
+    resp.message = MagicMock(content=text)
+    return resp
+
+
 @pytest.mark.anyio
 async def test_enrich_adds_summary(ws_db, md_file):
-    """Smart enrich requires Claude API. Mock test."""
+    """Smart enrich now dispatches against the local Ollama runtime (ADR 015)."""
     from unittest.mock import AsyncMock, MagicMock, patch
     from services.ingest import smart_enrich
 
     result = await fast_ingest(md_file, "knowledge", workspace_path=ws_db)
 
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text='{"summary": "A test note.", "tags": ["test", "example"]}')]
     mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.chat = AsyncMock(return_value=_mock_ollama_response('{"summary": "A test note.", "tags": ["test", "example"]}'))
+    mock_client.close = AsyncMock()
 
-    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
-        enrich_result = await smart_enrich(result["path"], "sk-fake", workspace_path=ws_db)
+    with patch("ollama.AsyncClient", return_value=mock_client):
+        enrich_result = await smart_enrich(result["path"], "", workspace_path=ws_db)
         assert enrich_result["summary"] == "A test note."
         assert enrich_result["enriched"] is True
 
@@ -196,13 +203,12 @@ async def test_enrich_adds_tags(ws_db, md_file):
 
     result = await fast_ingest(md_file, "knowledge", workspace_path=ws_db)
 
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text='{"summary": "Test", "tags": ["newtag"]}')]
     mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.chat = AsyncMock(return_value=_mock_ollama_response('{"summary": "Test", "tags": ["newtag"]}'))
+    mock_client.close = AsyncMock()
 
-    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
-        enrich_result = await smart_enrich(result["path"], "sk-fake", workspace_path=ws_db)
+    with patch("ollama.AsyncClient", return_value=mock_client):
+        enrich_result = await smart_enrich(result["path"], "", workspace_path=ws_db)
         assert "newtag" in enrich_result["tags"]
 
 
@@ -213,13 +219,12 @@ async def test_enrich_preserves_existing_frontmatter(ws_db, md_file):
 
     result = await fast_ingest(md_file, "knowledge", workspace_path=ws_db)
 
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text='{"summary": "Sum", "tags": ["extra"]}')]
     mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.chat = AsyncMock(return_value=_mock_ollama_response('{"summary": "Sum", "tags": ["extra"]}'))
+    mock_client.close = AsyncMock()
 
-    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
-        await smart_enrich(result["path"], "sk-fake", workspace_path=ws_db)
+    with patch("ollama.AsyncClient", return_value=mock_client):
+        await smart_enrich(result["path"], "", workspace_path=ws_db)
 
     target = ws_db / "memory" / result["path"]
     content = target.read_text()
@@ -227,17 +232,17 @@ async def test_enrich_preserves_existing_frontmatter(ws_db, md_file):
 
 
 @pytest.mark.anyio
-async def test_enrich_uses_claude(ws_db, md_file):
+async def test_enrich_calls_ollama(ws_db, md_file):
+    """Renamed from test_enrich_uses_claude — ADR 015: dispatch is local."""
     from unittest.mock import AsyncMock, MagicMock, patch
     from services.ingest import smart_enrich
 
     result = await fast_ingest(md_file, "knowledge", workspace_path=ws_db)
 
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text='{"summary": "x", "tags": []}')]
     mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.chat = AsyncMock(return_value=_mock_ollama_response('{"summary": "x", "tags": []}'))
+    mock_client.close = AsyncMock()
 
-    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
-        await smart_enrich(result["path"], "sk-fake", workspace_path=ws_db)
-        mock_client.messages.create.assert_called_once()
+    with patch("ollama.AsyncClient", return_value=mock_client):
+        await smart_enrich(result["path"], "", workspace_path=ws_db)
+        mock_client.chat.assert_called_once()

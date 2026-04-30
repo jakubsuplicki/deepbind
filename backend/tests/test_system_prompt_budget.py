@@ -25,7 +25,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 import pytest
 
-from services.claude import _enforce_system_prompt_budget
+from services.system_prompt import _enforce_system_prompt_budget
 
 
 def test_no_budget_returns_context_unchanged():

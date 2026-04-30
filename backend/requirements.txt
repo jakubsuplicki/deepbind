@@ -2,7 +2,6 @@ fastapi==0.128.8
 uvicorn[standard]==0.39.0
 pydantic-settings==2.11.0
 aiosqlite==0.22.1
-anthropic==0.94.0
 keyring==25.7.0
 pyyaml==6.0.3
 python-multipart==0.0.26
@@ -13,7 +12,6 @@ markdownify==1.2.2
 lxml_html_clean==0.4.4
 pypdfium2==5.7.1  # PDF text extraction (Apache-2.0/BSD-3, ~9× faster than pdfplumber per ADR 013 knob-1)
 defusedxml==0.7.1  # safe XML parsing for Jira imports (step 22a)
-litellm==1.83.7  # superseded by ollama==0.6.2 per ADR 015 chunk 2; deleted in chunk 4
 ollama==0.6.2  # official Ollama Python client (Apache-2.0). ADR 015 §B.
 fastembed==0.8.0  # local embeddings for semantic search
 psutil==7.2.2  # hardware detection for local model recommendations
@@ -26,12 +24,6 @@ spacy==3.8.14  # NER for entity extraction (Polish + English)
 https://github.com/explosion/spacy-models/releases/download/pl_core_news_sm-3.8.0/pl_core_news_sm-3.8.0-py3-none-any.whl
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 mcp==1.27.0  # Model Context Protocol SDK (FastMCP server, stdio transport)
-# python-dotenv is transitively pinned by litellm to ==1.0.1 (vulnerable to
-# CVE-2026-28684). We force-upgrade to 1.2.2 via backend/overrides.txt:
-#   - CI/audit:  uv pip install --override overrides.txt -r requirements.txt
-#   - Local dev: install-backend.mjs runs `pip install --upgrade -r overrides.txt`
-#                as a second pass after the main install.
-# litellm only uses load_dotenv() which is API-stable across 1.0 -> 1.2.
 
 # testing
 pytest==9.0.3

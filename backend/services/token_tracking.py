@@ -39,37 +39,22 @@ def _usage_file(workspace_path: Optional[Path] = None) -> Path:
 def log_usage(
     input_tokens: int,
     output_tokens: int,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "ollama_chat/qwen3:8b",
     context_tokens: int = 0,
     tool_calls: int = 0,
     tool_rounds: int = 0,
-    provider: str = "anthropic",
+    provider: str = "ollama",
     workspace_path: Optional[Path] = None,
 ) -> Dict:
-    """Log a single usage entry."""
-    # Model-aware pricing (per million tokens)
-    _PRICING = {
-        "claude-haiku-4-20250514": (0.80, 4.0),
-        "claude-sonnet-4-20250514": (3.0, 15.0),
-    }
-    cost_in, cost_out = _PRICING.get(model, (3.0, 15.0))
-    cost_per_input = cost_in / 1_000_000
-    cost_per_output = cost_out / 1_000_000
+    """Log a single usage entry.
 
-    # Try to use LiteLLM's model cost for non-Anthropic providers
-    if provider != "anthropic":
-        try:
-            import litellm
-            cost_estimate = litellm.completion_cost(
-                model=model,
-                prompt_tokens=input_tokens,
-                completion_tokens=output_tokens,
-            )
-        except Exception:
-            # Fallback to default pricing
-            cost_estimate = input_tokens * cost_per_input + output_tokens * cost_per_output
-    else:
-        cost_estimate = input_tokens * cost_per_input + output_tokens * cost_per_output
+    Per ADR 015 the v1 stack is local-only — there is no per-call dollar
+    cost to estimate. The historical ``cost_estimate`` field is kept on
+    the entry shape (set to 0.0) so existing JSONL logs and frontend
+    consumers do not break; remove it in a future cleanup pass once
+    callers stop reading the field.
+    """
+    cost_estimate = 0.0
 
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),

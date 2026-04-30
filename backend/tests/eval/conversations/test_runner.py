@@ -544,7 +544,7 @@ def test_retrieval_enabled_calls_build_system_prompt_with_recent_user_text(monke
         return ("AUGMENTED_PROMPT", {})
 
     monkeypatch.setattr(
-        "services.claude.build_system_prompt_with_stats", _fake_build
+        "services.system_prompt.build_system_prompt_with_stats", _fake_build
     )
 
     captured_prompts: list[str] = []
@@ -580,7 +580,7 @@ def test_retrieval_enabled_passes_workspace_path_and_graph_scope_through(monkeyp
         return ("PROMPT", {})
 
     monkeypatch.setattr(
-        "services.claude.build_system_prompt_with_stats", _fake_build
+        "services.system_prompt.build_system_prompt_with_stats", _fake_build
     )
 
     from pathlib import Path

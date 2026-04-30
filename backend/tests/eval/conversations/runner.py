@@ -227,16 +227,16 @@ async def _build_system_prompt_for_turn(
     message; this exercises retrieval-augmented context the way the
     shipped chat path does.
 
-    The ``services.claude`` import is local so that running the eval
-    without retrieval doesn't pay the cost of importing the retrieval
-    pipeline (which transitively pulls in embeddings, the SQLite index,
-    and a fair amount of other infrastructure).
+    The ``services.system_prompt`` import is local so that running the
+    eval without retrieval doesn't pay the cost of importing the
+    retrieval pipeline (which transitively pulls in embeddings, the
+    SQLite index, and a fair amount of other infrastructure).
     """
     if not retrieval_enabled:
         return fallback_system_prompt
 
     user_message = _last_user_message_text(history)
-    from services.claude import build_system_prompt_with_stats
+    from services.system_prompt import build_system_prompt_with_stats
 
     prompt, _stats = await build_system_prompt_with_stats(
         user_message,

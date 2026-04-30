@@ -138,7 +138,7 @@ class TestJarvisUpdate:
 class TestJarvisSystemPromptWiring:
     @pytest.mark.asyncio
     async def test_default_uses_builtin_system_prompt(self, workspace, monkeypatch):
-        from services.claude import SYSTEM_PROMPT, build_system_prompt_with_stats
+        from services.system_prompt import SYSTEM_PROMPT, build_system_prompt_with_stats
 
         with patch("services.specialist_service.get_settings") as m:
             m.return_value = _settings_mock(workspace)
@@ -146,7 +146,7 @@ class TestJarvisSystemPromptWiring:
             # Stub context builder to avoid retrieval pipeline.
             async def _empty_ctx(*args, **kwargs):
                 return "", 0, []
-            monkeypatch.setattr("services.claude.build_context", _empty_ctx)
+            monkeypatch.setattr("services.system_prompt.build_context", _empty_ctx)
             prompt, _ = await build_system_prompt_with_stats(
                 "hello", workspace_path=workspace,
             )
@@ -154,7 +154,7 @@ class TestJarvisSystemPromptWiring:
 
     @pytest.mark.asyncio
     async def test_override_replaces_default(self, workspace, monkeypatch):
-        from services.claude import SYSTEM_PROMPT, build_system_prompt_with_stats
+        from services.system_prompt import SYSTEM_PROMPT, build_system_prompt_with_stats
 
         with patch("services.specialist_service.get_settings") as m:
             m.return_value = _settings_mock(workspace)
@@ -165,7 +165,7 @@ class TestJarvisSystemPromptWiring:
             )
             async def _empty_ctx(*args, **kwargs):
                 return "", 0, []
-            monkeypatch.setattr("services.claude.build_context", _empty_ctx)
+            monkeypatch.setattr("services.system_prompt.build_context", _empty_ctx)
             prompt, _ = await build_system_prompt_with_stats(
                 "hello", workspace_path=workspace,
             )
@@ -179,7 +179,7 @@ class TestJarvisSystemPromptWiring:
 
     @pytest.mark.asyncio
     async def test_extension_appends_after_base(self, workspace, monkeypatch):
-        from services.claude import build_system_prompt_with_stats
+        from services.system_prompt import build_system_prompt_with_stats
 
         with patch("services.specialist_service.get_settings") as m:
             m.return_value = _settings_mock(workspace)
@@ -190,7 +190,7 @@ class TestJarvisSystemPromptWiring:
             )
             async def _empty_ctx(*args, **kwargs):
                 return "", 0, []
-            monkeypatch.setattr("services.claude.build_context", _empty_ctx)
+            monkeypatch.setattr("services.system_prompt.build_context", _empty_ctx)
             prompt, _ = await build_system_prompt_with_stats(
                 "hello", workspace_path=workspace,
             )

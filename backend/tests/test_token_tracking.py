@@ -43,12 +43,14 @@ def test_log_usage_creates_entry(ws):
 
 
 def test_log_usage_fields(ws):
+    # ADR 015: default model is the local Ollama tag; cost_estimate is
+    # always 0.0 (local dispatch has no per-call dollar cost).
     entry = log_usage(1000, 500, workspace_path=ws)
     assert entry["input_tokens"] == 1000
     assert entry["output_tokens"] == 500
     assert entry["total_tokens"] == 1500
-    assert entry["model"] == "claude-sonnet-4-20250514"
-    assert entry["cost_estimate"] > 0
+    assert entry["model"] == "ollama_chat/qwen3:8b"
+    assert entry["cost_estimate"] == 0.0
 
 
 def test_get_usage_today(ws):

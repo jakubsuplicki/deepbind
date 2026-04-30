@@ -15,7 +15,7 @@ class SpecialistNotFoundError(Exception):
 # JARVIS is the user-facing handle on Jarvis's own system prompt. It is a
 # built-in specialist with two user-editable fields (`system_prompt`,
 # `behavior_extension`) and is wired specially in
-# `services.claude.build_system_prompt_with_stats`. It is NEVER exposed via
+# `services.system_prompt.build_system_prompt_with_stats`. It is NEVER exposed via
 # the activate/deactivate flow and cannot be deleted or generic-updated.
 JARVIS_SELF_ID = "jarvis"
 

@@ -924,18 +924,22 @@ async def fast_ingest(
 
 async def smart_enrich(
     note_path: str,
-    api_key: str,
+    api_key: str,  # legacy parameter — unused since ADR 015; kept for caller compatibility
     workspace_path: Optional[Path] = None,
 ) -> Dict:
-    """Use Claude to enhance a note with summary and tags."""
-    import anthropic
-    from services.memory_service import _validate_path
-    from services.privacy import assert_provider_allowed, PrivacyBlockedError
+    """Use the local model to enhance a note with summary and tags.
 
-    try:
-        assert_provider_allowed("anthropic", workspace_path)
-    except PrivacyBlockedError as exc:
-        raise IngestError(str(exc)) from exc
+    Per ADR 015 the v1 stack has no cloud LLM providers. This function now
+    calls the local Ollama runtime (default Tier-A model) via the official
+    `ollama` client, in JSON-format mode so the response is directly
+    parseable. Behavior on unparseable output mirrors the pre-ADR-015 path:
+    fall back to ``{summary: text[:200], tags: []}``.
+    """
+    import ollama
+    from services.memory_service import _validate_path
+    from services.ollama_service import DEFAULT_OLLAMA_BASE_URL
+
+    del api_key  # explicitly unused
 
     mem = _memory_dir(workspace_path)
     _validate_path(note_path, mem)
@@ -946,17 +950,26 @@ async def smart_enrich(
     content = full_path.read_text(encoding="utf-8")
     truncated = content[:3000]
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-    response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=500,
-        messages=[{
-            "role": "user",
-            "content": f"Analyze this note and return JSON with: summary (1-2 sentences), tags (list of 3-5 keywords).\n\nNote:\n{truncated}\n\nReturn only valid JSON.",
-        }],
-    )
+    client = ollama.AsyncClient(host=DEFAULT_OLLAMA_BASE_URL)
+    try:
+        response = await client.chat(
+            model="qwen3:8b",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Analyze this note and return JSON with: summary (1-2 sentences), "
+                    f"tags (list of 3-5 keywords).\n\nNote:\n{truncated}\n\n"
+                    "Return only valid JSON."
+                ),
+            }],
+            format="json",
+            options={"num_predict": 500, "temperature": 0.3},
+            keep_alive="30m",
+        )
+    finally:
+        await client.close()
 
-    text = response.content[0].text
+    text = response.message.content or ""
     try:
         data = json.loads(text)
     except json.JSONDecodeError:

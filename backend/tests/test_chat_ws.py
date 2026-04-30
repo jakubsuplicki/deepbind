@@ -5,7 +5,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from main import app
-from services.claude import StreamEvent
+from services.system_prompt import StreamEvent
 
 pytestmark = pytest.mark.anyio(backends=["asyncio"])
 
@@ -71,8 +71,14 @@ def mock_api_key():
 
 @pytest.fixture
 def mock_claude_stream():
-    """Patch ClaudeService.stream_response to return fake events."""
-    with patch("routers.chat.ClaudeService") as mock_cls:
+    """Patch the chat dispatcher to return fake events.
+
+    ADR 015: the router only constructs ``OllamaDispatcher`` now (single
+    target). The fixture is named ``mock_claude_stream`` for legacy
+    test-call-site compatibility but the underlying patch target is the
+    Ollama dispatcher.
+    """
+    with patch("routers.chat.OllamaDispatcher") as mock_cls:
         instance = mock_cls.return_value
         yield instance
 

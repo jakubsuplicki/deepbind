@@ -260,16 +260,14 @@ async def ingest_url_endpoint(body: UrlIngestRequest):
 
 @router.post("/enrich/{note_path:path}")
 async def enrich_note(note_path: str):
-    """Use AI to auto-generate summary and tags for a note."""
-    from services.ingest import IngestError, smart_enrich
-    from services.workspace_service import get_api_key
+    """Use the local model to auto-generate summary and tags for a note.
 
-    api_key = get_api_key()
-    if not api_key:
-        raise HTTPException(status_code=400, detail="API key not configured")
+    ADR 015: no API key needed — dispatch is always local.
+    """
+    from services.ingest import IngestError, smart_enrich
 
     try:
-        result = await smart_enrich(note_path, api_key)
+        result = await smart_enrich(note_path, api_key="")
     except IngestError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

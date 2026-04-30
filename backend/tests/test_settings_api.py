@@ -58,17 +58,15 @@ async def test_get_settings_no_raw_key(client, patch_settings):
 
 
 @pytest.mark.anyio
-async def test_update_api_key_404_in_desktop_bundle(client, patch_settings):
-    """ADR 014 §C — the desktop bundle (default `JARVIS_DESKTOP_BUNDLE=1`)
-    does NOT register the api-keys router. The audit signal a procurement
-    reviewer probes for is *the route does not exist*, not a 200 no-op
-    or a 404 + structured 'gated' payload."""
+async def test_update_api_key_404_in_local_only_build(client, patch_settings):
+    """ADR 015 — the api-keys router is not registered. The audit signal
+    a procurement reviewer probes for is *the route does not exist*."""
     resp = await client.patch("/api/settings/api-key", json={"api_key": "sk-new-key"})
     assert resp.status_code == 404
 
 
 @pytest.mark.anyio
-async def test_update_api_key_404_for_empty_in_desktop_bundle(client, patch_settings):
+async def test_update_api_key_404_for_empty_in_local_only_build(client, patch_settings):
     """Symmetric to the populated-key case — same route absence, same 404."""
     resp = await client.patch("/api/settings/api-key", json={"api_key": ""})
     assert resp.status_code == 404

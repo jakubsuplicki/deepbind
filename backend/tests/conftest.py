@@ -51,15 +51,14 @@ def _no_auto_persist():
 def _isolate_privacy_settings():
     """Ensure tests are not affected by user's local privacy settings (e.g. offline mode).
 
-    Without this, tests that use cloud LLM providers fail when the user has
-    offline mode enabled in their workspace preferences.
+    Without this, tests that hit web search or url ingest fail when the user
+    has offline mode enabled in their workspace preferences.
     """
     with patch("services.privacy.get_privacy_settings", return_value={
         "offline_mode": False,
         "offline_mode_locked": False,
         "web_search_enabled": True,
         "url_ingest_enabled": True,
-        "cloud_providers_enabled": True,
     }):
         yield
 

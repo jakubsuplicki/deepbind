@@ -6,7 +6,7 @@ Two-stage classification:
 
 Public API:
   classify_section_heuristic(title, body) -> (type, confidence, signals)
-  classify_section_llm(title, body, anthropic_client) -> (type, confidence)
+  classify_section_llm(title, body) -> (type, confidence)
 """
 
 from __future__ import annotations
@@ -199,13 +199,18 @@ def classify_section_heuristic(
 async def classify_section_llm(
     title: str,
     body: str,
-    anthropic_client,
 ) -> Tuple[str, float]:
-    """Stage-2 LLM classifier using Claude Haiku.
+    """Stage-2 LLM classifier using the local Ollama runtime.
 
     Sends up to 500 chars of the section head + title to the model.
-    Returns (section_type, confidence).
+    Returns (section_type, confidence). Per ADR 015 the cloud Haiku path
+    was replaced with a local-only call; the fast-ingest hot path skips
+    this stage entirely (heuristics only) and a backfill script can run
+    LLM classification across an existing vault when desired.
     """
+    import ollama
+    from services.ollama_service import DEFAULT_OLLAMA_BASE_URL
+
     snippet = body[:500].strip()
     types_list = ", ".join(t for t in SECTION_TYPES if t != "other")
 
@@ -217,20 +222,23 @@ async def classify_section_llm(
         f"Respond with only the label (one word or phrase from the list above, no punctuation)."
     )
 
+    client = ollama.AsyncClient(host=DEFAULT_OLLAMA_BASE_URL)
     try:
-        message = await anthropic_client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=16,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = message.content[0].text.strip().lower().replace(" ", "_")
-        # Map back to canonical type
-        if raw in SECTION_TYPES:
-            return raw, 0.75
-        # Fuzzy match — accept longest prefix match
-        for stype in SECTION_TYPES:
-            if stype.startswith(raw) or raw.startswith(stype):
-                return stype, 0.70
-        return "other", 0.5
-    except Exception:
-        return "other", 0.0
+        try:
+            response = await client.chat(
+                model="qwen3:4b-instruct-2507",  # smallest Tier-A floor; fast for one-shot classification
+                messages=[{"role": "user", "content": prompt}],
+                options={"num_predict": 16, "temperature": 0.1},
+                keep_alive="30m",
+            )
+            raw = (response.message.content or "").strip().lower().replace(" ", "_")
+            if raw in SECTION_TYPES:
+                return raw, 0.75
+            for stype in SECTION_TYPES:
+                if stype.startswith(raw) or raw.startswith(stype):
+                    return stype, 0.70
+            return "other", 0.5
+        except Exception:
+            return "other", 0.0
+    finally:
+        await client.close()

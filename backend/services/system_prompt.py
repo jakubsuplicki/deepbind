@@ -1,18 +1,27 @@
-import json
-import logging
-from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+"""System-prompt builders + StreamEvent — rescued from the deleted services/claude.py per ADR 015.
+
+This module exists because the system-prompt assembly (persona + retrieved
+context + language reminder + ADR 009 budget enforcement) is provider-
+agnostic — it is the same prompt shape whether the dispatcher behind it is
+local Ollama or, hypothetically, a cloud SDK. Keeping it on its own gives
+the OllamaDispatcher and any future dispatcher a stable import surface
+without dragging in any inference-runtime code.
+
+`StreamEvent` lives here too because it is the wire format every dispatcher
+yields and every consumer in the chat router and frontend listener expects.
+It is dispatcher-agnostic by design.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator  # noqa: F401 — re-exported indirectly via StreamEvent users
+from dataclasses import dataclass
 from typing import Any, Optional
 
-# `anthropic` is imported lazily inside ClaudeService — ADR 014 excludes
-# the SDK from the desktop bundle, but StreamEvent / build_system_prompt
-# stay importable so the local-only path can use them.
+# `build_context` is imported at module level so callers can monkeypatch
+# `services.system_prompt.build_context` in tests without paying the cost
+# of pulling in the retrieval pipeline twice.
 from services.context_builder import build_context
-
-logger = logging.getLogger(__name__)
-
-MODEL = "claude-sonnet-4-20250514"
-MAX_TOKENS = 4096
 
 SYSTEM_PROMPT = """You are Jarvis — the user's memory-aware AI assistant.
 
@@ -122,9 +131,23 @@ When asked to list specific entities (people, tools, companies, organisations) f
 """
 
 
+# ── StreamEvent ──────────────────────────────────────────────────────────────
+
+
 @dataclass
 class StreamEvent:
-    type: str  # "text_delta" | "tool_use" | "tool_result" | "done" | "error" | "usage"
+    """Wire format every chat dispatcher yields.
+
+    `type` is one of: "text_delta" | "tool_use" | "tool_result" | "done" |
+    "error" | "usage". All other fields are role-specific:
+
+    * text_delta → `content` carries the streamed text fragment.
+    * tool_use → `name`, `tool_input`, `tool_use_id` describe the tool call.
+    * usage → `input_tokens`, `output_tokens` carry the post-hoc counts.
+    * error → `content` carries a user-facing message.
+    """
+
+    type: str
     content: str = ""
     name: str = ""
     tool_input: Optional[dict[str, Any]] = None
@@ -133,164 +156,18 @@ class StreamEvent:
     output_tokens: int = 0
 
 
-@dataclass
-class _ToolAccumulator:
-    """Tracks in-progress tool_use block while streaming."""
+# ── Budget enforcement ──────────────────────────────────────────────────────
 
-    name: str = ""
-    input_json: str = ""
-    use_id: str = ""
-
-    def start(self, name: str, use_id: str) -> None:
-        self.name = name
-        self.use_id = use_id
-        self.input_json = ""
-
-    def is_active(self) -> bool:
-        return bool(self.name)
-
-    def finish(self) -> StreamEvent:
-        try:
-            parsed = json.loads(self.input_json) if self.input_json else {}
-        except json.JSONDecodeError:
-            parsed = {}
-        event = StreamEvent(
-            type="tool_use",
-            name=self.name,
-            tool_input=parsed,
-            tool_use_id=self.use_id,
-        )
-        self.name = ""
-        self.input_json = ""
-        self.use_id = ""
-        return event
+# ADR 009 §"System-prompt budget enforcement" — a retrieval that surfaces too
+# many notes can balloon the system prompt past the model's effective ceiling.
+# Cap the *retrieved-context* block specifically (not the base persona, not
+# the language reminder) since that's the part that scales with retrieval
+# depth. 30% of effective ctx is conservative — leaves 70% for history +
+# output reserve.
+_SYSTEM_PROMPT_BUDGET_FRACTION = 0.30
 
 
-def _handle_block_start(event, tool: _ToolAccumulator) -> None:
-    if event.content_block.type != "tool_use":
-        return
-    tool.start(event.content_block.name, event.content_block.id)
-
-
-def _handle_block_delta(event, tool: _ToolAccumulator) -> Optional[StreamEvent]:
-    if event.delta.type == "text_delta":
-        return StreamEvent(type="text_delta", content=event.delta.text)
-    if event.delta.type == "input_json_delta":
-        tool.input_json += event.delta.partial_json
-    return None
-
-
-def _handle_block_stop(tool: _ToolAccumulator) -> Optional[StreamEvent]:
-    if not tool.is_active():
-        return None
-    return tool.finish()
-
-
-class ClaudeService:
-    def __init__(self, api_key: str):
-        import anthropic  # lazy — ADR 014: excluded from desktop bundle.
-        from services.privacy import assert_provider_allowed
-
-        # Privacy gate (defense-in-depth) — blocks Anthropic when offline
-        # mode is engaged or cloud providers are disabled in Settings.
-        assert_provider_allowed("anthropic")
-        self._anthropic = anthropic
-        self.client = anthropic.AsyncAnthropic(api_key=api_key)
-
-    async def close(self) -> None:
-        """Close the underlying HTTP client to release connections."""
-        await self.client.close()
-
-    async def stream_response(
-        self,
-        messages: list[dict],
-        system_prompt: str,
-        tools: list[dict],
-    ) -> AsyncIterator[StreamEvent]:
-        """Yields streaming events from Claude."""
-        anthropic = self._anthropic
-        try:
-            async for stream_event in self._iter_stream(messages, system_prompt, tools):
-                yield stream_event
-        except anthropic.RateLimitError:
-            yield StreamEvent(
-                type="error",
-                content="Rate limited by Claude API. Please try again shortly.",
-            )
-        except anthropic.APIStatusError as exc:
-            if exc.status_code == 529 or "overloaded" in str(exc).lower():
-                msg = "Claude is currently overloaded. Please try again in a moment."
-            elif exc.status_code == 401:
-                msg = "Invalid API key. Please check your key in Settings."
-            elif exc.status_code == 403:
-                msg = "API key does not have permission for this model."
-            elif exc.status_code >= 500:
-                msg = "Claude API is experiencing issues. Please try again shortly."
-            else:
-                msg = f"Claude API error ({exc.status_code}). Please try again."
-            logger.warning("Claude API error %d: %s", exc.status_code, exc)
-            yield StreamEvent(type="error", content=msg)
-        except anthropic.APIError as exc:
-            logger.warning("Claude API error: %s", exc)
-            yield StreamEvent(type="error", content="Failed to reach Claude API. Please try again.")
-
-    async def _iter_stream(
-        self,
-        messages: list[dict],
-        system_prompt: str,
-        tools: list[dict],
-    ) -> AsyncIterator[StreamEvent]:
-        tool = _ToolAccumulator()
-
-        # Strip non-API fields (timestamp, model, provider) that session storage adds
-        clean_messages = [
-            {k: v for k, v in m.items() if k in ("role", "content")}
-            for m in messages
-        ]
-
-        kwargs: dict[str, Any] = dict(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=system_prompt,
-            messages=clean_messages,
-        )
-        if tools:
-            kwargs["tools"] = tools
-
-        async with self.client.messages.stream(**kwargs) as stream:
-            async for event in stream:
-                result = self._process_event(event, tool)
-                if result is not None:
-                    yield result
-
-    def _process_event(self, event, tool: _ToolAccumulator) -> Optional[StreamEvent]:
-        if event.type == "content_block_start":
-            _handle_block_start(event, tool)
-            return None
-        if event.type == "content_block_delta":
-            return _handle_block_delta(event, tool)
-        if event.type == "content_block_stop":
-            return _handle_block_stop(tool)
-        if event.type == "message_delta":
-            # Capture usage from the final message event
-            usage = getattr(event, "usage", None)
-            if usage:
-                return StreamEvent(
-                    type="usage",
-                    input_tokens=getattr(usage, "input_tokens", 0),
-                    output_tokens=getattr(usage, "output_tokens", 0),
-                )
-        if event.type == "message_start":
-            msg = getattr(event, "message", None)
-            if msg:
-                usage = getattr(msg, "usage", None)
-                if usage:
-                    return StreamEvent(
-                        type="usage",
-                        input_tokens=getattr(usage, "input_tokens", 0),
-                        output_tokens=getattr(usage, "output_tokens", 0),
-                    )
-        return None
+# ── Public builders ─────────────────────────────────────────────────────────
 
 
 async def build_system_prompt(
@@ -307,15 +184,6 @@ async def build_system_prompt(
         user_message, workspace_path=workspace_path, graph_scope=graph_scope,
     )
     return prompt
-
-
-# ADR 009 §"System-prompt budget enforcement" — a retrieval that surfaces
-# too many notes can balloon the system prompt past the model's effective
-# ceiling. We cap the *retrieved-context* block specifically (not the
-# base persona, not the language reminder) since that's the part that
-# scales with retrieval depth. 30% of effective ctx is conservative —
-# leaves 70% for history + output reserve.
-_SYSTEM_PROMPT_BUDGET_FRACTION = 0.30
 
 
 async def build_system_prompt_with_stats(
@@ -387,14 +255,13 @@ async def build_system_prompt_with_stats(
     # assistant token wins over instructions buried at the top of a long prompt.
     lang_reminder = _language_reminder(user_message)
 
-    # ADR 009 — enforce a total system-prompt budget when supplied. Only
-    # the retrieved-context block is truncated; base persona + language
-    # reminder are stable in size and load-bearing. The trace stays
-    # attached to the original retrieval ranking so the UI continues to
-    # show the user *why* a note was picked even if its body was
-    # truncated to fit. The helper also returns the token counts it
-    # already computed so the stats block below doesn't re-encode the
-    # same strings.
+    # ADR 009 — enforce a total system-prompt budget when supplied. Only the
+    # retrieved-context block is truncated; base persona + language reminder
+    # are stable in size and load-bearing. The trace stays attached to the
+    # original retrieval ranking so the UI continues to show the user *why*
+    # a note was picked even if its body was truncated to fit. The helper
+    # also returns the token counts it already computed so the stats block
+    # below doesn't re-encode the same strings.
     (
         context,
         context_truncated,
@@ -420,19 +287,17 @@ async def build_system_prompt_with_stats(
             + lang_reminder
         )
 
-    # Use the configured tokenizer when one is available so the stats
-    # the audit log forwards (via prompt_stats["context_tokens"] in
-    # log_usage) match the numbers the compaction trigger and the
-    # system-prompt budget enforcement actually saw. The pre-ADR-009
-    # char/4 path stays as the fallback when no tokenizer_id is in
-    # scope (legacy callers like the duel orchestrator). Without this
-    # alignment the audit logs diverge 20–40% from the budget on
-    # Polish/Chinese/Arabic content, which is exactly the languages
-    # the tokenizer was added for.
+    # Use the configured tokenizer when one is available so the stats the
+    # audit log forwards (via prompt_stats["context_tokens"] in log_usage)
+    # match the numbers the compaction trigger and the system-prompt budget
+    # enforcement actually saw. The pre-ADR-009 char/4 path stays as the
+    # fallback when no tokenizer_id is in scope. Without this alignment the
+    # audit logs diverge 20–40% from the budget on Polish/Chinese/Arabic
+    # content, which is exactly the languages the tokenizer was added for.
     #
     # When budget enforcement ran, it already paid the encode cost for
-    # base / context / lang_reminder; reuse those counts. Only the
-    # final assembled prompt count needs a fresh encode either way.
+    # base / context / lang_reminder; reuse those counts. Only the final
+    # assembled prompt count needs a fresh encode either way.
     from services.token_counting import count_tokens
 
     base_tok = base_tok_cached if base_tok_cached is not None \
@@ -448,13 +313,16 @@ async def build_system_prompt_with_stats(
         "context_tokens": context_tok,
         "lang_tokens": lang_tok,
         "total_tokens": total_tok,
-        # ADR 009 — surface whether the system-prompt budget kicked in
-        # so callers can log it alongside the compaction event.
+        # ADR 009 — surface whether the system-prompt budget kicked in so
+        # callers can log it alongside the compaction event.
         "context_truncated": context_truncated,
         # Step 28a — per-note retrieval trace surfaced over the chat WS.
         "trace": trace,
     }
     return prompt, stats
+
+
+# ── Budget enforcement helper ───────────────────────────────────────────────
 
 
 def _enforce_system_prompt_budget(
@@ -468,21 +336,21 @@ def _enforce_system_prompt_budget(
     """Cap the retrieved-context block so the assembled prompt fits ``budget_tokens``.
 
     Returns ``(maybe_truncated_context, was_truncated, base_tokens,
-    context_tokens, lang_tokens)``. The trailing token counts are
-    populated when the helper actually ran the budget calculation
-    (i.e. ``budget_tokens`` was set) so the caller can reuse them in
-    its stats block instead of re-encoding the same strings — three
-    redundant HF tokenizer ``encode`` calls per turn on a hot path.
-    All three are ``None`` when the helper short-circuited (no
-    budget, no context); the caller then falls back to computing
-    counts itself, identical to the pre-fix behavior.
+    context_tokens, lang_tokens)``. The trailing token counts are populated
+    when the helper actually ran the budget calculation (i.e.
+    ``budget_tokens`` was set) so the caller can reuse them in its stats
+    block instead of re-encoding the same strings — three redundant HF
+    tokenizer ``encode`` calls per turn on a hot path. All three are
+    ``None`` when the helper short-circuited (no budget, no context); the
+    caller then falls back to computing counts itself, identical to the
+    pre-fix behavior.
 
-    The truncation is **proportional** rather than note-by-note. Doing
-    this at the retrieval-result granularity would require routing the
-    structured result list through this function; instead we rely on the
-    fact that the assembled context already has highest-priority items
-    first (per ``build_context``), so truncating from the tail
-    preferentially drops the lower-relevance content first.
+    The truncation is **proportional** rather than note-by-note. Doing this
+    at the retrieval-result granularity would require routing the structured
+    result list through this function; instead we rely on the fact that the
+    assembled context already has highest-priority items first (per
+    ``build_context``), so truncating from the tail preferentially drops the
+    lower-relevance content first.
     """
     if not budget_tokens or budget_tokens <= 0 or not context:
         return context, False, None, None, None
@@ -494,8 +362,8 @@ def _enforce_system_prompt_budget(
     overhead = base_tokens + lang_tokens
     if overhead >= budget_tokens:
         # Base + reminder already exceed the budget — there's nothing the
-        # context truncation can do. Drop the context entirely so we at
-        # least don't make the overflow worse.
+        # context truncation can do. Drop the context entirely so we at least
+        # don't make the overflow worse.
         return "", True, base_tokens, 0, lang_tokens
 
     context_budget = budget_tokens - overhead
@@ -506,13 +374,11 @@ def _enforce_system_prompt_budget(
     # Binary-shrink the context string until it fits. Slicing by chars is
     # crude but stable; the alternative (re-tokenize, slice tokens, decode)
     # is far more expensive per turn for a knob the user only hits during
-    # over-retrieval. The first iteration almost always succeeds because
-    # the char-to-token ratio is roughly constant within a single document.
+    # over-retrieval. The first iteration almost always succeeds because the
+    # char-to-token ratio is roughly constant within a single document.
     ratio = context_budget / max(1, context_tokens)
     target_chars = int(len(context) * ratio)
     truncated = context[:target_chars].rstrip()
-    # Re-check; if the first cut overshoots (multi-byte tokens compress
-    # differently), shave another 10% off and retry up to a few times.
     truncated_tokens = count_tokens(truncated, tokenizer_id=tokenizer_id)
     for _ in range(4):
         if truncated_tokens <= context_budget:
@@ -521,13 +387,13 @@ def _enforce_system_prompt_budget(
         truncated = truncated[:target_chars].rstrip()
         truncated_tokens = count_tokens(truncated, tokenizer_id=tokenizer_id)
 
-    # The marker itself costs tokens — budget against the assembled
-    # output, not the bare truncation. Reserve enough room for the
-    # marker and re-shrink if needed; if the loop still hasn't
-    # converged, drop the context entirely so the invariant
-    # ``assembled_prompt_tokens <= budget_tokens`` always holds. The
-    # ADR 009 invariant is that the prompt fits — silently shipping
-    # over-budget content would defeat the entire enforcement step.
+    # The marker itself costs tokens — budget against the assembled output,
+    # not the bare truncation. Reserve enough room for the marker and
+    # re-shrink if needed; if the loop still hasn't converged, drop the
+    # context entirely so the invariant
+    # ``assembled_prompt_tokens <= budget_tokens`` always holds. The ADR 009
+    # invariant is that the prompt fits — silently shipping over-budget
+    # content would defeat the entire enforcement step.
     marker = "\n\n... [retrieved context truncated to fit budget] ..."
     marker_tokens = count_tokens(marker, tokenizer_id=tokenizer_id)
     while truncated_tokens + marker_tokens > context_budget:
@@ -547,13 +413,15 @@ def _enforce_system_prompt_budget(
     return final_context, True, base_tokens, final_context_tokens, lang_tokens
 
 
+# ── Language reminder ───────────────────────────────────────────────────────
+
+
 def _language_reminder(user_message: str) -> str:
     """Return a language instruction banner based on simple script detection.
 
     Placed at the END of the system prompt so small models (recency-biased)
     see it immediately before they start generating.
     """
-    # Detect script by codepoint ranges — no external dependencies
     polish_chars = set("ąćęłńóśźżĄĆĘŁŃÓŚŹŻ")
     cyrillic_range = (0x0400, 0x04FF)
     chinese_range = (0x4E00, 0x9FFF)
@@ -565,7 +433,6 @@ def _language_reminder(user_message: str) -> str:
     if not msg:
         return "FINAL REMINDER: Reply in the same language as the user's message."
 
-    # Check for non-latin scripts first
     codepoints = [ord(c) for c in msg]
     if any(cyrillic_range[0] <= cp <= cyrillic_range[1] for cp in codepoints):
         lang = "Russian (or the same Cyrillic-script language as the user)"

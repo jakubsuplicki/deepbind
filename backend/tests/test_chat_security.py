@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.claude import SYSTEM_PROMPT, StreamEvent
+from services.system_prompt import SYSTEM_PROMPT, StreamEvent
 
 pytestmark = pytest.mark.anyio(backends=["asyncio"])
 
@@ -43,7 +43,7 @@ async def test_api_key_not_in_ws_messages():
 
     with (
         patch("routers.chat.get_api_key", return_value=FAKE_API_KEY),
-        patch("routers.chat.ClaudeService") as mock_cls,
+        patch("routers.chat.OllamaDispatcher") as mock_cls,
     ):
         mock_cls.return_value.stream_response = _fake_stream
 
@@ -87,7 +87,7 @@ async def test_prompt_injection_basic():
 
     with (
         patch("routers.chat.get_api_key", return_value=FAKE_API_KEY),
-        patch("routers.chat.ClaudeService") as mock_cls,
+        patch("routers.chat.OllamaDispatcher") as mock_cls,
         patch("routers.chat.build_system_prompt_with_stats", new_callable=AsyncMock) as mock_build,
     ):
         mock_build.return_value = (SYSTEM_PROMPT, {"base_tokens": 0, "context_tokens": 0, "lang_tokens": 0, "total_tokens": 0})
@@ -140,7 +140,7 @@ async def test_rate_limit_handling():
 
     with (
         patch("routers.chat.get_api_key", return_value=FAKE_API_KEY),
-        patch("routers.chat.ClaudeService") as mock_cls,
+        patch("routers.chat.OllamaDispatcher") as mock_cls,
     ):
         mock_cls.return_value.stream_response = _rate_limited
 

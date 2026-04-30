@@ -8,8 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from services import session_service
 from services import specialist_service
 from services.chat import DEFAULT_STRATEGY, ContextStrategy
-from services.claude import ClaudeService, StreamEvent, build_system_prompt, build_system_prompt_with_stats
-from services.llm_service import LLMConfig, LLMService, DEFAULT_MODELS
+from services.system_prompt import StreamEvent, build_system_prompt, build_system_prompt_with_stats
 from services.ollama_dispatcher import OllamaDispatchConfig, OllamaDispatcher
 from services.tools import TOOLS, ToolNotFoundError, execute_tool
 from services.token_tracking import check_budget, log_usage
@@ -192,7 +191,7 @@ MAX_TOOL_ROUNDS = 5
 
 async def _stream_follow_up(
     ws: WebSocket,
-    claude,  # ClaudeService | LLMService
+    claude,  # OllamaDispatcher (legacy parameter name kept for callers)
     tool_messages: list[dict],
     system_prompt: str,
     tools: list[dict],
@@ -203,7 +202,7 @@ async def _stream_follow_up(
     tool_acc: list[int] | None = None,
     specialist_id: str = "",
 ) -> str:
-    """Stream Claude's follow-up after tool execution.
+    """Stream the follow-up turn after tool execution.
 
     Supports recursive tool calls up to MAX_TOOL_ROUNDS total.
     Returns accumulated text.
@@ -282,10 +281,10 @@ async def _apply_memory_pressure_swap(
     refusal the caller MUST short-circuit — this helper does NOT emit the
     error+done sequence so the caller controls cleanup ordering.
 
-    No-op for non-Ollama providers (cloud APIs manage their own RAM) and
-    for Ollama models that aren't in the catalog (custom user pulls).
+    No-op for Ollama models that aren't in the catalog (custom user pulls
+    or off-ladder dev tags).
     """
-    if provider != "ollama" or not model:
+    if not model:
         return model, False
 
     from services import memory_pressure_monitor as mpm
@@ -381,7 +380,7 @@ async def _ladder_step_after_oom(
     skipped. If the picker still returns the same model, treat it as no
     fallback.
     """
-    if provider != "ollama" or not model:
+    if not model:
         return None, None
 
     from services import memory_pressure_monitor as mpm
@@ -416,40 +415,27 @@ async def _ladder_step_after_oom(
     return f"ollama_chat/{swap.chosen.ollama_model}", warning
 
 
-def _make_llm(provider: Optional[str], model: Optional[str], api_key: str, base_url: Optional[str] = None):
-    """Create an LLMService for the given provider, or ClaudeService as fallback.
+DEFAULT_OLLAMA_MODEL = "ollama_chat/qwen3:8b"
 
-    Privacy gate enforced here so every caller (chat handler, duel handler,
-    tests) gets it once. The memory-pressure auto-downgrade lives upstream
-    of this construction step (it picks *which* model to ask for) — see
+
+def _make_llm(provider: Optional[str], model: Optional[str], api_key: str, base_url: Optional[str] = None):
+    """Construct the chat dispatcher for a turn.
+
+    Per ADR 015 the v1 stack has a single dispatcher (`OllamaDispatcher`).
+    The `provider` and `api_key` parameters survive on the signature so call
+    sites stay mechanical — the values are ignored. The memory-pressure
+    auto-downgrade lives upstream of this construction step (it picks
+    *which* model to ask for) — see
     [`_apply_memory_pressure_swap`](memory_pressure_monitor.py); `_make_llm`
     itself stays a thin "build the configured client" helper.
     """
-    from services.privacy import assert_provider_allowed
+    from services.ollama_service import DEFAULT_OLLAMA_BASE_URL
 
-    effective_provider = provider or "anthropic"
-    assert_provider_allowed(effective_provider)
-
-    if provider == "ollama":
-        from services.ollama_service import DEFAULT_OLLAMA_BASE_URL
-        # ADR 015 §B — Ollama dispatch uses the official `ollama` Python client
-        # via `OllamaDispatcher`, no LiteLLM. Cloud-provider branches below stay
-        # in place for chunk-coexistence; chunk 4 deletes them along with the
-        # whole multi-provider machinery.
-        config = OllamaDispatchConfig(
-            model=model or DEFAULT_MODELS.get("ollama", "ollama_chat/qwen3:8b"),
-            api_base=base_url or DEFAULT_OLLAMA_BASE_URL,
-        )
-        return OllamaDispatcher(config)
-    if provider and provider != "anthropic":
-        config = LLMConfig(
-            provider=provider,
-            model=model or DEFAULT_MODELS.get(provider, "gpt-4o"),
-            api_key=api_key,
-        )
-        return LLMService(config)
-    # Anthropic — use native ClaudeService for best streaming fidelity
-    return ClaudeService(api_key=api_key)
+    config = OllamaDispatchConfig(
+        model=model or DEFAULT_OLLAMA_MODEL,
+        api_base=base_url or DEFAULT_OLLAMA_BASE_URL,
+    )
+    return OllamaDispatcher(config)
 
 
 def _resolve_system_prompt_budget(
@@ -459,13 +445,12 @@ def _resolve_system_prompt_budget(
 
     Returns ``(budget_tokens, tokenizer_id)``. ``(None, None)`` is the
     safe fallback that opts the request out of budget enforcement —
-    used for cloud providers (Anthropic / OpenAI manage their own
-    context server-side) and for local models without a catalog entry.
+    used for local models without a catalog entry (off-ladder dev tags).
     """
-    if provider != "ollama" or not model:
+    if not model:
         return None, None
     from services.ollama_service import get_model_by_litellm
-    from services.claude import _SYSTEM_PROMPT_BUDGET_FRACTION
+    from services.system_prompt import _SYSTEM_PROMPT_BUDGET_FRACTION
 
     entry = get_model_by_litellm(model)
     if entry is None:
@@ -483,21 +468,17 @@ async def _maybe_compact(
     model: Optional[str],
     ws: WebSocket,
 ) -> list[dict]:
-    """Apply ADR 009 production compaction when the active model is local.
+    """Apply ADR 009 production compaction.
 
     Returns the (possibly compacted) message list. Records an event on
     the session row when compaction fires; emits a ``compaction`` WS
     event so the frontend can surface "this turn was compacted" UI.
 
-    Anthropic / OpenAI / other cloud providers are skipped — their
-    context windows are managed server-side, and the catalog only
-    carries entries for the local Ollama models. A future ADR can
-    extend the catalog to cover hosted providers if cross-provider
-    compaction parity becomes a requirement.
+    Skipped for models not in the catalog (custom user pulls or off-ladder
+    dev tags) — compaction needs the catalog's effective_context_tokens
+    field to know when to fire.
     """
-    # Cloud providers handle context server-side; only run compaction
-    # when we're routing through a known local catalog entry.
-    if provider != "ollama" or not model:
+    if not model:
         return messages
 
     # Wrap the entire compaction path in one guard. Compaction is a
@@ -564,34 +545,11 @@ async def _handle_message(
     base_url: Optional[str] = None,
     context_strategy: Optional[ContextStrategy] = None,
 ) -> None:
-    api_key = client_api_key or get_api_key()
-    if not api_key and provider != "ollama":
-        await _send_event(ws, "error", content="API key not configured")
-        return
-
-    # ADR 014 §A — desktop bundle structurally excludes cloud-provider SDKs.
-    # When the bundle is built with `JARVIS_DESKTOP_BUNDLE=1` (the v1 default)
-    # the `anthropic` / `openai` / `google.generativeai` packages are not on
-    # disk; non-Ollama provider requests would fail later at LLM-construction
-    # time with a confusing ImportError. Catch it here and surface the
-    # structured "local-only" signal — same shape the future HTTP probe
-    # endpoint (/api/bundle/capabilities) reports, so audit scripts can
-    # detect both paths uniformly.
-    if (provider or "anthropic") != "ollama":
-        from services.bundle import cloud_providers_available
-        if not cloud_providers_available():
-            await _send_event(
-                ws,
-                "error",
-                content=(
-                    "This build excludes cloud providers — see ADR 014. "
-                    "Use the local Ollama provider, or rebuild with "
-                    "JARVIS_DESKTOP_BUNDLE=0."
-                ),
-                bundle_capability="local-only",
-            )
-            await _send_event(ws, "done", session_id=session_id)
-            return
+    # ADR 015 — `api_key` is unused by the dispatcher (single target, no
+    # auth). Resolved here only because tool execution still threads it
+    # through (some tools may want the cloud key when present, e.g. for
+    # the legacy `web_search` shape); blank when absent.
+    api_key = client_api_key or get_api_key() or ""
 
     session_service.add_message(session_id, "user", content)
     strategy = context_strategy or DEFAULT_STRATEGY
@@ -618,8 +576,7 @@ async def _handle_message(
     # ADR 009 §"Atomicity" — compaction runs ONLY here at the per-turn
     # boundary, never inside _stream_follow_up. Triggered when projected
     # tokens exceed `threshold_pct × effective_ctx_tokens`. No-ops when
-    # the active model has no catalog entry (Anthropic / OpenAI manage
-    # their own context server-side).
+    # the active model has no catalog entry (off-ladder dev tags).
     messages = await _maybe_compact(
         messages,
         session_id=session_id,
@@ -630,7 +587,7 @@ async def _handle_message(
     )
     active_specs = specialist_service.get_active_specialists()
     tools = specialist_service.filter_tools(TOOLS, specialists=active_specs)
-    # Check token budget before calling Claude
+    # Check token budget before dispatch
     budget = check_budget()
     if budget["level"] == "exceeded":
         await _send_event(ws, "error", content=f"Daily token budget exceeded ({budget['percent']:.0f}% used). Please try again tomorrow or increase your budget.")
@@ -639,11 +596,9 @@ async def _handle_message(
     if budget["level"] == "warning":
         await _send_event(ws, "warning", content=f"Approaching daily token budget ({budget['percent']:.0f}% used).")
 
-    from services.privacy import PrivacyBlockedError
-
     # Memory-pressure pre-flight swap (ADR 005 §C trigger 2). Runs before
-    # _make_llm so the constructed LLMService points at a model that
-    # actually fits in current free RAM. No-op for non-Ollama providers.
+    # _make_llm so the constructed dispatcher points at a model that
+    # actually fits in current free RAM.
     swapped_model, floor_refused = await _apply_memory_pressure_swap(
         ws=ws,
         provider=provider,
@@ -661,12 +616,7 @@ async def _handle_message(
         return
     model = swapped_model
 
-    try:
-        claude = get_llm(api_key or "", provider, model, base_url) if get_llm else _make_llm(provider, model, api_key or "", base_url)
-    except PrivacyBlockedError as exc:
-        await _send_event(ws, "error", content=str(exc))
-        await _send_event(ws, "done", session_id=session_id)
-        return
+    claude = get_llm(api_key or "", provider, model, base_url) if get_llm else _make_llm(provider, model, api_key or "", base_url)
     assistant_text = ""
     # Specialist attribution: prefix first text_delta with specialist names
     attribution_prefix = ""
@@ -742,15 +692,11 @@ async def _handle_message(
             break
         model = new_model
         await _send_event(ws, "warning", content=warning or "Switched to smaller model after OOM")
-        try:
-            claude = (
-                get_llm(api_key or "", provider, model, base_url)
-                if get_llm else
-                _make_llm(provider, model, api_key or "", base_url)
-            )
-        except PrivacyBlockedError as exc:
-            await _send_event(ws, "error", content=str(exc))
-            break
+        claude = (
+            get_llm(api_key or "", provider, model, base_url)
+            if get_llm else
+            _make_llm(provider, model, api_key or "", base_url)
+        )
         # Loop back: retry the stream against the smaller model.
 
     # Handle tool call chain (up to MAX_TOOL_ROUNDS)
@@ -776,7 +722,7 @@ async def _handle_message(
         session_service.add_message(
             session_id, "assistant", assistant_text,
             model=model or "claude-sonnet-4-20250514",
-            provider=provider or "anthropic",
+            provider=provider or "ollama",
         )
     else:
         # No text response (e.g. pure tool-use) — still persist so session
@@ -790,7 +736,7 @@ async def _handle_message(
             log_usage(
                 usage_acc[0], usage_acc[1],
                 model=model or "claude-sonnet-4-20250514",
-                provider=provider or "anthropic",
+                provider=provider or "ollama",
                 context_tokens=prompt_stats.get("context_tokens", 0),
                 tool_calls=tool_acc[0],
                 tool_rounds=tool_acc[1],
@@ -801,7 +747,7 @@ async def _handle_message(
     done_fields = {
         "session_id": session_id,
         "model": model or "claude-sonnet-4-20250514",
-        "provider": provider or "anthropic",
+        "provider": provider or "ollama",
     }
     # Include tool_mode for local models so the frontend can show tool support info
     if provider == "ollama" and model:
@@ -841,95 +787,11 @@ def _parse_message(raw: str) -> tuple:
     if data.get("type") == "ping":
         return None, None
 
-    # Duel start messages have their own validation
-    if data.get("type") == "duel_start":
-        return data, None
-
     content = data.get("content", "").strip()
     if not content:
         return None, "Message content is required"
 
     return data, None
-
-
-async def _handle_duel(
-    ws: WebSocket,
-    data: dict,
-    session_id: str,
-    get_llm: callable,
-    client_api_key: Optional[str] = None,
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
-) -> None:
-    """Handle a duel_start WS message."""
-    from services.council import DuelConfig, DuelOrchestrator, validate_duel_config
-
-    api_key = client_api_key or get_api_key()
-    if not api_key:
-        await _send_event(ws, "error", content="API key not configured")
-        return
-
-    topic = data.get("topic", "").strip()
-    specialist_ids = data.get("specialist_ids", [])
-
-    config = DuelConfig(topic=topic, specialist_ids=specialist_ids)
-    try:
-        validate_duel_config(config)
-    except ValueError as exc:
-        await _send_event(ws, "error", content=str(exc))
-        return
-
-    claude = get_llm(api_key, provider, model)
-    orchestrator = DuelOrchestrator(claude)
-
-    try:
-        async for event in orchestrator.run(config):
-            # Map DuelEvent to WS JSON
-            ws_data = {"type": f"duel_{event.type}"}
-            if event.specialist:
-                ws_data["specialist"] = event.specialist
-            if event.content:
-                ws_data["content"] = event.content
-            if event.round_num:
-                ws_data["round"] = event.round_num
-            if event.metadata:
-                ws_data.update(event.metadata)
-            await ws.send_json(ws_data)
-
-            # If duel finished, add verdict summary to session for continued chat
-            if event.type == "judge_done":
-                summary = (
-                    f"**Duel Verdict — {topic}**\n\n"
-                    f"Winner: {event.metadata.get('winner', '?')}\n\n"
-                    f"{event.metadata.get('reasoning', '')}\n\n"
-                    f"{event.metadata.get('recommendation', '')}"
-                )
-                session_service.add_message(session_id, "assistant", summary)
-    except Exception as exc:
-        logger.exception("Duel error")
-        await _send_event(ws, "duel_error", content=f"Duel failed: {exc}")
-
-
-# ── Duel presets ──────────────────────────────────────────────────────────────
-
-
-@router.get("/duel-presets")
-async def list_duel_presets():
-    """Return all available duel presets (built-in + user-created)."""
-    from services.duel_presets import seed_builtin_presets, list_presets
-    seed_builtin_presets()
-    return list_presets()
-
-
-@router.get("/duel-presets/{preset_id}")
-async def get_duel_preset(preset_id: str):
-    """Return a single duel preset."""
-    from services.duel_presets import get_preset
-    preset = get_preset(preset_id)
-    if not preset:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Preset not found")
-    return preset
 
 
 @router.websocket("/ws")
@@ -1000,15 +862,6 @@ async def chat_ws(websocket: WebSocket) -> None:
             client_provider = data.get("provider") or None
             client_model = data.get("model") or None
             client_base_url = data.get("base_url") or None
-
-            # Route duel messages
-            if data.get("type") == "duel_start":
-                await _handle_duel(
-                    websocket, data, session_id, _get_llm,
-                    client_api_key=client_api_key,
-                    provider=client_provider, model=client_model,
-                )
-                continue
 
             content = data.get("content", "").strip()
 

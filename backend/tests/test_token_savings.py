@@ -344,60 +344,12 @@ class TestDeepCascadeSavings:
 # ---------------------------------------------------------------------------
 
 class TestPricingAccuracy:
-    """Verify cost estimates use correct per-model pricing."""
-
-    def test_haiku_pricing(self):
-        from services.token_tracking import log_usage
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp)
-            entry = log_usage(
-                input_tokens=100_000,
-                output_tokens=10_000,
-                model="claude-haiku-4-20250514",
-                provider="anthropic",
-                workspace_path=ws,
-            )
-            # Haiku: $0.80/M in + $4/M out
-            expected = 100_000 * 0.80 / 1e6 + 10_000 * 4.0 / 1e6
-            assert abs(entry["cost_estimate"] - expected) < 0.001, (
-                f"Haiku cost: expected ${expected:.4f}, got ${entry['cost_estimate']:.4f}"
-            )
-
-    def test_sonnet_pricing(self):
-        from services.token_tracking import log_usage
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp)
-            entry = log_usage(
-                input_tokens=100_000,
-                output_tokens=10_000,
-                model="claude-sonnet-4-20250514",
-                provider="anthropic",
-                workspace_path=ws,
-            )
-            # Sonnet: $3/M in + $15/M out
-            expected = 100_000 * 3.0 / 1e6 + 10_000 * 15.0 / 1e6
-            assert abs(entry["cost_estimate"] - expected) < 0.001
-
-    def test_haiku_is_cheaper_than_sonnet(self):
-        from services.token_tracking import log_usage
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            ws = Path(tmp)
-            haiku = log_usage(50_000, 500, model="claude-haiku-4-20250514",
-                              provider="anthropic", workspace_path=ws)
-            sonnet = log_usage(50_000, 500, model="claude-sonnet-4-20250514",
-                               provider="anthropic", workspace_path=ws)
-            assert haiku["cost_estimate"] < sonnet["cost_estimate"]
-            ratio = sonnet["cost_estimate"] / haiku["cost_estimate"]
-            assert ratio > 3, f"Sonnet should be ~3.75x Haiku, got {ratio:.1f}x"
+    """ADR 015 — local-only stack has no per-call dollar cost. The
+    historical Haiku / Sonnet pricing tests are gone with the cloud
+    paths they exercised. ``cost_estimate`` is now always 0.0; that
+    invariant is covered by ``tests/test_token_tracking.py``.
+    """
+    pass
 
     def test_tool_tracking_fields_present(self):
         from services.token_tracking import log_usage

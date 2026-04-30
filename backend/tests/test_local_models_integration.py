@@ -58,16 +58,12 @@ class TestToolMode:
 
 
 class TestTimeoutConfig:
-    def test_ollama_timeout_1800(self):
-        from services.llm_service import PROVIDER_TIMEOUTS
+    def test_dispatcher_default_timeout_1800(self):
+        # ADR 015 — single Ollama dispatcher; no PROVIDER_TIMEOUTS map.
+        from services.ollama_dispatcher import DEFAULT_TIMEOUT_SECONDS, OllamaDispatchConfig
 
-        assert PROVIDER_TIMEOUTS["ollama"] == 1800
-
-    def test_cloud_timeout_120(self):
-        from services.llm_service import PROVIDER_TIMEOUTS
-
-        for provider in ("anthropic", "openai", "google"):
-            assert PROVIDER_TIMEOUTS[provider] == 120
+        assert DEFAULT_TIMEOUT_SECONDS == 1800.0
+        assert OllamaDispatchConfig(model="qwen3:8b").timeout == 1800.0
 
     def test_make_llm_ollama_timeout(self):
         from routers.chat import _make_llm

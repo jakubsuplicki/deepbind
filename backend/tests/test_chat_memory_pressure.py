@@ -22,7 +22,7 @@ from starlette.testclient import TestClient
 
 from main import app
 from models.database import FTS_SQL, SCHEMA_SQL, TRIGGER_SQL
-from services.claude import StreamEvent
+from services.system_prompt import StreamEvent
 
 pytestmark = pytest.mark.anyio(backends=["asyncio"])
 
