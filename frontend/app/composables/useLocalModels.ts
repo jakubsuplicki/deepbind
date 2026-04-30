@@ -53,17 +53,16 @@ export function useLocalModels() {
       catalog.value = await $fetch<ModelRecommendation[]>(apiUrl('/api/local/models/catalog'), {
         params: { base_url: baseUrl.value },
       })
-      // If the chat-side provider is ollama but the selected model is not installed,
-      // fall back to the first active/installed model so the UI doesn't look broken.
+      // If the selected model is no longer installed, fall back to the
+      // first active/installed model so the UI doesn't look broken.
       try {
-        const apiKeys = useApiKeys()
-        if (apiKeys.activeProvider.value !== 'ollama') return
+        const chatModel = useChatModel()
         const isStillAvailable = catalog.value.some(
-          m => m.installed && m.litellm_model === apiKeys.activeModel.value,
+          m => m.installed && m.litellm_model === chatModel.activeModel.value,
         )
         if (isStillAvailable) return
         const fallback = catalog.value.find(m => m.active) ?? catalog.value.find(m => m.installed)
-        if (fallback) apiKeys.selectModel('ollama', fallback.litellm_model)
+        if (fallback) chatModel.selectModel(fallback.litellm_model)
       } catch { /* ignore — composable unavailable in non-Nuxt contexts */ }
     } catch (e: unknown) {
       error.value = 'Failed to fetch model catalog'
@@ -179,13 +178,13 @@ export function useLocalModels() {
         },
       })
       await fetchCatalog()
-      // Sync chat-side active provider/model so the ModelSelector in the chat
+      // Sync chat-side active model so the ModelSelector in the chat
       // header reflects the newly activated local model. Without this, the
-      // model is marked "Active" in Settings but the chat still points at a
-      // previously selected cloud model (or a stale local one).
+      // model is marked "Active" in Settings but the chat still points at
+      // a stale local one.
       try {
-        const apiKeys = useApiKeys()
-        apiKeys.selectModel('ollama', model.litellm_model)
+        const chatModel = useChatModel()
+        chatModel.selectModel(model.litellm_model)
       } catch { /* ignore — composable unavailable in non-Nuxt contexts */ }
     } catch (e: unknown) {
       error.value = 'Failed to select model'

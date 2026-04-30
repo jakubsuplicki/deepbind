@@ -1,5 +1,5 @@
 import type { ChatMessage, TraceItem, WsEvent } from '~/types'
-import { useDuel } from '~/composables/useDuel'
+import { useChatModel } from '~/composables/useChatModel'
 import { useLocalModels } from '~/composables/useLocalModels'
 import { useWebSocket } from '~/composables/useWebSocket'
 
@@ -33,8 +33,8 @@ export function useChat() {
 
   function _startSlowTimer(): void {
     _clearSlowTimer()
-    const { activeProvider } = useApiKeys()
-    if (activeProvider.value !== 'ollama') return
+    // ADR 015 — single dispatch target (Ollama), so the slow-load timers
+    // always engage. The previous activeProvider check is dead code.
     _slowTimer10 = setTimeout(() => {
       if (isLoading.value && !currentResponse.value) {
         slowResponse.value = 'Local model is loading... This may take a moment.'
@@ -53,16 +53,7 @@ export function useChat() {
     slowResponse.value = ''
   }
 
-  const duel = useDuel()
-  duel.bindSend(send)
-
   function _handleEvent(event: WsEvent): void {
-    // Route duel events to the duel composable
-    if ((event as any).type?.startsWith('duel_')) {
-      duel.handleWsEvent(event as any)
-      return
-    }
-
     if (event.type === 'session_start') {
       sessionId.value = event.session_id
       setSessionId(event.session_id)
@@ -205,19 +196,13 @@ export function useChat() {
     const payload: Record<string, string> = { type: 'message', content: _lastContent, session_id: sessionId.value }
     if (options?.graphScope) payload.graph_scope = options.graphScope
 
-    // Attach provider + model + API key from browser storage
-    const { activeProvider, activeKey, activeModel } = useApiKeys()
-    // Always send provider + model so backend uses the chosen model,
-    // even if falling back to server-stored API key
-    payload.provider = activeProvider.value
+    // ADR 015 — single dispatcher (local Ollama). Attach the chosen model
+    // and the runtime base URL; no API key, no provider abstraction.
+    const { activeModel } = useChatModel()
+    const { baseUrl } = useLocalModels()
+    payload.provider = 'ollama'
     payload.model = activeModel.value
-    if (activeProvider.value === 'ollama') {
-      // Ollama needs no API key but needs base_url
-      const { baseUrl } = useLocalModels()
-      payload.base_url = baseUrl.value
-    } else if (activeKey.value) {
-      payload.api_key = activeKey.value
-    }
+    payload.base_url = baseUrl.value
 
     const sent = send(payload)
     if (!sent) {
@@ -270,7 +255,6 @@ export function useChat() {
     sessionId,
     isConnected,
     slowResponse,
-    duel,
     init,
     sendMessage,
     retry,

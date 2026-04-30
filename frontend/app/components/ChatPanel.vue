@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import type { ChatMessage, DuelConfig, OrbState, UrlIngestResult } from '~/types'
+import type { ChatMessage, OrbState, UrlIngestResult } from '~/types'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useSpecialists } from '~/composables/useSpecialists'
-import { MODEL_CATALOG } from '~/composables/useApiKeys'
-import { PROVIDER_ICONS } from '~/composables/providerIcons'
 
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -14,14 +12,16 @@ function renderMarkdown(text: string): string {
 }
 
 function modelLabel(provider?: string, model?: string): string {
-  if (!provider || !model) return ''
-  const catalog = MODEL_CATALOG[provider]
-  return catalog?.find(m => m.id === model)?.label ?? model
+  // ADR 015 — single dispatcher; the on-message provider/model attribution
+  // is purely for display. Strip the `ollama_chat/` prefix so the chat
+  // history shows e.g. `qwen3:8b` instead of `ollama_chat/qwen3:8b`.
+  if (!model) return ''
+  return model.replace(/^ollama(?:_chat)?\//, '')
 }
 
-function providerIcon(provider?: string): string {
-  if (!provider) return ''
-  return (PROVIDER_ICONS as Record<string, string>)[provider] ?? ''
+function providerIcon(_provider?: string): string {
+  // Single dispatch target — no per-provider icon.
+  return ''
 }
 
 function formatTime(iso?: string): string {
@@ -33,7 +33,7 @@ function formatTime(iso?: string): string {
   })
 }
 
-const { activeSpecialists, deactivate, specialists: allSpecialists, load: loadSpecialists } = useSpecialists()
+const { activeSpecialists, deactivate } = useSpecialists()
 
 const props = defineProps<{
   messages: ChatMessage[]
@@ -44,7 +44,6 @@ const props = defineProps<{
   canRetry?: boolean
   voiceState?: OrbState
   voiceSupported?: boolean
-  duelSetupOpen?: boolean
   ollamaDown?: boolean
   slowResponse?: string
 }>()
@@ -53,17 +52,9 @@ const emit = defineEmits<{
   send: [content: string]
   retry: []
   toggleVoice: []
-  openDuel: []
-  startDuel: [config: DuelConfig]
-  cancelDuelSetup: []
   reconnectOllama: []
-  switchToCloud: []
 }>()
 
-// Load specialists when duel setup opens so we have the list
-watch(() => props.duelSetupOpen, (open) => {
-  if (open && allSpecialists.value.length === 0) loadSpecialists()
-})
 const { ingestUrl } = useApi()
 
 const input = ref('')
@@ -105,8 +96,9 @@ function handleSend(): void {
   const text = input.value.trim()
   if (!text || props.isLoading) return
   if (text.toLowerCase() === '/duel') {
+    // ADR 015 — duel feature was removed; absorb the slash command silently
+    // to avoid confusing the model with leftover muscle memory.
     input.value = ''
-    emit('openDuel')
     return
   }
   emit('send', text)
@@ -163,9 +155,8 @@ watch(
     <!-- Ollama offline banner -->
     <div v-if="ollamaDown" class="chat-panel__ollama-banner">
       <span class="chat-panel__ollama-banner-icon">⚠️</span>
-      <span class="chat-panel__ollama-banner-text">Ollama is not responding. Local model chat is unavailable.</span>
+      <span class="chat-panel__ollama-banner-text">Ollama is not responding. Chat is unavailable until the local runtime comes back online.</span>
       <button class="chat-panel__ollama-banner-btn" @click="emit('reconnectOllama')">Reconnect</button>
-      <button class="chat-panel__ollama-banner-btn chat-panel__ollama-banner-btn--alt" @click="emit('switchToCloud')">Switch to Cloud AI</button>
     </div>
 
     <!-- Slow response indicator for local models -->
@@ -245,17 +236,6 @@ watch(
       {{ ingestResult }}
     </div>
 
-    <!-- Duel Setup Panel -->
-    <Transition name="setup-slide">
-      <DuelSetup
-        v-if="duelSetupOpen"
-        :specialists="allSpecialists"
-        :prefill-topic="input.trim()"
-        @start="emit('startDuel', $event)"
-        @cancel="emit('cancelDuelSetup')"
-      />
-    </Transition>
-
     <div class="chat-panel__input-bar">
       <textarea
         ref="inputEl"
@@ -268,15 +248,6 @@ watch(
         @input="autoResize"
       />
       <ModelSelector />
-      <!-- Voice button hidden for now -->
-      <button
-        class="chat-panel__icon-btn chat-panel__icon-btn--duel"
-        aria-label="Duel Mode"
-        :disabled="isLoading"
-        @click="emit('openDuel')"
-      >
-        ⚔️
-      </button>
       <button
         class="chat-panel__icon-btn chat-panel__icon-btn--send"
         :disabled="isLoading || !input.trim()"

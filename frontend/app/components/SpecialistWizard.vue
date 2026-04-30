@@ -162,31 +162,7 @@
           <!-- Default model -->
           <div class="wiz__field wiz__field--model">
             <label class="wiz__label">Default Model</label>
-            <p class="wiz__hint">Which model should this specialist use? Leave on "Use global" to follow the chat selector.</p>
-            <div class="wiz__model-options">
-              <button
-                type="button"
-                class="wiz__model-option"
-                :class="{ 'wiz__model-option--active': !form.default_model }"
-                @click="form.default_model = null"
-              >
-                <span class="wiz__model-option-label">Use global default</span>
-              </button>
-              <template v-for="provider in configuredProviders()" :key="provider.id">
-                <button
-                  v-for="model in MODEL_CATALOG[provider.id]"
-                  :key="model.id"
-                  type="button"
-                  class="wiz__model-option"
-                  :class="{ 'wiz__model-option--active': form.default_model?.provider === provider.id && form.default_model?.model === model.id }"
-                  @click="form.default_model = { provider: provider.id, model: model.id }"
-                >
-                  <span class="wiz__model-option-icon" v-html="provider.icon" />
-                  <span class="wiz__model-option-label">{{ model.label }}</span>
-                  <span class="wiz__model-option-cost" :class="'wiz__cost--' + model.cost">{{ model.cost === 1 ? '$' : model.cost === 2 ? '$$' : '$$$' }}</span>
-                </button>
-              </template>
-            </div>
+            <p class="wiz__hint">All specialists use the active local model from the chat selector (ADR 015 — single-target local-only stack).</p>
           </div>
         </div>
 
@@ -301,9 +277,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import type { SpecialistDetail } from '~/types'
-import { useApiKeys, MODEL_CATALOG, type ModelInfo } from '~/composables/useApiKeys'
-
-const { configuredProviders, providers: allProviders } = useApiKeys()
 
 const props = defineProps<{
   initialData?: SpecialistDetail | null
@@ -469,9 +442,10 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function getModelLabel(provider: string, model: string): string {
-  const catalog = MODEL_CATALOG[provider]
-  return catalog?.find((m: ModelInfo) => m.id === model)?.label ?? model
+function getModelLabel(_provider: string, model: string): string {
+  // ADR 015 — single dispatch target; specialist `default_model` is a
+  // legacy field. Strip the `ollama_chat/` prefix when present.
+  return model.replace(/^ollama(?:_chat)?\//, '')
 }
 
 function submit() {

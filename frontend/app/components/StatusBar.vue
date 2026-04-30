@@ -91,13 +91,11 @@
 
 <script setup lang="ts">
 import { useLocalModels } from '~/composables/useLocalModels'
-import { useApiKeys } from '~/composables/useApiKeys'
 import { useIngestStatus } from '~/composables/useIngestStatus'
 import { useReindexStatus } from '~/composables/useReindexStatus'
 
 const { backendStatus, chatActive } = useAppState()
 const menuOpen = ref(false)
-const { activeProvider } = useApiKeys()
 const localModels = useLocalModels()
 const ingest = useIngestStatus()
 const reindex = useReindexStatus()
@@ -133,7 +131,7 @@ watch(() => route.path, () => {
 
 const statusText = computed(() => {
   const base = backendStatus.value === 'online' ? 'Alive' : backendStatus.value === 'offline' ? 'Offline' : 'Checking...'
-  if (activeProvider.value === 'ollama' && localModels.activeModel.value) {
+  if (localModels.activeModel.value) {
     const modelName = localModels.activeModel.value.label
     const ollamaOk = localModels.runtime.value?.reachable && !localModels.ollamaDown.value
     return `${base} · ${modelName} (local) · ${ollamaOk ? '🟢' : '🔴'}`

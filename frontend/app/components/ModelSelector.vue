@@ -1,56 +1,30 @@
 <script setup lang="ts">
-import { useApiKeys, MODEL_CATALOG, type ModelInfo } from '~/composables/useApiKeys'
+// ADR 015 — single-target local-only stack: only Ollama models appear here.
+import { useChatModel } from '~/composables/useChatModel'
 import { useLocalModels } from '~/composables/useLocalModels'
 
-const { activeProvider, activeModel, selectModel, configuredProviders, providers } = useApiKeys()
+interface ModelInfo {
+  id: string
+  label: string
+  cost: 0
+}
+
+const { activeModel, selectModel } = useChatModel()
 const { installedModels } = useLocalModels()
 
 const isOpen = ref(false)
 const selectorRef = ref<HTMLElement | null>(null)
 
 const currentModelInfo = computed<ModelInfo | undefined>(() => {
-  // Check local models first
-  if (activeProvider.value === 'ollama') {
-    const local = installedModels.value.find(m => m.litellm_model === activeModel.value)
-    if (local) return { id: local.litellm_model, label: local.label, cost: 0 as 0 }
-    // Fallback: strip ollama_chat/ prefix for display
-    const fallbackLabel = activeModel.value.replace(/^ollama(?:_chat)?\//, '')
-    return { id: activeModel.value, label: fallbackLabel, cost: 0 as 0 }
-  }
-  const catalog = MODEL_CATALOG[activeProvider.value]
-  return catalog?.find(m => m.id === activeModel.value)
+  const local = installedModels.value.find(m => m.litellm_model === activeModel.value)
+  if (local) return { id: local.litellm_model, label: local.label, cost: 0 }
+  const fallbackLabel = activeModel.value.replace(/^ollama(?:_chat)?\//, '')
+  return { id: activeModel.value, label: fallbackLabel, cost: 0 }
 })
 
-const currentProviderConfig = computed(() =>
-  providers.find(p => p.id === activeProvider.value),
-)
-
-// ADR 014 §B — desktop bundle filters cloud providers out of the picker.
-// Ollama remains; no cloud entries appear in the dropdown.
-const { isDesktopBundle } = useDesktopBundle()
-const availableProviders = computed(() => {
-  const all = configuredProviders()
-  if (!isDesktopBundle.value) return all
-  return all.filter(p => p.id === 'ollama')
-})
-
-function handleSelect(providerId: string, modelId: string): void {
-  selectModel(providerId, modelId)
+function handleSelect(modelId: string): void {
+  selectModel(modelId)
   isOpen.value = false
-}
-
-function costBadge(cost: 0 | 1 | 2 | 3): string {
-  if (cost === 0) return '🖥️'
-  if (cost === 1) return '$'
-  if (cost === 2) return '$$'
-  return '$$$'
-}
-
-function costClass(cost: 0 | 1 | 2 | 3): string {
-  if (cost === 0) return 'model-selector__cost--local'
-  if (cost === 1) return 'model-selector__cost--budget'
-  if (cost === 2) return 'model-selector__cost--standard'
-  return 'model-selector__cost--premium'
 }
 
 type LocalModelPreset = 'fast' | 'everyday' | 'balanced' | 'long-docs' | 'reasoning' | 'code' | 'best-local'
@@ -99,7 +73,6 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
       :title="currentModelInfo?.label ?? activeModel"
       @click.stop="isOpen = !isOpen"
     >
-      <span class="model-selector__trigger-icon" v-html="currentProviderConfig?.icon ?? ''" />
       <span class="model-selector__trigger-label">{{ currentModelInfo?.label ?? activeModel }}</span>
       <svg class="model-selector__chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="6 9 12 15 18 9" />
@@ -108,32 +81,6 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 
     <Transition name="dropdown">
       <div v-if="isOpen" class="model-selector__dropdown">
-        <template v-for="provider in availableProviders" :key="provider.id">
-          <div class="model-selector__group-header">
-            <span class="model-selector__group-icon" v-html="provider.icon" />
-            <span>{{ provider.name }}</span>
-          </div>
-          <button
-            v-for="model in MODEL_CATALOG[provider.id]"
-            :key="model.id"
-            class="model-selector__option"
-            :class="{ 'model-selector__option--active': activeModel === model.id && activeProvider === provider.id }"
-            @click="handleSelect(provider.id, model.id)"
-          >
-            <span class="model-selector__option-label">{{ model.label }}</span>
-            <span class="model-selector__cost" :class="costClass(model.cost)">{{ costBadge(model.cost) }}</span>
-            <svg
-              v-if="activeModel === model.id && activeProvider === provider.id"
-              class="model-selector__check"
-              width="14" height="14" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
-            >
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          </button>
-        </template>
-
-        <!-- Local models group -->
         <template v-if="installedModels.length > 0">
           <div class="model-selector__group-header">
             <span>Local</span>
@@ -142,9 +89,9 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
             v-for="lm in installedModels"
             :key="lm.litellm_model"
             class="model-selector__option"
-            :class="{ 'model-selector__option--active': activeModel === lm.litellm_model && activeProvider === 'ollama' }"
+            :class="{ 'model-selector__option--active': activeModel === lm.litellm_model }"
             :title="qualityDots(lm.preset).label"
-            @click="handleSelect('ollama', lm.litellm_model)"
+            @click="handleSelect(lm.litellm_model)"
           >
             <span class="model-selector__option-label">{{ lm.label }}</span>
             <span class="model-selector__quality" :title="qualityDots(lm.preset).label">
@@ -161,7 +108,7 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
               />
             </span>
             <svg
-              v-if="activeModel === lm.litellm_model && activeProvider === 'ollama'"
+              v-if="activeModel === lm.litellm_model"
               class="model-selector__check"
               width="14" height="14" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
@@ -171,8 +118,8 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
           </button>
         </template>
 
-        <div v-if="availableProviders.length === 0 && installedModels.length === 0" class="model-selector__empty">
-          No API keys configured
+        <div v-else class="model-selector__empty">
+          No local models installed yet
         </div>
       </div>
     </Transition>

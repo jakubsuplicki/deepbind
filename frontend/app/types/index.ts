@@ -299,58 +299,9 @@ export class ApiError extends Error {
   }
 }
 
-// --- AI Providers ---
-
-export interface ProviderConfig {
-  id: string
-  name: string
-  icon: string
-  keyPrefix: string
-  docsUrl: string
-  models: string[]
-  color: string
-}
-
-export interface StoredKeyMeta {
-  remember: boolean
-  addedAt: string
-}
-
-// --- Duel ---
-
-export interface DuelConfig {
-  topic: string
-  specialist_ids: string[]
-}
-
-export interface DuelEvent {
-  type: string
-  specialist?: string
-  content?: string
-  round?: number
-  // Metadata fields spread at top level by backend
-  scores?: Record<string, Record<string, number>>
-  winner?: string
-  reasoning?: string
-  recommendation?: string
-  action_items?: string[]
-  saved_path?: string
-  duel_id?: string
-  specialists?: { id: string; name: string; icon: string }[]
-  topic?: string
-  label?: string
-  token_usage?: { input: number; output: number }
-}
-
-export interface DuelVerdict {
-  scores: Record<string, Record<string, number>>
-  winner: string
-  reasoning: string
-  recommendation: string
-  action_items: string[]
-}
-
-export type DuelPhase = 'idle' | 'setup' | 'round1' | 'round2' | 'judging' | 'verdict' | 'done' | 'error'
+// ADR 015 — multi-provider (`ProviderConfig`, `StoredKeyMeta`) and duel
+// (`DuelConfig`, `DuelEvent`, `DuelVerdict`, `DuelPhase`) types deleted
+// alongside the cloud + duel frontend surface.
 
 // --- Local Models (Ollama) ---
 

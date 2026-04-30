@@ -2,13 +2,7 @@
   <div class="settings-page">
     <h1 class="settings-page__title">Settings</h1>
 
-    <!-- ADR 014 §B — desktop bundle excludes cloud-provider UI. -->
-    <ProvidersSection
-      v-if="!isDesktopBundle"
-      :settings-loaded="general.loaded.value"
-      :server-key-configured="general.serverKeyConfigured.value"
-      :key-storage="general.keyStorage.value"
-    />
+    <!-- ADR 015 — single-target local-only stack: cloud-providers UI is gone. -->
 
     <LocalModelsSection />
 
@@ -43,7 +37,6 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import ProvidersSection from '~/components/settings/ProvidersSection.vue'
 import LocalModelsSection from '~/components/settings/LocalModelsSection.vue'
 import PerformanceSection from '~/components/settings/PerformanceSection.vue'
 import WorkspaceSection from '~/components/settings/WorkspaceSection.vue'
@@ -60,7 +53,6 @@ import { useSettingsStatus } from '~/composables/settings/useSettingsStatus'
 
 const general = useGeneralSettings()
 const status = useSettingsStatus()
-const { isDesktopBundle } = useDesktopBundle()
 
 onMounted(async () => {
   await general.load()

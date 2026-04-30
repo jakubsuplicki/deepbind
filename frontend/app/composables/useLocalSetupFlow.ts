@@ -20,7 +20,7 @@ export type DetectedOS = 'macos' | 'windows' | 'linux'
 
 export function useLocalSetupFlow() {
   const localModels = useLocalModels()
-  const apiKeys = useApiKeys()
+  const chatModel = useChatModel()
 
   const state = useState<LocalSetupState>('local-setup-state', () => 'runtime_missing')
   const errorMessage = useState<string>('local-setup-error', () => '')
@@ -156,8 +156,8 @@ export function useLocalSetupFlow() {
     const model = localModels.catalog.value.find((m: ModelRecommendation) => m.model_id === modelId)
     if (model?.installed) {
       await localModels.selectModel(modelId)
-      // Sync selection into useApiKeys so ModelSelector reflects it immediately
-      apiKeys.selectModel('ollama', model.litellm_model)
+      // Sync selection into useChatModel so ModelSelector reflects it immediately
+      chatModel.selectModel(model.litellm_model)
       downloadingModelId.value = null
       state.value = 'model_ready'
       return true
@@ -178,9 +178,9 @@ export function useLocalSetupFlow() {
   /** Select an already-installed model */
   async function selectModel(modelId: string): Promise<void> {
     await localModels.selectModel(modelId)
-    // Sync into useApiKeys so ModelSelector reflects it immediately
+    // Sync into useChatModel so ModelSelector reflects it immediately
     const model = localModels.catalog.value.find((m: ModelRecommendation) => m.model_id === modelId)
-    if (model) apiKeys.selectModel('ollama', model.litellm_model)
+    if (model) chatModel.selectModel(model.litellm_model)
     state.value = 'model_ready'
   }
 

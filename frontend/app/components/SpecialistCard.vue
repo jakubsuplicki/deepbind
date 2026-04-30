@@ -101,18 +101,17 @@
 
 <script setup lang="ts">
 import type { SpecialistSummary } from '~/types'
-import { MODEL_CATALOG } from '~/composables/useApiKeys'
-import { PROVIDER_ICONS } from '~/composables/providerIcons'
 
 function modelLabel(dm?: { provider: string; model: string } | null): string {
+  // ADR 015 — single dispatch target; specialist `default_model` is a
+  // legacy carry-over for compatibility with old saved profiles. Strip
+  // the `ollama_chat/` prefix when present, otherwise show the raw tag.
   if (!dm) return ''
-  const catalog = MODEL_CATALOG[dm.provider]
-  return catalog?.find(m => m.id === dm.model)?.label ?? dm.model
+  return dm.model.replace(/^ollama(?:_chat)?\//, '')
 }
 
-function providerIcon(dm?: { provider: string; model: string } | null): string {
-  if (!dm) return ''
-  return (PROVIDER_ICONS as Record<string, string>)[dm.provider] ?? ''
+function providerIcon(_dm?: { provider: string; model: string } | null): string {
+  return ''
 }
 
 defineProps<{
