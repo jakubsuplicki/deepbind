@@ -134,6 +134,26 @@ desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepFilesAI_0.1
 
 ---
 
+## Installing the build
+
+To install the built `.app` into `/Applications` (for local smoke or audit-signal verification), copy with **`ditto`**, not `cp -R`:
+
+```sh
+rm -rf /Applications/DeepFilesAI.app
+ditto desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app /Applications/DeepFilesAI.app
+```
+
+The Apple-notarized staple ticket is stored in extended attributes on the bundle. `cp -R` does **not** preserve xattrs by default and silently drops the ticket — `xcrun stapler validate` will then report *"does not have a ticket stapled to it"* even though the original artifact is correctly stapled. `ditto` preserves xattrs, ACLs, and resource forks. Same caveat applies if you mount the `.dmg` and `cp -R` from `/Volumes/DeepFilesAI/` — round-trip through the DMG mount also strips xattrs unless you `ditto`. (Drag-installing from Finder uses the equivalent of `ditto` and is also fine.)
+
+Verify the install carried the ticket and capabilities through:
+
+```sh
+xcrun stapler validate /Applications/DeepFilesAI.app
+/usr/libexec/PlistBuddy -c "Print :JarvisBundleCapabilities" /Applications/DeepFilesAI.app/Contents/Info.plist
+```
+
+---
+
 ## Audit-signal verification (ADR 015 §F)
 
 After a successful build, every release candidate must pass these four checks before promotion. They mirror the questions a compliance buyer's procurement review will ask.

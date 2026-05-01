@@ -258,12 +258,25 @@ pub fn run() {
                     // backend/scripts/run_frozen.py and ADR 003 §"Negative"
                     // §zombies.
                     let shell_pid = std::process::id().to_string();
+                    // CORS: the bundled webview origin is platform-specific
+                    // (`tauri://localhost` on macOS, `https://tauri.localhost`
+                    // on Windows). Pass both so the same shell binary is
+                    // portable when we add Windows. Dev mode bypasses this
+                    // path entirely (JARVIS_DEV_BACKEND_URL branch above).
+                    // Without this env var the FastAPI default
+                    // `["http://localhost:3000"]` rejects the webview's
+                    // requests with no Access-Control-Allow-Origin header,
+                    // surfacing in the UI as "Failed to fetch model catalog".
                     let sidecar = app
                         .shell()
                         .sidecar("jarvis-sidecar")
                         .map_err(|e| format!("sidecar lookup failed: {e}"))?
                         .env("JARVIS_SHELL_PID", shell_pid)
-                        .env("JARVIS_OLLAMA_BASE_URL", &ollama_base_url);
+                        .env("JARVIS_OLLAMA_BASE_URL", &ollama_base_url)
+                        .env(
+                            "JARVIS_CORS_ORIGINS",
+                            "tauri://localhost,https://tauri.localhost",
+                        );
                     let (rx, child) = sidecar
                         .spawn()
                         .map_err(|e| format!("sidecar spawn failed: {e}"))?;
