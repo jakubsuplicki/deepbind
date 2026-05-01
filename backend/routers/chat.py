@@ -64,7 +64,8 @@ def _prefill_log(
     logger.info(
         "chat_turn session=%s turn=%d sp_hash=%s prefix_stable=%s rb_hash=%s "
         "sp_total_tok=%s sp_ctx_tok=%s ctx_truncated=%s "
-        "prefill_count=%s prefill_ms=%s ttft_ms=%s load_ms=%s decode_tps=%s prefill_tps=%s "
+        "prefill_count=%s prefill_ms=%s ttft_ms=%s load_ms=%s "
+        "eval_count=%s total_ms=%s decode_tps=%s prefill_tps=%s "
         "tool_calls=%s tool_rounds=%s model=%s",
         session_id, turn_no, sp_hash, prefix_stable, rb_hash,
         prompt_stats.get("total_tokens"),
@@ -74,6 +75,15 @@ def _prefill_log(
         round(metrics_acc[1] / 1_000_000, 1) if metrics_acc[5] else None,
         payload.get("ttft_ms"),
         payload.get("load_ms"),
+        # eval_count and total_ms catch the hidden-thinking case: a turn
+        # where ttft is fast and decode_tps is normal, but total_ms is
+        # large and eval_count is much bigger than the visible reply
+        # length, means the model emitted a chain-of-thought block we
+        # stripped from display. Diagnoses Qwen3-class models leaking
+        # thinking despite think:False — happens occasionally on specific
+        # prompts even with the parameter set.
+        payload.get("eval_count"),
+        payload.get("total_ms"),
         payload.get("decode_tps"),
         payload.get("prefill_tps"),
         tool_acc[0] if tool_acc else 0,

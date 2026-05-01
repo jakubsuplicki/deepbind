@@ -238,11 +238,13 @@ watch(
       <button class="chat-panel__ollama-banner-btn" @click="emit('reconnectOllama')">Reconnect</button>
     </div>
 
-    <!-- Slow response indicator for local models -->
-    <div v-if="slowResponse" class="chat-panel__slow-indicator">
-      <span class="chat-panel__slow-icon">⏳</span>
-      <span>{{ slowResponse }}</span>
-    </div>
+    <!-- (Legacy `slowResponse` banner removed 2026-05-01: superseded by
+         ChatFirstTurnWarmup for the cold-bootstrap case + the streaming
+         response itself for warm turns. Two indicators on the same
+         screen for the same wait read as broken UI. The slowResponse
+         ref is still computed in useChat.ts but no longer rendered;
+         keeping the ref for now as a passive signal in case a future
+         surface wants it.) -->
 
     <!-- Sustained-slow advisory (ADR 005 §C trigger 2). Only renders
          when the latest turn's decode_tps for the active model is below
