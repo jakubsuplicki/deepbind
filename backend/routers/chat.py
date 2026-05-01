@@ -740,9 +740,25 @@ async def _handle_message(
     # the legacy `web_search` shape); blank when absent.
     api_key = client_api_key or get_api_key() or ""
 
+    # Per-step latency probe (TEMPORARY) — investigation of build #5 turn 2
+    # showing 25s end-to-end with Ollama reporting only 1.58s of work.
+    # ~23s is being spent in the Python pipeline somewhere; capturing
+    # elapsed-from-start at each major step pinpoints which one. To remove:
+    # delete this block and the `_step` calls below (search "step_log").
+    import time as _time
+    _step_t0 = _time.perf_counter()
+    def _step_log(step: str) -> None:
+        elapsed_ms = (_time.perf_counter() - _step_t0) * 1000.0
+        logger.info(
+            "chat_step session=%s step=%s elapsed_ms=%.1f",
+            session_id, step, elapsed_ms,
+        )
+
     session_service.add_message(session_id, "user", content)
+    _step_log("after_add_message")
     strategy = context_strategy or DEFAULT_STRATEGY
     messages = strategy.assemble(session_service.get_messages(session_id))
+    _step_log("after_strategy_assemble")
     if not isinstance(messages, list):
         raise TypeError(
             f"ContextStrategy {strategy.name!r} returned {type(messages).__name__}; "
@@ -754,6 +770,7 @@ async def _handle_message(
     # effective ceiling so the retrieved-context block can be capped if a
     # huge retrieval would push the prompt past the model's safe window.
     sp_budget_tokens, sp_tokenizer_id = _resolve_system_prompt_budget(provider, model)
+    _step_log("after_resolve_budget")
 
     system_prompt, prompt_stats = await build_system_prompt_with_stats(
         content,
@@ -761,6 +778,7 @@ async def _handle_message(
         system_prompt_budget_tokens=sp_budget_tokens,
         tokenizer_id=sp_tokenizer_id,
     )
+    _step_log("after_build_system_prompt")
 
     # ADR 009 §"Atomicity" — compaction runs ONLY here at the per-turn
     # boundary, never inside _stream_follow_up. Triggered when projected
@@ -780,6 +798,7 @@ async def _handle_message(
         model=model,
         ws=ws,
     )
+    _step_log("after_maybe_compact")
 
     # ADR 009 amendment 2026-05-01 — retrieval lives in the user-message
     # position so the system prompt stays byte-identical across turns and
@@ -790,8 +809,10 @@ async def _handle_message(
     messages = attach_retrieval_to_user_message(
         messages, prompt_stats.get("retrieval_block", "") or ""
     )
+    _step_log("after_attach_retrieval")
     active_specs = specialist_service.get_active_specialists()
     tools = specialist_service.filter_tools(TOOLS, specialists=active_specs)
+    _step_log("after_specialists_filter")
     # Check token budget before dispatch
     budget = check_budget()
     if budget["level"] == "exceeded":
@@ -811,6 +832,7 @@ async def _handle_message(
         base_url=base_url,
         ctx_len_tokens=prompt_stats.get("context_tokens"),
     )
+    _step_log("after_pressure_swap")
     # `floor_refused` is now structurally always False — the auto-downgrade
     # pre-flight check was removed (see _apply_memory_pressure_swap). Kept
     # for callsite stability; if Ollama actually OOMs at load we walk the
@@ -843,6 +865,7 @@ async def _handle_message(
     from services import memory_pressure_monitor as mpm
     text_started = False
     oom_retry_done = False
+    _step_log("before_stream_response")
     while True:
         saw_oom_pre_text = False
         async for event in claude.stream_response(
@@ -969,6 +992,8 @@ async def _handle_message(
     metrics_payload = _build_metrics_payload(metrics_acc)
     if metrics_payload is not None:
         done_fields["metrics"] = metrics_payload
+
+    _step_log("after_stream_complete")
 
     # Prefill-cost diagnostic — fires whether or not Ollama returned timings,
     # so we can also detect "all rounds aborted before usage" cases. See
