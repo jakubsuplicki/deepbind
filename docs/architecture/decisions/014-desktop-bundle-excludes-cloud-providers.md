@@ -1,8 +1,10 @@
 # ADR 014 — Desktop bundle structurally excludes cloud-provider code paths
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 015](015-single-target-local-only-stack.md) (2026-04-30)
 **Date:** 2026-04-30
 **Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) · [ADR 005](005-hardware-tiered-model-stack-and-first-run-policy.md)
+
+> **Note (2026-04-30):** This ADR's dual-target build (a desktop bundle excluding cloud SDKs vs. a cloud-SKU build keeping them) was abandoned in favour of a single local-only build with **no cloud-provider code in the repository**. The amendment that narrowed PyInstaller excludes to keep LiteLLM bundled was unsound — LiteLLM's `__init__.py` imports `openai` at module top, so excluding `openai` broke the bundle. ADR 015 collapsed the two targets and removed `JARVIS_DESKTOP_BUNDLE`, LiteLLM, the duel feature, and all cloud SDKs from the repo. The audit signals defined here (Info.plist capabilities, `find` against the `.app`) are preserved but now correspond to a fixed shape rather than a build-time variant.
 
 ## Context
 

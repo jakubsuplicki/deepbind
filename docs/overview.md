@@ -1,50 +1,70 @@
 ---
 title: Project Overview
-last_reviewed: 2026-04-28
+last_reviewed: 2026-05-01
 ---
 
 ## What this project is
 
-Jarvis is a local-first personal memory, planning, and knowledge system. It provides a browser-based interface to a local Markdown knowledge base, powered by Claude API for conversational retrieval and planning. All user data stays on disk as Markdown files — SQLite and graph layers are derived indexes that can be rebuilt from scratch.
+DeepFilesAI (codename: Jarvis) is a local-first personal memory, planning, and knowledge system shipped as a notarized macOS desktop app. It provides a Tauri-hosted web interface to a local Markdown knowledge base, powered by an Ollama-hosted local LLM that runs in-process on the user's machine. All user data stays on disk as Markdown files — SQLite and graph layers are derived indexes that can be rebuilt from scratch.
+
+Per [ADR 002](architecture/decisions/002-pure-local-product-shape.md) and [ADR 015](architecture/decisions/015-single-target-local-only-stack.md), the v1 product is **pure-local with zero outbound calls by default**: no cloud-provider SDKs in the binary, no LiteLLM, no API-key UI, no cloud-SKU build target. The audit signal is structural — a buyer running `find DeepFilesAI.app -name '*anthropic*' -o -name '*openai*'` gets empty output.
 
 ## Architecture
 
 ```
-Browser (Nuxt 3, SPA)  ──HTTP/WS──▶  FastAPI backend  ──▶  Claude API
-       │                                    │
-       └── Voice (Web Speech API)           ├── SQLite (index/cache)
-                                            ├── Markdown files (source of truth)
-                                            └── graph.json (derived knowledge graph)
+┌─────────────────────────── DeepFilesAI.app ───────────────────────────┐
+│                                                                       │
+│   Tauri shell (Rust)                                                  │
+│     │                                                                 │
+│     ├─ webview (Nuxt 4 SPA, served from .output/public)               │
+│     │     │                                                           │
+│     │     └── HTTP/WS ──▶ jarvis-sidecar (PyInstaller frozen)         │
+│     │                       │                                         │
+│     │                       ├── HTTP ──▶ ollama serve (bundled)       │
+│     │                       │                                         │
+│     │                       ├── Markdown files (canonical store)      │
+│     │                       ├── SQLite (FTS5 index/cache, derived)    │
+│     │                       └── graph.json (derived knowledge graph)  │
+│     │                                                                 │
+│     └─ supervises both sidecars; clean teardown on Cmd+Q              │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
-**Frontend** — Nuxt 3 SPA with Vue 3 composables. No SSR. Communicates with the backend via REST (CRUD) and a single WebSocket (chat streaming). Voice uses browser-native Web Speech API behind provider interfaces.
+**Frontend** — Nuxt 4 SPA with Vue 3 composables. No SSR. Communicates with the backend via REST (CRUD) and a single WebSocket (chat streaming).
 
-**Backend** — FastAPI with 8 routers and ~15 services. Orchestrates retrieval, Claude API calls, tool execution, and file I/O. The chat endpoint streams Claude responses over WebSocket, executes tool calls server-side, and loops back for multi-turn tool use (up to 5 rounds).
+**Backend** — FastAPI sidecar (Python 3.12+) frozen with PyInstaller. Orchestrates retrieval, chat dispatch via the [`OllamaDispatcher`](../backend/services/ollama_dispatcher.py), tool execution, and file I/O. The chat endpoint streams the local model's response over WebSocket, executes tool calls server-side, and loops back for multi-turn tool use (up to 5 rounds).
 
-**Data flow** — User message → hybrid retrieval (FTS5 + graph neighbors) → context assembly → Claude API → streamed response + optional tool calls (write notes, create plans, query graph) → results saved to Markdown files → SQLite re-indexed.
+**Inference** — Ollama 0.22.0 runtime bundled inside the `.app` (under `Contents/Resources/ollama-runtime/`). The Tauri shell spawns it on a private port (`:11435`) on app launch, separate from any user-installed Ollama on `:11434`. Per [ADR 005](architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md), the first-run orchestrator picks a hardware-tiered primary chat model and pulls it on first launch.
+
+**Data flow** — User message → hybrid retrieval (FTS5 + graph neighbors) → context assembly → `OllamaDispatcher` → streamed response + optional tool calls (write notes, create plans, query graph) → results saved to Markdown files → SQLite re-indexed.
 
 ## Key technologies
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend framework | Nuxt 4.4 / Vue 3.5 / TypeScript (strict) |
-| Frontend build | Vite, Nitro dev proxy to backend |
-| Backend framework | FastAPI (Python 3.12+) |
-| AI | Anthropic Claude API (Messages API with tool_use) |
+| Desktop shell | Tauri 2.x (Rust) — signed + notarized for macOS arm64 |
+| Frontend framework | Nuxt 4 / Vue 3.5 / TypeScript (strict) |
+| Frontend build | Vite, static `nuxt generate` for bundling |
+| Backend framework | FastAPI (Python 3.12+), packaged via PyInstaller |
+| Inference runtime | Ollama 0.22.0 (bundled), official `ollama` Python client (Apache-2.0) |
+| Default chat model | Hardware-tiered: `qwen3:8b` (Tier A) / `qwen3:30b-a3b-instruct-2507` (Tier B) / `gpt-oss:120b` (Tier C). User-pinnable. |
+| Embeddings | fastembed ONNX (multilingual MiniLM, bundled — ~240 MB) |
 | Database | SQLite via aiosqlite (FTS5 for search) |
 | Graph | JSON file, visualized with force-graph + Three.js |
-| Voice | Web Speech API (STT + TTS), abstracted behind provider interfaces |
-| Testing | Vitest (frontend), pytest (backend) |
+| NER | spaCy with bundled `en_core_web_sm` + `pl_core_news_sm` lang packs |
 | Markdown | marked + DOMPurify for rendering |
+| Testing | Vitest (frontend), pytest (backend) |
 
 ## Feature documentation
 
-All feature docs are in [docs/features/](features/) and the concept doc is in [docs/concepts/](concepts/). The registry at [docs/.registry.json](../.registry.json) maps source files to their documentation.
+All feature docs are in [docs/features/](features/) and concepts are in [docs/concepts/](concepts/). The registry at [docs/.registry.json](.registry.json) maps source files to their documentation.
 
 | Feature | Doc |
 |---------|-----|
 | App Shell & Navigation | [app-shell.md](features/app-shell.md) |
-| Chat & Claude Integration | [chat.md](features/chat.md) |
+| Chat & LLM Dispatch | [chat.md](features/chat.md) |
+| Local Models (Ollama dispatch + first-run + downgrade ladder) | [local-models.md](features/local-models.md) |
+| Desktop Shell (Tauri + bundled sidecars) | [desktop-shell-graduation.md](features/desktop-shell-graduation.md) |
 | Knowledge Graph | [knowledge-graph.md](features/knowledge-graph.md) |
 | Memory System | [memory.md](features/memory.md) |
 | Planning Service | [planning.md](features/planning.md) |
@@ -52,6 +72,20 @@ All feature docs are in [docs/features/](features/) and the concept doc is in [d
 | Hybrid Retrieval Pipeline | [retrieval.md](features/retrieval.md) |
 | Session Management | [sessions.md](features/sessions.md) |
 | Specialist System | [specialists.md](features/specialists.md) |
-| Voice System | [voice.md](features/voice.md) |
 | Workspace & Onboarding | [workspace-onboarding.md](features/workspace-onboarding.md) |
 | Database Layer (concept) | [database.md](concepts/database.md) |
+
+## Runbooks
+
+| Topic | Doc |
+|---|---|
+| macOS release build (signed + notarized) | [runbooks/release-build-macos.md](runbooks/release-build-macos.md) |
+
+## Architecture decisions
+
+The full ADR history is at [docs/architecture/decisions/](architecture/decisions/). Core decisions for v1:
+
+- **[ADR 002](architecture/decisions/002-pure-local-product-shape.md)** — pure-local product shape (zero outbound calls by default)
+- **[ADR 003](architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md)** — Tauri + sidecars desktop distribution
+- **[ADR 005](architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md)** — hardware-tiered model stack + first-run policy
+- **[ADR 015](architecture/decisions/015-single-target-local-only-stack.md)** — single-target local-only stack (supersedes ADR 014)

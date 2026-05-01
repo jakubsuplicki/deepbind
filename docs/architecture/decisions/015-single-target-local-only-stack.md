@@ -1,6 +1,6 @@
 # ADR 015 — Single-target local-only stack (drop LiteLLM, drop cloud SDKs, drop duel)
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-04-30
 **Related:** [ADR 002](002-pure-local-product-shape.md), [ADR 003](003-desktop-distribution-tauri-and-sidecars.md), [ADR 005](005-hardware-tiered-model-stack-and-first-run-policy.md), [ADR 014](014-desktop-bundle-excludes-cloud-providers.md)
 **Supersedes:** [ADR 014](014-desktop-bundle-excludes-cloud-providers.md) — the build-flag-gated dual-target shape is collapsed into a single local-only target. ADR 014's audit-signal logic is preserved in spirit (cloud capabilities structurally absent) but moved up a layer (no cloud code in the repo, not just no cloud code in the bundle).

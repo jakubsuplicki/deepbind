@@ -4,22 +4,27 @@ status: active
 type: feature
 sources:
 	- backend/services/ollama_service.py
+	- backend/services/ollama_dispatcher.py
+	- backend/services/system_prompt.py
 	- backend/services/first_run_orchestrator.py
 	- backend/services/memory_pressure_monitor.py
 	- backend/routers/local_models.py
 	- backend/routers/chat.py
 	- backend/tests/test_local_models.py
 	- backend/tests/test_local_models_integration.py
+	- backend/tests/test_ollama_dispatcher.py
 	- backend/tests/test_first_run_orchestrator.py
 	- backend/tests/test_memory_pressure_monitor.py
 	- backend/tests/test_chat_memory_pressure.py
 	- frontend/app/composables/useLocalModels.ts
 	- frontend/app/composables/useLocalSetupFlow.ts
 	- frontend/app/composables/useFirstRun.ts
+	- frontend/app/composables/useChatModel.ts
 	- frontend/app/composables/settings/useLightweightMode.ts
 	- frontend/app/composables/useChat.ts
 	- frontend/app/components/OllamaStatus.vue
 	- frontend/app/components/LocalModelCard.vue
+	- frontend/app/components/ModelSelector.vue
 	- frontend/app/components/PullProgress.vue
 	- frontend/app/components/OnboardingLocalFlow.vue
 	- frontend/app/components/ChatPanel.vue
@@ -27,8 +32,7 @@ sources:
 	- frontend/app/pages/main.vue
 	- frontend/app/pages/settings.vue
 	- frontend/app/types/index.ts
-	- frontend/tests/composables/useLocalModelsIntegration.test.ts
-depends_on: [chat, api-key-management, workspace-onboarding]
+depends_on: [chat, workspace-onboarding]
 last_reviewed: 2026-04-30
 last_updated: 2026-04-30
 ---
@@ -39,7 +43,7 @@ Run Jarvis with on-device AI via Ollama — no API key required.
 
 ## Summary
 
-The local models feature adds support for running Jarvis with locally-hosted LLMs via Ollama. It provides hardware detection, a curated catalog of model presets with hardware-based recommendations, model download with streaming progress, seamless integration with the existing multi-provider chat pipeline via LiteLLM, tool calling mode detection per model, runtime health monitoring with reconnection flow, and slow response indicators for local inference.
+Per [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md), Ollama is the **only** chat-dispatch target — there is no multi-provider abstraction, no LiteLLM, and no cloud SDKs in the codebase. This feature owns the full local stack: hardware detection, a curated catalog of model presets with hardware-based recommendations, the [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py) that streams `ollama.AsyncClient` events into the router's `StreamEvent` shape, model download with streaming progress, tool-calling mode detection per model, runtime health monitoring with reconnection flow, and slow response indicators.
 
 The catalog is split into two layers: **user-pickable chat models** (6 entries with verified Ollama tags) and **internal entries** (9 entries — Qwen3-2507 split fine-tunes, Qwen3-14B, Qwen3-30B-A3B-Thinking-2507, gpt-oss-120b, Gemma 4 26B-A4B, Granite 4.0 H-Micro/H-Tiny/H-Small — all carry `internal=True` because their Ollama registry tags are unverified). The user-facing endpoint filters internal entries out so a stale-tag pull never 404s the customer; callers that need the full universe (e.g. footprint planning, ADR 005 first-run policy, downgrade ladder lookup) pass `build_catalog(include_internal=True)`. Each internal entry carries a `TODO: verify Ollama tag` comment marking the verification gap; promotion to user-pickable requires `ollama pull <tag>` against the live registry, then flipping `internal=False`.
 
@@ -257,12 +261,12 @@ Pick the largest passing model. Persist the choice. Re-run on Ollama / OS / hard
 
 ### Tool Calling Mode
 
-Each model gets a `tool_mode` classification:
-- **`native_qwen3`** — model exposes native function-calling in the Qwen3 family format (e.g. qwen3:8b, qwen3:14b, qwen3:30b-a3b-instruct-2507, gemma4 variants, devstral). The dispatcher's adapter standardises on this format.
-- **`adapted`** — tool calls are adapted via JSON-mode prompting through LiteLLM (e.g. qwen3:4b, ministral-3:8b).
-- **`excluded_from_tools`** — very small models (< 2 GB) that don't reliably tool-call (e.g. qwen3:1.7b).
+Each model gets a `tool_mode` classification consumed by the [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py):
+- **`native_qwen3`** — model exposes native function-calling in the Qwen3 family format (e.g. qwen3:8b, qwen3:14b, qwen3:30b-a3b-instruct-2507, gemma4 variants, devstral). The dispatcher passes the tool spec straight to `ollama.AsyncClient.chat(tools=…)` and consumes `tool_calls` chunks from the stream.
+- **`adapted`** — small models (e.g. qwen3:4b, ministral-3:8b) that handle tool calls via JSON-mode prompting; the dispatcher wraps the tool spec into the system prompt and parses the model's JSON output back into a synthetic `tool_use` block.
+- **`excluded_from_tools`** — very small models (< 2 GB) that don't reliably tool-call (e.g. qwen3:1.7b). The dispatcher refuses to attach tools at all.
 
-`_tool_mode_for()` derives tool_mode from the catalog entry's `native_tools` flag and `download_size_gb`.
+`_tool_mode_for()` derives tool_mode from the catalog entry's `native_tools` flag and `download_size_gb`. Ollama's wire format does not carry tool-call ids (only `function.name` + `function.arguments`); the dispatcher synthesizes a stable id per tool call at emit time so downstream `tool_use` ↔ `tool_result` correlation stays intact.
 
 Old taxonomy → new taxonomy mapping (for any external integrations that still consume the previous values):
 
@@ -274,11 +278,11 @@ Old taxonomy → new taxonomy mapping (for any external integrations that still 
 
 ### Runtime Health Monitoring
 
-`useLocalModels.ts` provides `startHealthPolling()` / `stopHealthPolling()` that periodically probe the Ollama runtime. When `activeProvider === 'ollama'`, the main chat page starts polling every 30s. If Ollama becomes unreachable, `ollamaDown` state triggers a banner in ChatPanel with Reconnect/Switch to Cloud options.
+`useLocalModels.ts` provides `startHealthPolling()` / `stopHealthPolling()` that periodically probe the Ollama runtime. The main chat page starts polling every 30s on mount (per ADR 015 there is only one provider, so polling is unconditional). If Ollama becomes unreachable, `ollamaDown` state triggers a banner in ChatPanel with a single Reconnect action.
 
 ### Slow Response Indicator
 
-`useChat.ts` starts a timer when sending a message with the ollama provider. After 10s with no text_delta, it shows "Local model is loading...". After 30s, it shows an extended message suggesting a smaller model. Cleared immediately when the first text arrives or the response completes.
+`useChat.ts` starts a timer when sending a message. After 10s with no text_delta, it shows "Local model is loading...". After 30s, it shows an extended message suggesting a smaller model. Cleared immediately when the first text arrives or the response completes.
 
 ### Model Pull
 
@@ -286,24 +290,35 @@ Old taxonomy → new taxonomy mapping (for any external integrations that still 
 
 ### Chat Integration
 
-`_make_llm()` in `chat.py` routes `provider == "ollama"` to `LLMService` with `api_base` set to the Ollama URL and a 1800s timeout (vs 120s for cloud). No API key is required — the sentinel value `"ollama"` satisfies LiteLLM's non-empty requirement. The privacy gate (`assert_provider_allowed`) runs at the top of `_make_llm` so blocked providers raise `PrivacyBlockedError` before LLM construction.
+[`_make_llm()`](../../backend/routers/chat.py) constructs an [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py) — there is no `provider` branch because Ollama is the sole target. The dispatcher uses the official `ollama==0.6.2` Python package (Apache-2.0; the only net-new transitive dep over what FastAPI/httpx already pull in). Streaming, tool-call decoding, and connection lifecycle are upstream-tested code that tracks the Ollama server we're already pinned to.
+
+The dispatcher's responsibilities:
+- adapter from `ollama.AsyncClient.chat(stream=True)` events → the existing `StreamEvent` shape ([`backend/services/system_prompt.py`](../../backend/services/system_prompt.py)) so the chat router and WS event consumers see no behavioural change vs. the pre-ADR-015 path;
+- Anthropic-style ↔ Ollama-style message converter (the chat router passes Anthropic-shaped tool-result blocks back as `{role: "tool", tool_name, content}` messages);
+- tool-call id synthesis (Ollama's wire format has no ids — see Tool Calling Mode above);
+- error mapping: `ollama.RequestError`, `ollama.ResponseError`, `httpx.TimeoutException`, `httpx.ConnectError` are all collapsed to `StreamEvent(type="error", content=…)` at the adapter boundary, which feeds the OOM-retry loop in `_handle_message`.
+
+Token counting uses `tiktoken` for prompt-budget predictions; the official client's `prompt_eval_count` / `eval_count` fields on the final chunk are the authoritative post-hoc counts.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | [ollama_service.py](../../backend/services/ollama_service.py) | All Ollama logic: hardware/runtime probes, catalog, scoring, pull, config |
+| [ollama_dispatcher.py](../../backend/services/ollama_dispatcher.py) | Streaming adapter: `ollama.AsyncClient` events → `StreamEvent` shape; tool-call id synthesis; error mapping |
+| [system_prompt.py](../../backend/services/system_prompt.py) | `StreamEvent` dataclass + `build_system_prompt` rescued from the deleted `services/claude.py` |
 | [local_models.py](../../backend/routers/local_models.py) | REST API endpoints for local model management |
-| [llm_service.py](../../backend/services/llm_service.py) | LLMConfig extended with `api_base` and `timeout`; model resolution for ollama |
-| [chat.py](../../backend/routers/chat.py) | `_make_llm()` handles ollama provider; `base_url` passed through WS messages |
+| [chat.py](../../backend/routers/chat.py) | `_make_llm()` constructs the dispatcher (single Ollama path); `base_url` passed through WS messages |
 | [test_local_models.py](../../backend/tests/test_local_models.py) | 70 tests covering scoring, probes, config, routing |
-| [useLocalModels.ts](../../frontend/app/composables/useLocalModels.ts) | Frontend composable: hardware/runtime/catalog state, pull SSE, model selection |
+| [test_ollama_dispatcher.py](../../backend/tests/test_ollama_dispatcher.py) | Adapter unit tests against a mocked `ollama.AsyncClient` |
+| [useLocalModels.ts](../../frontend/app/composables/useLocalModels.ts) | Frontend composable: hardware/runtime/catalog state, pull SSE |
+| [useChatModel.ts](../../frontend/app/composables/useChatModel.ts) | Active-model selection (replaces the deleted `useApiKeys`); persists to localStorage |
 | [OllamaStatus.vue](../../frontend/app/components/OllamaStatus.vue) | Runtime status card (not installed / not running / running) with hardware info |
 | [LocalModelCard.vue](../../frontend/app/components/LocalModelCard.vue) | Model recommendation card with compatibility badge, tool mode badge, download/use actions |
+| [ModelSelector.vue](../../frontend/app/components/ModelSelector.vue) | Header model picker — local-only loop, no provider switching |
 | [PullProgress.vue](../../frontend/app/components/PullProgress.vue) | Download progress bar with percentage and byte counts |
 | [OnboardingLocalFlow.vue](../../frontend/app/components/OnboardingLocalFlow.vue) | Local model setup wizard for onboarding (hardware detect, Ollama check, recommend, download) |
 | [test_local_models_integration.py](../../backend/tests/test_local_models_integration.py) | 22 tests: tool_mode, timeouts, warm-up, test endpoint, catalog |
-| [useLocalModelsIntegration.test.ts](../../frontend/tests/composables/useLocalModelsIntegration.test.ts) | 6 tests: ollama chat, slow indicator, health polling |
 
 ## API
 
@@ -322,11 +337,11 @@ Old taxonomy → new taxonomy mapping (for any external integrations that still 
 
 ## Gotchas
 
-- Ollama must be running separately — Jarvis doesn't start it
-- Local models on CPU can be very slow (2–10 tok/s); 600s timeout is intentional
-- Not all models support native function calling; `tool_mode` field in catalog classifies support level
-- `done` event includes `tool_mode` for ollama provider so frontend can display tool support info
-- `psutil` is required for hardware probe; falls back to OS commands if missing
-- `api_base` must be passed to LiteLLM via `acompletion()` kwargs
-- Health polling runs every 30s only when provider is ollama; stopped on unmount or provider change
-- `base_url` from query/body is normalized and restricted to local loopback endpoints for safety
+- Bundled Ollama runtime under `desktop/src-tauri/binaries/ollama-runtime/` is launched by the Tauri shell at app start (per [ADR 003](../architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md) §G); for backend-only dev the user must run Ollama themselves.
+- Local models on CPU can be very slow (2–10 tok/s); the dispatcher's per-call timeout (1800s) is intentional.
+- Not all models support native function calling; `tool_mode` field in catalog classifies support level.
+- `done` event includes `tool_mode` so the frontend can display tool-support info.
+- `psutil` is required for hardware probe; falls back to OS commands if missing.
+- Tool-call ids are synthesized client-side — Ollama's wire format omits them. The dispatcher emits a UUID-derived stable id per call so `tool_use` ↔ `tool_result` round-trips intact.
+- Health polling runs unconditionally every 30s while the chat page is mounted (no provider gate per ADR 015).
+- `base_url` from query/body is normalized and restricted to local loopback endpoints for safety.

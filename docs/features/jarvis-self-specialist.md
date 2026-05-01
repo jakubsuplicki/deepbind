@@ -29,7 +29,7 @@ sent in the payload (`name`, `icon`, `tools`, …) is silently ignored.
 
 ## How the prompt gets assembled
 
-In [backend/services/claude.py](../../backend/services/claude.py)
+In [backend/services/system_prompt.py](../../backend/services/system_prompt.py)
 `build_system_prompt_with_stats`:
 
 ```
@@ -101,7 +101,7 @@ covers:
 | File                                                                                             | Role                                       |
 |--------------------------------------------------------------------------------------------------|--------------------------------------------|
 | [backend/services/specialist_service.py](../../backend/services/specialist_service.py)           | `JARVIS_SELF_ID`, builtin entry, protections, `update_jarvis_self`, `get_jarvis_self` |
-| [backend/services/claude.py](../../backend/services/claude.py)                                   | Wires override + extension into `build_system_prompt_with_stats` |
+| [backend/services/system_prompt.py](../../backend/services/system_prompt.py)                     | Wires override + extension into `build_system_prompt_with_stats` |
 | [backend/routers/specialists.py](../../backend/routers/specialists.py)                           | `GET/PUT /api/specialists/jarvis/config` + 403/400 mappings |
 | [backend/models/schemas.py](../../backend/models/schemas.py)                                     | `JarvisSelfConfigRequest/Response`, `JARVIS_PROMPT_MAX_CHARS` |
 | [frontend/app/components/JarvisSelfCard.vue](../../frontend/app/components/JarvisSelfCard.vue)   | Dedicated card UI                          |

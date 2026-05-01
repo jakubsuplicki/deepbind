@@ -6,12 +6,11 @@ sources:
   - backend/routers/chat.py
   - backend/services/chat/__init__.py
   - backend/services/chat/context_strategy.py
-  - backend/services/claude.py
+  - backend/services/ollama_dispatcher.py
+  - backend/services/system_prompt.py
   - backend/services/compaction_service.py
   - backend/services/token_counting.py
   - backend/services/retrieval/sessions.py
-  - backend/services/llm_service.py
-  - backend/services/_anthropic_client.py
   - backend/services/tools/__init__.py
   - backend/services/tools/definitions.py
   - backend/services/tools/executor.py
@@ -21,16 +20,16 @@ sources:
   - frontend/app/composables/useWebSocket.ts
   - frontend/app/components/ChatPanel.vue
   - frontend/app/components/TraceList.vue
-depends_on: [retrieval, sessions, specialists, api-key-management, preferences-settings]
-last_updated: 2026-04-29
-last_reviewed: 2026-04-29
+depends_on: [retrieval, sessions, specialists, preferences-settings, local-models]
+last_updated: 2026-05-01
+last_reviewed: 2026-05-01
 ---
 
 # Chat & LLM Integration
 
 ## Summary
 
-This is the core conversation loop of Jarvis: a WebSocket channel carries user messages to the backend, which retrieves relevant memory context, calls a LLM provider with streaming enabled, and forwards response tokens back to the browser in real time. The backend supports multiple LLM providers (Anthropic, OpenAI, Google AI) via LiteLLM, with Anthropic as the native default. Claude can also invoke tools during a response — reading or writing notes, querying the graph, creating plans — with the tool call chain completing before the browser finalises the message.
+This is the core conversation loop of Jarvis: a WebSocket channel carries user messages to the backend, which retrieves relevant memory context, dispatches to the local Ollama runtime with streaming enabled, and forwards response tokens back to the browser in real time. Per [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md), Ollama is the **only** dispatch target — no LiteLLM, no cloud SDKs, no provider abstraction. The model can invoke tools during a response — reading or writing notes, querying the graph, creating plans — with the tool call chain completing before the browser finalises the message.
 
 ## How It Works
 
@@ -44,15 +43,15 @@ A heartbeat ping is sent from the frontend every 25 seconds to keep the connecti
 
 For each user message the backend (`_handle_message` in `chat.py`) runs the following sequence:
 
-1. **Provider routing** — The WS message may include `provider`, `model`, and `api_key` fields. If `provider` is non-Anthropic (e.g. "openai" or "google"), an `LLMService` is created wrapping LiteLLM. If provider is "anthropic" or absent, the native `ClaudeService` is used for best streaming fidelity. Client-provided keys are used per-request and never persisted; if no key is provided, the server-stored Anthropic key is used as fallback.
+1. **Dispatcher construction** — The WS message carries `model` (the user-pinned chat model, e.g. `qwen3:8b`) and `base_url` (the Ollama endpoint — defaults to the loopback runtime spawned by the Tauri shell). `_make_llm` constructs an [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py); there is no provider branch and no API-key path because Ollama runs in-process on the user's machine.
 2. **Context assembly via `ContextStrategy`** — Session history is fetched via `session_service.get_messages` and passed through the active `ContextStrategy` (default: `FullHistoryStrategy`, which is identity). The strategy is the swap point through which compaction and retrieval-substitution alternatives plug in (ADR 010). Production today behaves exactly as before; the eval harness injects alternative strategies via the `context_strategy` parameter on `_handle_message`.
 3. **Context retrieval** — `build_system_prompt` calls `build_context` (from `context_builder`) to find relevant notes and appends them to the base system prompt. If a specialist is active, its prompt fragment is injected first.
 4. **Tool filtering** — `specialist_service.filter_tools` narrows the full `TOOLS` list to those permitted by the active specialist (or all tools if none is active).
-5. **First LLM stream** — The service's `stream_response` opens a streaming request. `text_delta` events are forwarded to the WebSocket immediately as they arrive. For non-Anthropic providers, `LLMService` converts Anthropic-format tools to OpenAI format and handles message format conversion automatically.
-6. **Tool call handling** — If the LLM emits a `tool_use` block, its JSON input is accumulated across streaming deltas by `_ToolAccumulator` (ClaudeService) or `_LiteLLMToolAccumulator` (LLMService) and yielded as a single `StreamEvent` only when complete. The router then executes the tool, appends both the assistant tool-use block and the tool result to the message list, and calls `_stream_follow_up` to get the LLM's next response.
+5. **First LLM stream** — `OllamaDispatcher.stream_response` opens an `ollama.AsyncClient.chat(stream=True)` request. The adapter maps Ollama chunks to `StreamEvent` shapes (`text_delta`, `tool_use`, `done`, `error`) so the chat router and WS event consumers see the same surface they did before ADR 015.
+6. **Tool call handling** — If the model emits a tool call, the dispatcher synthesizes a stable id (Ollama's wire format omits ids), accumulates the JSON `function.arguments`, and yields a `tool_use` `StreamEvent` once complete. The router executes the tool, appends both the assistant tool-use block and the tool result to the message list, and calls `_stream_follow_up` to get the LLM's next response. The Anthropic-style tool_result block is converted to Ollama's `{role: "tool", tool_name, content}` shape at the dispatcher boundary.
 7. **Recursive tool rounds** — `_stream_follow_up` is recursive. Each recursive call increments a `depth` counter. The chain is cut off at `MAX_TOOL_ROUNDS = 5` to prevent runaway loops. Within the loop, `_compact_stale_tool_results` collapses older tool_result payloads to a short reminder (the model has already read them) — this is an in-loop optimization separate from the `ContextStrategy` swap point above.
 8. **Session save** — `add_message` auto-persists after each append (crash protection). On WebSocket disconnect the session is additionally written to `memory/` as a Markdown note.
-9. **Token logging** — Accumulated `input_tokens` + `output_tokens` from all rounds in a turn are written to `app/logs/token_usage.jsonl` via `log_usage` with `provider` and `model` fields for accurate cost tracking. Non-Anthropic providers use LiteLLM's `model_cost` for pricing estimates.
+9. **Token logging** — Per-turn `input_tokens` + `output_tokens` are written to `app/logs/token_usage.jsonl` via `log_usage`. Counts come from Ollama's authoritative `prompt_eval_count` / `eval_count` fields on the final chunk; `tiktoken` is retained only for prompt-budget predictions during compaction. `cost_estimate` is invariantly `0.0` (the local model is free at inference time).
 
 ### ContextStrategy — the compaction swap point
 
@@ -86,7 +85,7 @@ Long-running conversations eventually exceed the chat model's safe context windo
 How a turn is compacted:
 
 1. **Strategy assembly first.** `ContextStrategy.assemble` runs as before. Compaction is a *separate* step that runs after the strategy returns and before dispatch, so any future strategy that wants to compact in its own way is independent of (and composes with) the production compaction policy.
-2. **Active-model lookup.** `_resolve_system_prompt_budget` and `_maybe_compact` both look up the active local model in `MODEL_CATALOG` via `get_model_by_litellm`. Cloud providers (Anthropic, OpenAI) bypass compaction — they manage their own context server-side and the catalog only carries entries for local Ollama models.
+2. **Active-model lookup.** `_resolve_system_prompt_budget` and `_maybe_compact` both look up the active local model in `MODEL_CATALOG` via `get_model_by_litellm` (the helper retains its name for backwards-compat; the lookup keys are still in the form `ollama_chat/<tag>`).
 3. **System-prompt budget enforcement.** `build_system_prompt_with_stats` now accepts `system_prompt_budget_tokens` and `tokenizer_id`. The chat router computes the budget as `0.30 × effective_context_tokens` of the active model. When the assembled prompt exceeds budget, `_enforce_system_prompt_budget` truncates the retrieved-context block (not the base persona, not the language reminder) until it fits, keeping highest-priority retrieved content first. The `prompt_stats["context_truncated"]` field surfaces whether truncation kicked in.
 4. **Per-turn compaction.** `compact_messages` in `backend/services/compaction_service.py` is called with `effective_context_tokens`, `tokenizer_id`, and the system-prompt token count. It strips `<think>...</think>` scratchpad blocks unconditionally, then checks if the projected token total exceeds the proactive trigger (default 70%). When the trigger fires, it cuts at the `recent_n`-th-to-last *real* user-turn boundary (tool_result-only user messages don't count), reaches into the markdown vault via `find_earlier_turn_context` for the top `top_k` matches against the latest user turn, and prepends a synthesized user-role substitution block.
 5. **Atomicity (ADR 009 §"Atomicity").** Compaction runs **only** at the per-turn boundary in `_handle_message`, never inside the tool-call loop in `_stream_follow_up`. Mid-loop compaction would risk re-assembling between a `tool_use` block and its matching `tool_result`, which the provider rejects. The mid-loop `_compact_stale_tool_results` handles the only safe in-loop compaction (collapsing prior tool_result payloads).
@@ -109,15 +108,15 @@ The eval-pinned canonical chat model is currently `qwen3:14b`. This was changed 
 
 The "single hard-coded canonical model" choice is the wrong shape long-term — different customer environments have different `think: false` behavior, hardware tiers, and RAM budgets. [ADR 012](../architecture/decisions/012-chat-model-self-test.md) files the install-time self-test that replaces this static choice with a per-machine probe-driven pick. Implementation: [`backend/services/chat_model_probe.py`](../../backend/services/chat_model_probe.py).
 
-### Error handling in ClaudeService
+### Error handling in OllamaDispatcher
 
-All Anthropic SDK exceptions are caught and converted to `StreamEvent(type="error")` with user-readable messages. Rate limits, 529 overload responses, 401 authentication failures, and generic 5xx errors each get distinct copy. The frontend detects whether an error message is retryable (matches "try again", "overloaded", "rate limit", or "reconnect") and shows a Retry button if so.
+`ollama.RequestError`, `ollama.ResponseError`, `httpx.TimeoutException`, and `httpx.ConnectError` are all caught at the adapter boundary and converted to `StreamEvent(type="error", content=…)` with user-readable messages. The OOM-retry loop in `_handle_message` walks one further rung of the downgrade ladder when an OOM-shaped error fires before any text streamed (see [docs/features/local-models.md](local-models.md#memory-pressure-monitor--downgrade-ladder-runtime-adr-005-c)). The frontend detects whether an error message is retryable (matches "try again", "out of memory", "reconnect") and shows a Retry button if so.
 
 ### Frontend state
 
 `useChat` owns all conversation state: the message list, the streaming `currentResponse` buffer, loading/error flags, and `toolActivity` (a label like "Searching notes…" shown while a tool runs). It delegates connection management entirely to `useWebSocket`. When a `done` event arrives, `currentResponse` is flushed into the `messages` array and loading state clears.
 
-`ChatPanel.vue` renders messages with `marked` + `DOMPurify` for safe Markdown output. The streaming response is rendered live with a blinking cursor appended. A URL detection feature watches the input field: if a URL is typed, a toolbar appears offering to save it to memory via `ingestUrl` (bypassing Claude entirely — this is a direct REST call to the ingest endpoint).
+`ChatPanel.vue` renders messages with `marked` + `DOMPurify` for safe Markdown output. The streaming response is rendered live with a blinking cursor appended. A URL detection feature watches the input field: if a URL is typed, a toolbar appears offering to save it to memory via `ingestUrl` (bypassing the chat dispatch — this is a direct REST call to the ingest endpoint).
 
 ### Token budget constants
 
@@ -131,19 +130,18 @@ All Anthropic SDK exceptions are caught and converted to `StreamEvent(type="erro
 | `SPECIALIST_BUDGET` | 500 tokens |
 | `HISTORY_BUDGET` | 500 tokens |
 
-`check_budget()` is now called in `chat.py` before each Claude API call. When the accumulated token count exceeds `TOTAL_BUDGET`, the call is blocked and an error event is sent to the client. When the count exceeds the warning threshold, a notification event is sent but the call proceeds. Token usage is logged at `$3/MTok` input and `$15/MTok` output (claude-sonnet-4 pricing at time of writing).
+`check_budget()` is called in `chat.py` before each dispatch. When the accumulated token count exceeds `TOTAL_BUDGET`, the call is blocked and an error event is sent to the client. When the count exceeds the warning threshold, a notification event is sent but the call proceeds. `cost_estimate` on every entry is `0.0` — local inference has no per-token cost — but the per-conversation token total is still useful for prompt-budgeting and for surfacing "this conversation is getting expensive in context" warnings.
 
 ## Key Files
 
-- `backend/routers/chat.py` — WebSocket endpoint, per-message orchestration, multi-provider routing (`_make_llm` builds the LLMService for the active provider; privacy gate enforced at the top), recursive tool chain loop, session save-on-disconnect
-- `backend/services/claude.py` — `ClaudeService` wrapping the Anthropic streaming API; `_ToolAccumulator` for reassembling fragmented tool-input JSON; `build_system_prompt` for context injection
-- `backend/services/llm_service.py` — `LLMService` wrapping LiteLLM for OpenAI/Google AI/any LiteLLM-supported provider; `LLMConfig` dataclass; `_LiteLLMToolAccumulator` for OpenAI-format streamed tool calls; format converters (`convert_tools_anthropic_to_openai`, `convert_messages_for_litellm`)
-- `backend/services/_anthropic_client.py` — Sync `anthropic.Anthropic` factory, present for test-mocking intent but unused by the codebase (all live paths use `AsyncAnthropic` directly in `ClaudeService`)
-- `backend/services/tools/definitions.py` — Anthropic-format input schemas for every tool exposed to Claude (the `TOOLS` list).
+- `backend/routers/chat.py` — WebSocket endpoint, per-message orchestration, single-target dispatch (`_make_llm` constructs the [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py)), recursive tool chain loop, OOM-retry ladder integration, session save-on-disconnect.
+- `backend/services/ollama_dispatcher.py` — Streaming adapter from `ollama.AsyncClient.chat(stream=True)` events to the existing `StreamEvent` shape; tool-call id synthesis; Anthropic ↔ Ollama message converter; error mapping. ADR 015 §B.
+- `backend/services/system_prompt.py` — `StreamEvent` dataclass; `build_system_prompt` / `build_system_prompt_with_stats` for context injection; `_SYSTEM_PROMPT_BUDGET_FRACTION` and `_enforce_system_prompt_budget` for budget-aware truncation. Rescued from the deleted `services/claude.py` per ADR 015 chunk 4.
+- `backend/services/tools/definitions.py` — Tool input schemas (Anthropic-style; the dispatcher remaps them to Ollama's `function`-shaped tool spec at the boundary).
 - `backend/services/tools/executor.py` — `execute_tool` dispatcher: maps tool names to underlying service calls (memory CRUD, graph queries, web search, Jira). All tool errors are converted to user-readable strings here.
 - `backend/services/tools/__init__.py` — Re-exports `TOOLS` and `execute_tool` so callers can keep using `from services.tools import …` after the package split.
-- `backend/services/web_search.py` — Thin DuckDuckGo wrapper with privacy gating (`services/privacy.py`). Returns `[{title, url, snippet}, …]` or `[{"error": "<reason>"}]` when blocked.
-- `backend/services/token_tracking.py` — Append-only JSONL usage log with per-day and all-time aggregation helpers; records `provider` and `model` per entry; uses LiteLLM pricing for non-Anthropic providers
+- `backend/services/web_search.py` — Thin DuckDuckGo wrapper. The offline-mode entitlement check ([`services/privacy.py`](../../backend/services/privacy.py)) gates outbound network use; when blocked, returns `[{"error": "<reason>"}]`.
+- `backend/services/token_tracking.py` — Append-only JSONL usage log with per-day and all-time aggregation helpers; records `provider="ollama"` and `model` per entry. `cost_estimate` is invariantly `0.0` — there is no inference cost on local models.
 - `frontend/app/composables/useWebSocket.ts` — Persistent WebSocket with heartbeat, exponential-backoff reconnect, and multi-listener message dispatch
 - `frontend/app/composables/useChat.ts` — Conversation state manager; maps raw WebSocket events to UI state; handles retry logic
 - `frontend/app/components/ChatPanel.vue` — Message list, streaming cursor, typing indicator, tool activity label, error bar with retry, URL ingest toolbar

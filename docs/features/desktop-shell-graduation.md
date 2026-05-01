@@ -2,14 +2,16 @@
 title: Desktop Shell Graduation (ADR 003 spike → v1)
 type: tracker
 status: in-progress
-last_updated: 2026-04-30
+last_updated: 2026-05-01
 related_adrs:
   - 003-desktop-distribution-tauri-and-sidecars
+  - 005-hardware-tiered-model-stack-and-first-run-policy
+  - 015-single-target-local-only-stack
 related_features:
   - desktop-shell-spike
 ---
 
-> **2026-04-30 status pulse:** G4a (Ollama process plumbing) is functionally green and locally verified — bundled `ollama serve` 0.22.0 on `:11435`, sidecar handshake injects `JARVIS_OLLAMA_BASE_URL`, clean teardown via Cmd+Q. The remaining work for G4 is split into two ADRs (005 hardware-tiered first-run policy, 014 cloud-provider exclusion) and the G4b first-run pull UX. Re-notarization of the new bundle is a separate user-authorized step.
+> **2026-05-01 status pulse:** ADR 015 landed — the build is now a single local-only target with no `JARVIS_DESKTOP_BUNDLE` flag, no cloud-provider SDKs anywhere in the repo, no LiteLLM, and no duel feature. ADR 014 (the previous dual-target shape) is superseded; its Info.plist `JarvisBundleCapabilities` audit signal is preserved as a static array. G4b first-run pull UX is functionally complete in code (orchestrator + wizard + ladder + memory-pressure auto-downgrade); G4b6 (cold-launch verification on a notarized bundle) is the remaining dev-loop step.
 
 ## Purpose
 
@@ -28,7 +30,8 @@ The spike proved the architecture compiles, signs, notarizes, and supervises chi
 | **G2b** | Bundle fastembed ONNX + spaCy weights inside installer (ADR 003 §A) | ✅ done | 2026-04-29 |
 | **G2c** | Notarize the new ~352 MB bundle (re-run build-notarized.sh) | ✅ done | 2026-04-30 |
 | **G4a** | Bundled Ollama process plumbing — extract + re-sign + spawn + supervise | ✅ done (local verify) | 2026-04-30 |
-| **G4b** | First-run model-pull UX — hardware-tiered, ladder-aware, signed manifest | ☐ pending (gated on ADRs 005 + 014) | — |
+| **G4b1–b5** | First-run orchestrator + wizard + ladder + memory-pressure swap + lightweight mode | ✅ done | 2026-04-30 |
+| **G4b6** | Cold-launch verification on the notarized bundle (fresh `<app_data>`) | ☐ pending (gated on chunk 7 of ADR 015) | — |
 
 Sequencing rationale (per [CLAUDE.md](../../CLAUDE.md) §"Pre-release" — rank by dependencies + ADR completeness, not user perception):
 1. **G3 first** — pure frontend, validated through dev mode against the live `backend/main.py` without any PyInstaller rebuild. Closes the "frontend half" of ADR 003 §D's runtime-config injection contract.
@@ -281,15 +284,25 @@ Landed 2026-04-30 (local verification — re-notarization tracked separately). B
 - **Re-notarize the new ~745 MB bundle** as G2c was done — separate user-authorized step.
 - **Surface system-Ollama coexistence note** in the runtime UI (ADR 003 follow-up #3) — when a user has Ollama on `:11434`, mention it next to GPU/VRAM stats.
 
-### G4b ☐ — First-run model-pull UX (gated on ADRs 005 + 014)
+### G4b1–b5 ✅ — First-run orchestrator + ladder + lightweight mode
 
-**Goal:** On first launch, probe the user's hardware → recommend the top fitting Tier A/B/C model from ADR 005 → pull recommended-top + at least one smaller fallback so memory-pressure downgrade has somewhere to go → block UI on minimum-viable model only, stream the rest in the background.
+Backend orchestrator and frontend wizard landed per ADR 005 §B and §C. Implementation lives in [`backend/services/first_run_orchestrator.py`](../../backend/services/first_run_orchestrator.py), [`backend/services/memory_pressure_monitor.py`](../../backend/services/memory_pressure_monitor.py), [`frontend/app/composables/useFirstRun.ts`](../../frontend/app/composables/useFirstRun.ts), and [`frontend/app/components/OnboardingLocalFlow.vue`](../../frontend/app/components/OnboardingLocalFlow.vue). See [docs/features/local-models.md](local-models.md) for the full pipeline description (state machine, marker semantics, skip path, downgrade ladder, OOM-retry, lightweight mode).
 
-**Concrete moves (sketch — locks in once ADRs 005 + 014 are approved):**
-1. New service `backend/services/first_run_orchestrator.py`: state machine `idle → probing → pulling_primary → pulling_fallbacks → ready`.
-2. New endpoint `POST /api/local/first-run/start` → kicks off ADR-005-driven model selection + pull pipeline; `GET /api/local/first-run/status` for streaming progress.
-3. Frontend modal in `OnboardingLocalFlow.vue` with progress bars per blob, hardware-tier explanation, and "skip — I'll pick later" escape hatch (stays on minimum model).
-4. Marker file `<app_data>/.first_run_complete` so subsequent launches skip the pull pipeline; the existing chat-model-probe (ADR 012) takes over for re-evaluation.
+### G4b6 ☐ — Cold-launch verification on the notarized bundle
+
+**Goal:** prove the §B pipeline drives the wizard correctly on a clean install — fresh `<app_data>`, fresh keychain, no prior marker — when the binary is the notarized DMG (not a dev-mode launch).
+
+**Done when**
+- [ ] Notarized DMG installs cleanly on a stock macOS arm64 box.
+- [ ] First launch shows the OnboardingLocalFlow wizard (no marker present) and auto-kicks the first-run orchestrator.
+- [ ] Primary pull lands; chat is reachable via the `chatReady` release.
+- [ ] Background fallback pull and chat-model probe complete without blocking the chat UI.
+- [ ] Marker file `<app_data>/.first_run_complete` is written.
+- [ ] Second launch skips the wizard entirely (marker-present early return).
+- [ ] `find DeepFilesAI.app -name "*anthropic*" -o -name "*openai*" -o -name "*litellm*"` → empty (ADR 015 §F audit signal 2).
+- [ ] `defaults read DeepFilesAI.app/Contents/Info.plist JarvisBundleCapabilities` → `["local-llm", "vault-markdown", "knowledge-graph", "semantic-search"]`.
+
+Gated on the notarized build artifact from ADR 015 chunk 7.
 
 ### Original "Concrete moves" (kept for reference; G4a satisfies the process-plumbing half)
 

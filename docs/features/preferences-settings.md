@@ -117,7 +117,6 @@ The estimated cost hint uses a blended rate of roughly $9 per million tokens (av
 
 | Section component | Owning feature |
 |---|---|
-| `ProvidersSection.vue` | api-key-management |
 | `LocalModelsSection.vue` | local-models |
 | `WorkspaceSection.vue` | workspace-onboarding |
 | `VoiceSection.vue` | voice |

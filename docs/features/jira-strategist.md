@@ -88,34 +88,11 @@ The tools system was refactored from a single `tools.py` into a package:
 - All tools attach enrichment data (risk, ambiguity, business_area) when available
 - `jira_describe_issue` also returns soft links from graph and related notes/decisions
 
-## Duel Presets
+## Duel presets — removed in ADR 015
 
-Four built-in duel presets for strategic Jira debates:
+The four duel presets (delivery-vs-risk, product-vs-tech, pragmatist-vs-refactorer, growth-vs-stability) and the underlying duel/council feature were removed in [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md). Loading two local models simultaneously violates the [G4b4 memory pressure mechanism](../architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md), and a "second opinion" between two Qwen3 variants of the same family is no longer the multi-cloud-provider differentiation duel was originally built for. The feature is recoverable from the pre-deletion git history if a future product reason surfaces.
 
-| Preset | Side A | Side B |
-|--------|--------|--------|
-| delivery-vs-risk | Delivery Planner | Risk Analyst |
-| product-vs-tech | Product Strategist | Tech Lead |
-| pragmatist-vs-refactorer | Pragmatist | Refactor Specialist |
-| growth-vs-stability | Growth PM | Stability Guardian |
-
-Managed by `services/duel_presets.py`. Seeded as JSON in `memory/duel_presets/`.
-
-### API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/chat/duel-presets` | GET | List all presets (seeds built-ins first) |
-| `/api/chat/duel-presets/{id}` | GET | Get single preset or 404 |
-
-## Duel Verdict → Graph Edges
-
-When a duel verdict is saved, `council.py` now:
-
-1. Extracts issue keys from the debate text via regex
-2. Calculates `vote_margin = abs(a - b) / max(a + b, 1)`
-3. Emits `duel_recommendation` edges from the verdict note to each referenced issue node
-4. Weight: `min(vote_margin + 0.5, 1.0)`, origin: `"derived"`
+The four preset specialists themselves can be invoked individually via the regular specialist UI; only the side-by-side duel comparison is gone.
 
 ## Key Files
 
@@ -125,7 +102,4 @@ When a duel verdict is saved, `council.py` now:
 | [tools/definitions.py](../../backend/services/tools/definitions.py) | Tool JSON schemas (CORE_TOOLS + JIRA_TOOLS) |
 | [tools/executor.py](../../backend/services/tools/executor.py) | Tool dispatch |
 | [tools/jira_tools.py](../../backend/services/tools/jira_tools.py) | 6 Jira tool implementations |
-| [duel_presets.py](../../backend/services/duel_presets.py) | Preset management |
-| [council.py](../../backend/services/council.py) | Duel orchestrator + verdict edges |
-| [chat.py](../../backend/routers/chat.py) | Duel preset API endpoints |
 | [test_jira_strategist.py](../../backend/tests/test_jira_strategist.py) | 29 tests |

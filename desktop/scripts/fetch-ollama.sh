@@ -32,6 +32,11 @@
 # this exact case (allow-jit + allow-unsigned-executable-memory +
 # allow-dyld-environment-variables + disable-library-validation; see
 # ADR 003 §B + the .plist comment block).
+#
+# Every codesign call below uses `--timestamp` to embed a secure
+# timestamp from Apple's RFC-3161 TSA. Without it Apple's notary
+# rejects with "The signature does not include a secure timestamp"
+# on every nested .so / .dylib (verified 2026-04-30).
 
 set -euo pipefail
 
@@ -166,7 +171,7 @@ while IFS= read -r f; do
         --force \
         --options runtime \
         --sign "$SIGNING_IDENTITY" \
-        --timestamp=none \
+        --timestamp \
         "$f"
 done < <(find "$RUNTIME_DIR" \( -name "*.dylib" -o -name "*.so" \) -type f)
 
@@ -177,7 +182,7 @@ while IFS= read -r f; do
     codesign \
         --force \
         --sign "$SIGNING_IDENTITY" \
-        --timestamp=none \
+        --timestamp \
         "$f" 2>/dev/null || true   # .metallib codesign is best-effort; some
                                    # versions of notarytool tolerate them
                                    # unsigned. Don't fail the build.
@@ -191,7 +196,7 @@ codesign \
     --options runtime \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
-    --timestamp=none \
+    --timestamp \
     "$RUNTIME_DIR/ollama"
 
 # Verify the binary's signature is well-formed before declaring success.
