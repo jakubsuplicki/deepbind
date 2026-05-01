@@ -1,5 +1,6 @@
 <template>
   <div class="spec-page">
+   <div class="spec-page__inner">
     <!-- Header -->
     <header class="spec-page__header">
       <div class="spec-page__header-top">
@@ -92,6 +93,7 @@
       @confirm="confirmDelete"
       @cancel="deletingSpec = null"
     />
+   </div>
   </div>
 </template>
 
@@ -215,25 +217,31 @@ async function handleSave(data: Record<string, unknown>, stagedFiles: File[]) {
 
 <style scoped>
 .spec-page {
+  height: calc(100vh - 40px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.spec-page__inner {
   width: 680px;
   margin: 0 auto;
   padding: 2.25rem 0 3rem;
 }
 
 @media (max-width: 780px) {
-  .spec-page {
+  .spec-page__inner {
     width: 540px;
   }
 }
 
 @media (max-width: 600px) {
-  .spec-page {
+  .spec-page__inner {
     width: 420px;
   }
 }
 
 @media (max-width: 460px) {
-  .spec-page {
+  .spec-page__inner {
     width: 320px;
   }
 }

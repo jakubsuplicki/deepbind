@@ -152,39 +152,12 @@ async def _swap_with_warning_side_effect(*, ws, provider, model, base_url, ctx_l
     return model, False
 
 
-def test_preflight_floor_refusal_short_circuits_before_llm():
-    """When the helper signals floor refusal, the error+done sequence fires
-    without the stream loop running."""
-    instance = MagicMock()
-    instance.stream_response = _stream(
-        StreamEvent(type="text_delta", content="should not appear"),
-    )
-    with patch("routers.chat.get_api_key", return_value="sk-ant-test-key"), \
-         patch("routers.chat._make_llm", return_value=instance), \
-         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=(None, True))):
-
-        with TestClient(app) as client:
-            with client.websocket_connect("/api/chat/ws") as ws:
-                ws.receive_json()
-                ws.send_json({
-                    "content": "hi",
-                    "provider": "ollama",
-                    "model": "ollama_chat/qwen3:30b-a3b-instruct-2507",
-                })
-                events = []
-                while True:
-                    msg = ws.receive_json()
-                    events.append(msg)
-                    if msg["type"] == "done":
-                        break
-
-        types = [e["type"] for e in events]
-        # First event must be the floor-refusal error, then done. No text_delta.
-        assert "error" in types
-        assert "text_delta" not in types
-        # The error message names the floor-refusal user remediation.
-        err = next(e for e in events if e["type"] == "error")
-        assert "insufficient ram" in err["content"].lower() or "free up ram" in err["content"].lower()
+# Pre-flight floor-refusal test removed: ADR 005 §C trigger 2 was disabled
+# because gating dispatch on `psutil.available × headroom` ignores the
+# reclaimable inactive/cached pool that Ollama mmap-loading uses on macOS,
+# producing the very failure mode it was meant to prevent. The OOM-retry
+# path (trigger 1, see test_oom_pre_text_triggers_ladder_retry below) is
+# the real safety net.
 
 
 # ── OOM-during-inference retry (ADR 005 §C trigger 1) ───────────────────────

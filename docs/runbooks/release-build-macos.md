@@ -113,7 +113,7 @@ The script is **idempotent** at the cache level: re-running with no source chang
 
 2. **`[2/5]` Build the PyInstaller sidecar** — `desktop/scripts/build-sidecar.sh` invokes PyInstaller against [`desktop/sidecar/jarvis-sidecar.spec`](../../desktop/sidecar/jarvis-sidecar.spec). The spec collects the entire `backend/` package, hidden-imports the lazy/plugin-registry imports (uvicorn loops, fastembed ONNX, spaCy lang packs, keyring backends), bundles the fastembed ONNX cache as a `_bundled_models/fastembed` data dir, and excludes `tkinter` / `matplotlib` / `PIL` to keep the bundle honest. Output: `desktop/src-tauri/binaries/jarvis-sidecar-aarch64-apple-darwin`. The spec runs a smoke-test on the produced binary (boots the FastAPI app on a random port and waits for `JARVIS_BACKEND_READY`); failure here aborts the whole build.
 
-3. **`[3/5]` Stage the bundled Ollama runtime** — `desktop/scripts/fetch-ollama.sh` downloads upstream `Ollama-darwin.zip` (pinned to v0.22.0 with SHA-256 `a410e2f7…`), extracts the runtime payload (`ollama` binary + `libggml-*` dylibs/.so + `mlx_metal_v3/v4` Metal runners), wipes the prior runtime dir, copies fresh files in, and re-signs every Mach-O with the Developer ID identity using `--options runtime --timestamp`. The `--timestamp` flag is load-bearing: without it Apple's notary rejects nested signatures with "The signature does not include a secure timestamp" (verified 2026-04-30).
+3. **`[3/5]` Stage the bundled Ollama runtime** — `desktop/scripts/fetch-ollama.sh` downloads upstream `Ollama-darwin.zip` (pinned to **v0.18.0** with SHA-256 `97641e4f…`), extracts the runtime payload (`ollama` binary + `libggml-*` dylibs/.so + `mlx_metal_v3/v4` Metal runners), wipes the prior runtime dir, copies fresh files in, and re-signs every Mach-O with the Developer ID identity using `--options runtime --timestamp`. The `--timestamp` flag is load-bearing: without it Apple's notary rejects nested signatures with "The signature does not include a secure timestamp" (verified 2026-04-30). The 0.18.0 pin is load-bearing for Apple M5 support — see the comment block in `fetch-ollama.sh`. Versions ≥ 0.21.2 SIGABRT in `ggml_metal_library_init` on M5 because the bundled GGML metal kernels removed the embedded-fallback path that 0.18.0 still has.
 
 4. **`[4/5]` Tauri build** — `npx tauri build --target aarch64-apple-darwin`. Compiles `src-tauri/`, bundles the `.app`, signs everything with hardened runtime + the four entitlements in [`desktop/src-tauri/macos/Entitlements.plist`](../../desktop/src-tauri/macos/Entitlements.plist), and produces a `.dmg`. Tauri's auto-notarize step is intentionally skipped (we don't pass `APPLE_ID` / `APPLE_PASSWORD` when the keychain profile is in use; Tauri's bundler doesn't speak `--keychain-profile`).
 
@@ -249,6 +249,55 @@ Run with `-vvv` for the verbose verdict. Common causes:
 - The plist edit at step `[4b/5]` invalidated the signature and the re-sign step was skipped (script bug — file an issue).
 - Quarantine xattr was applied after the build by Safari/Finder/iCloud (run `xattr -cr <app>` to strip).
 
+### `tauri build` fails on `.dmg` bundling — `bundle_dmg.sh` returns non-zero
+
+**Critical**: this failure mode silently invalidates the entire build, including the `.app` artifact you actually need.
+
+**Symptoms** in the build log:
+
+```
+Bundling DeepFilesAI_0.1.0_aarch64.dmg (...bundle/dmg/DeepFilesAI_0.1.0_aarch64.dmg)
+ Running bundle_dmg.sh
+failed to bundle project error running bundle_dmg.sh: …
+```
+
+**Why it cascades**: step `[4/5]` is `tauri build`, which runs *both* the `.app` and the `.dmg` bundlers in sequence. The DMG step shells out to a forked `create-dmg` script that uses `hdiutil` to mount/format/unmount a scratch volume. `hdiutil` is occasionally flaky (transient resource-busy errors, leftover mounts on the build box, sandbox issues). When it fails, `tauri build` exits non-zero, and because `build-notarized.sh` runs under `set -euo pipefail`, **everything downstream is skipped**: step `[4b/5]` (`JarvisBundleCapabilities` Info.plist injection), step `[5a/5]` (`.app` notarize + staple), step `[5b/5]` (`.dmg` notarize + staple). You walk away thinking the build crashed cleanly, but you're left with a locally-signed-only `.app` missing the capabilities array — fails audit signal #4 and rejects from offline Gatekeeper.
+
+**Recovery path** (resume from the surviving `.app`):
+
+```sh
+APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app"
+SIGN="Developer ID Application: EXAMPLE (TEAMID)"
+INFO_PLIST="$APP/Contents/Info.plist"
+
+# 1. Inject capabilities (step [4b/5])
+/usr/libexec/PlistBuddy -c "Delete :JarvisBundleCapabilities" "$INFO_PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :JarvisBundleCapabilities array" "$INFO_PLIST"
+for cap in local-llm vault-markdown knowledge-graph semantic-search; do
+    /usr/libexec/PlistBuddy -c "Add :JarvisBundleCapabilities: string $cap" "$INFO_PLIST"
+done
+
+# 2. Re-sign — touching Info.plist invalidates the signature
+codesign --force --sign "$SIGN" --options runtime --timestamp \
+    --entitlements desktop/src-tauri/macos/Entitlements.plist "$APP"
+
+# 3. Notarize + staple (step [5a/5])
+APP_ZIP="$(mktemp -u).zip"
+ditto -c -k --keepParent "$APP" "$APP_ZIP"
+xcrun notarytool submit "$APP_ZIP" --keychain-profile notarytool-profile --wait
+rm -f "$APP_ZIP"
+xcrun stapler staple "$APP"
+```
+
+After this you have a fully audit-clean `.app` but no `.dmg`. For a real release you still need the `.dmg` — investigate the `hdiutil` failure (check `mount`, `hdiutil info`, the build box's `/private/tmp` for leftover scratch images) and re-run `bash desktop/scripts/build-notarized.sh`. The script is idempotent: the `.app` notary submission goes through cleanly a second time.
+
+**Hardening to do** (architectural — file an issue): the `.app` should not be hostage to the `.dmg`. Either:
+
+1. Split the Tauri invocation into `tauri build --bundles app` (release-critical, must succeed) followed by `tauri build --bundles dmg` (distribution-only, allowed to fail with a loud warning).
+2. Move the capabilities + notary steps to run between the two bundlers, so a `.dmg` failure leaves a fully usable `.app` behind.
+
+Today the script's coupling means a transient `hdiutil` blip — which has nothing to do with our code — can block a release. We can't afford this.
+
 ### Apple ID app-specific password expired
 
 Apple silently invalidates app-specific passwords on Apple ID password change. Generate a new one and re-run `xcrun notarytool store-credentials notarytool-profile …`.
@@ -264,17 +313,20 @@ Notary is the most variable step (Apple's queue depth varies wildly by time of d
 The runtime is pinned by version + SHA-256 in [`desktop/scripts/fetch-ollama.sh`](../../desktop/scripts/fetch-ollama.sh):
 
 ```sh
-OLLAMA_VERSION="0.22.0"
-OLLAMA_DARWIN_ZIP_SHA256="a410e2f722fb25d6f87ad2ac23a9d44e330b078762e19bfe5a3b0162d236b278"
+OLLAMA_VERSION="0.18.0"
+OLLAMA_DARWIN_ZIP_SHA256="97641e4f0e163b6b549dcfe0765595073dea0f38154617b72279450363f5ff31"
 ```
+
+**Apple M5 constraint** — the pin sits at 0.18.0 deliberately. Versions ≥ 0.21.2 ship a bundled GGML metal-kernel library whose `MPPTensorOpsMatMul2dImpl` instantiations fail Apple's Metal 4 framework on M5 with a `bfloat`/`half` static_assert. The runner subprocess SIGABRTs in `ggml_metal_library_init`. Confirmed on this M5 box with both upstream 0.21.2 (homebrew) and 0.22.0. The 0.18.0 build hits the same source-compile error but falls back to an embedded prebuilt metal library — that fallback path was removed in later versions.
 
 To bump:
 
 1. Update `OLLAMA_VERSION`, blank `OLLAMA_DARWIN_ZIP_SHA256`.
 2. Run the script — it will fail with a SHA-mismatch error and print the actual SHA of the upstream zip.
 3. Audit the new artifact (read the upstream release notes; check Ollama's signature on the upstream zip if you're paranoid about supply chain).
-4. Commit `OLLAMA_VERSION` and `OLLAMA_DARWIN_ZIP_SHA256` together in one diff.
-5. Re-run the full build pipeline — the bumped runtime version will trigger re-extract + re-sign + re-notarize.
+4. **Verify on M5** before committing — extract `Ollama.app/Contents/Resources/ollama`, run it manually with `OLLAMA_HOST=127.0.0.1:11435 OLLAMA_MODELS=<dir> ./ollama serve` and `curl -X POST http://127.0.0.1:11435/api/generate -d '{"model":"qwen3:8b","prompt":"hi","stream":false}'`. If it returns `model failed to load`, the new version still has the bug — don't bump.
+5. Commit `OLLAMA_VERSION` and `OLLAMA_DARWIN_ZIP_SHA256` together in one diff.
+6. Re-run the full build pipeline — the bumped runtime version will trigger re-extract + re-sign + re-notarize.
 
 Bumps that change the upstream layout (e.g. the runtime payload moves out of `Ollama.app/Contents/Resources/`) will fail the layout check at lines 98–103 of `fetch-ollama.sh` with `error: extracted layout doesn't match expected …`. Update the staging copy logic to match the new layout, then re-pin.
 

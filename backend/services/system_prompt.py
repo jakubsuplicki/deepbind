@@ -143,7 +143,14 @@ class StreamEvent:
 
     * text_delta → `content` carries the streamed text fragment.
     * tool_use → `name`, `tool_input`, `tool_use_id` describe the tool call.
-    * usage → `input_tokens`, `output_tokens` carry the post-hoc counts.
+    * usage → `input_tokens`, `output_tokens` carry the post-hoc counts;
+      the `*_duration_ns` fields carry Ollama's authoritative per-stage
+      timings when the runtime exposes them (set only on the final
+      Ollama chunk where `done=True` — earlier chunks never carry
+      durations regardless of how partial the round was). They surface
+      as the per-turn telemetry line in the chat UI and feed the
+      observed-vs-baseline health watcher (ADR 005 §C trigger 2 —
+      replaces the disabled pre-flight RAM check).
     * error → `content` carries a user-facing message.
     """
 
@@ -154,6 +161,10 @@ class StreamEvent:
     tool_use_id: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    eval_duration_ns: Optional[int] = None
+    prompt_eval_duration_ns: Optional[int] = None
+    load_duration_ns: Optional[int] = None
+    total_duration_ns: Optional[int] = None
 
 
 # ── Budget enforcement ──────────────────────────────────────────────────────

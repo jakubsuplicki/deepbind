@@ -65,6 +65,38 @@ const persistedRecord = computed(() => probe.status.value?.persisted ?? null)
 
 const hasResult = computed(() => persistedRecord.value !== null)
 
+// Onboarding verdict pulled out of the dominant verdict-card and re-rendered
+// as a single discreet line under the "Open Jarvis" CTA. The user's chat
+// model is already pinned by the orchestrator's primary pull, so the probe
+// is supplementary — it shouldn't compete with the "Jarvis is ready" headline.
+const onboardingSummaryText = computed(() => {
+  const r = persistedRecord.value
+  if (!r) return ''
+  const total = r.candidates_evaluated?.length ?? 0
+  const passed = r.candidates_evaluated?.filter(c => c.verdict === 'pass').length ?? 0
+  if (r.recommended_model) {
+    return `${r.recommended_model} passed · ${passed}/${total} candidates`
+  }
+  if (r.safe_fallback_used) {
+    return `0/${total} outperformed default — using safe fallback`
+  }
+  return `${passed}/${total} candidates passed`
+})
+
+const onboardingSummaryMeta = computed(() => {
+  const r = persistedRecord.value
+  if (!r) return ''
+  const parts: string[] = []
+  if (r.timestamp_utc) {
+    parts.push(new Date(r.timestamp_utc).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    }))
+  }
+  if (r.ollama_version) parts.push(`Ollama ${r.ollama_version}`)
+  if (r.ram_gb) parts.push(`${r.ram_gb} GB`)
+  return parts.join(' · ')
+})
+
 function evidenceLine(e: ChatModelProbeEvidence): string {
   const parts: string[] = []
   if (e.warm_short_total_ms != null) {
@@ -110,8 +142,67 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
       >Cancel</button>
     </div>
 
-    <!-- Verdict + evidence -->
-    <template v-else>
+    <!-- Live evidence — only WHILE running. Stops accumulating once the
+         probe finishes; the post-run summary supersedes it. -->
+    <div
+      v-if="probe.running.value && isOnboarding && probe.events.value.length"
+      class="probe-panel__live-events"
+    >
+      <p
+        v-for="(event, idx) in probe.events.value"
+        :key="idx"
+        class="probe-panel__live-event"
+      >
+        <template v-if="event.event === 'candidate_start'">
+          <span class="probe-panel__live-arrow">→</span>
+          <span class="probe-panel__live-model">{{ event.model }}</span>
+        </template>
+        <template v-else-if="event.event === 'candidate_evidence'">
+          <span :class="event.evidence.verdict === 'pass' ? 'probe-panel__live-pass' : 'probe-panel__live-fail'">
+            {{ event.evidence.verdict === 'pass' ? '✓' : '✗' }}
+          </span>
+          <span class="probe-panel__live-model">{{ event.evidence.model }}</span>
+          <span class="probe-panel__live-sep">—</span>
+          <span class="probe-panel__live-verdict">{{ verdictLabel[event.evidence.verdict] ?? event.evidence.verdict }}</span>
+        </template>
+      </p>
+    </div>
+
+    <!-- Onboarding post-run summary: a single quiet line under the CTA.
+         Click to expand the candidate evidence list. The user's chat model
+         is already pinned by the orchestrator; this is supplementary diagnostics. -->
+    <details
+      v-if="!probe.running.value && isOnboarding && hasResult"
+      class="probe-panel__summary"
+    >
+      <summary class="probe-panel__summary-row">
+        <span class="probe-panel__summary-caret" aria-hidden="true">▸</span>
+        <span class="probe-panel__summary-label">Probe</span>
+        <span class="probe-panel__summary-text">{{ onboardingSummaryText }}</span>
+        <span v-if="onboardingSummaryMeta" class="probe-panel__summary-meta">{{ onboardingSummaryMeta }}</span>
+      </summary>
+      <ul
+        v-if="persistedRecord?.candidates_evaluated.length"
+        class="probe-panel__evidence-list probe-panel__evidence-list--onboarding"
+      >
+        <li
+          v-for="ev in persistedRecord.candidates_evaluated"
+          :key="ev.model"
+          class="probe-panel__evidence-line"
+        >
+          <span :class="ev.verdict === 'pass' ? 'probe-panel__live-pass' : 'probe-panel__live-fail'">
+            {{ ev.verdict === 'pass' ? '✓' : '✗' }}
+          </span>
+          <span class="probe-panel__evidence-model">{{ ev.model }}</span>
+          <span class="probe-panel__evidence-sep">·</span>
+          <span class="probe-panel__evidence-verdict">{{ verdictLabel[ev.verdict] ?? ev.verdict }}</span>
+          <span v-if="evidenceLine(ev)" class="probe-panel__evidence-detail">{{ evidenceLine(ev) }}</span>
+        </li>
+      </ul>
+    </details>
+
+    <!-- Settings variant — verdict card + evidence + override + actions. -->
+    <template v-if="!probe.running.value && !isOnboarding">
       <div v-if="hasResult" class="probe-panel__verdict-card" :class="{
         'probe-panel__verdict-card--pass': persistedRecord?.recommended_model,
         'probe-panel__verdict-card--fallback': persistedRecord?.safe_fallback_used,
@@ -140,18 +231,11 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
         </div>
       </div>
 
-      <!-- No prior probe -->
       <div v-else class="probe-panel__empty">
-        <p class="probe-panel__empty-text">
-          No probe has run yet on this machine.
-        </p>
+        <p class="probe-panel__empty-text">No probe has run yet on this machine.</p>
       </div>
 
-      <!-- Re-run trigger banner -->
-      <div
-        v-if="probe.needsRerun.value && !probe.running.value && !isOnboarding"
-        class="probe-panel__rerun-banner"
-      >
+      <div v-if="probe.needsRerun.value" class="probe-panel__rerun-banner">
         <span class="probe-panel__rerun-icon">⚠️</span>
         <div class="probe-panel__rerun-info">
           <p class="probe-panel__rerun-title">A re-test is recommended</p>
@@ -161,8 +245,7 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
         </div>
       </div>
 
-      <!-- Evidence list (settings only, after a run has completed) -->
-      <div v-if="!isOnboarding && hasResult && persistedRecord?.candidates_evaluated.length" class="probe-panel__evidence">
+      <div v-if="hasResult && persistedRecord?.candidates_evaluated.length" class="probe-panel__evidence">
         <h4 class="probe-panel__evidence-title">Candidates evaluated</h4>
         <ul class="probe-panel__evidence-list">
           <li
@@ -181,27 +264,7 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
         </ul>
       </div>
 
-      <!-- Live evidence during run (onboarding) -->
-      <div v-if="isOnboarding && probe.events.value.length" class="probe-panel__live-events">
-        <p
-          v-for="(event, idx) in probe.events.value"
-          :key="idx"
-          class="probe-panel__live-event"
-        >
-          <template v-if="event.event === 'candidate_start'">
-            → {{ event.model }}
-          </template>
-          <template v-else-if="event.event === 'candidate_evidence'">
-            <span :class="event.evidence.verdict === 'pass' ? 'probe-panel__live-pass' : 'probe-panel__live-fail'">
-              {{ event.evidence.verdict === 'pass' ? '✓' : '✗' }}
-            </span>
-            {{ event.evidence.model }} — {{ verdictLabel[event.evidence.verdict] ?? event.evidence.verdict }}
-          </template>
-        </p>
-      </div>
-
-      <!-- Override picker (settings only, when result exists) -->
-      <div v-if="!isOnboarding && hasResult && installedCandidates.length > 1" class="probe-panel__override">
+      <div v-if="hasResult && installedCandidates.length > 1" class="probe-panel__override">
         <label class="probe-panel__override-label">Override recommendation</label>
         <select
           class="probe-panel__override-select"
@@ -217,10 +280,8 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
         </select>
       </div>
 
-      <!-- Action buttons -->
       <div class="probe-panel__actions">
         <button
-          v-if="!isOnboarding"
           class="probe-panel__primary-btn"
           :disabled="probe.running.value"
           @click="handleRunProbe"
@@ -228,11 +289,11 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
           {{ hasResult ? 'Re-run probe' : 'Run probe' }}
         </button>
       </div>
-
-      <p v-if="probe.error.value" class="probe-panel__error">
-        {{ probe.error.value }}
-      </p>
     </template>
+
+    <p v-if="probe.error.value" class="probe-panel__error">
+      {{ probe.error.value }}
+    </p>
   </div>
 </template>
 
@@ -242,6 +303,9 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
   flex-direction: column;
   gap: 0.75rem;
   margin-top: 0.85rem;
+  /* The onboarding card centers its prose; the probe panel is a technical
+     readout and must not inherit that — undo here so descendants ground left. */
+  text-align: left;
 }
 
 .probe-panel--onboarding {
@@ -499,33 +563,182 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-/* Live events (onboarding) */
+/* Live events (onboarding, during run only) — terminal-style readout
+   with a left rule reading like a code-fence so the diagnostic block
+   reads as console output, not body prose. */
 .probe-panel__live-events {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.78rem;
+  gap: 0.15rem;
+  font-size: 0.76rem;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   color: var(--text-secondary);
-  padding: 0.5rem 0.65rem;
+  padding: 0.55rem 0.75rem 0.55rem 0.85rem;
   border-radius: 6px;
-  background: var(--bg-base);
-  border: 1px solid var(--border-subtle);
-  max-height: 140px;
+  background: rgba(2, 254, 255, 0.025);
+  border: 1px solid var(--neon-cyan-15);
+  border-left: 2px solid var(--neon-cyan-30);
+  max-height: 160px;
   overflow-y: auto;
+  text-align: left;
 }
 
 .probe-panel__live-event {
   margin: 0;
-  line-height: 1.5;
+  line-height: 1.55;
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+
+.probe-panel__live-arrow {
+  color: var(--neon-cyan-60);
+  width: 0.85em;
+  display: inline-block;
+}
+
+.probe-panel__live-model {
+  color: var(--text-primary);
+}
+
+.probe-panel__live-sep {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.probe-panel__live-verdict {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.72rem;
 }
 
 .probe-panel__live-pass {
   color: #34d399;
+  width: 0.85em;
+  display: inline-block;
+  text-align: center;
 }
 
 .probe-panel__live-fail {
-  color: rgba(248, 113, 113, 0.9);
+  color: rgba(248, 113, 113, 0.85);
+  width: 0.85em;
+  display: inline-block;
+  text-align: center;
+}
+
+/* Onboarding post-run summary — single line under the CTA, expandable.
+   Quiet by default so it doesn't compete with "Jarvis is ready". */
+.probe-panel__summary {
+  border: none;
+  margin-top: 0.15rem;
+  text-align: left;
+}
+
+.probe-panel__summary-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.7rem 0.45rem 0.6rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-base);
+  cursor: pointer;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  list-style: none;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.probe-panel__summary-row::-webkit-details-marker { display: none; }
+.probe-panel__summary-row::marker { content: ''; }
+
+.probe-panel__summary-row:hover {
+  background: var(--neon-cyan-08);
+  border-color: var(--neon-cyan-15);
+}
+
+.probe-panel__summary-caret {
+  color: var(--neon-cyan-60);
+  font-size: 0.7rem;
+  transition: transform 0.15s ease;
+  display: inline-block;
+  width: 0.7em;
+}
+
+.probe-panel__summary[open] .probe-panel__summary-caret {
+  transform: rotate(90deg);
+}
+
+.probe-panel__summary-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--neon-cyan-60);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.probe-panel__summary-text {
+  flex: 1;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.probe-panel__summary-meta {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.probe-panel__evidence-list--onboarding {
+  margin: 0.55rem 0 0;
+  padding: 0.55rem 0 0.55rem 0.85rem;
+  border-left: 2px solid var(--neon-cyan-15);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.72rem;
+}
+
+.probe-panel__evidence-line {
+  display: grid;
+  grid-template-columns: 0.85em auto auto 1fr;
+  align-items: baseline;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.probe-panel__evidence-sep {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.probe-panel__evidence-list--onboarding .probe-panel__evidence-model {
+  color: var(--text-primary);
+}
+
+.probe-panel__evidence-list--onboarding .probe-panel__evidence-verdict {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.probe-panel__evidence-list--onboarding .probe-panel__evidence-detail {
+  grid-column: 1 / -1;
+  margin-left: 1.3rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  opacity: 0.75;
 }
 
 /* Override */

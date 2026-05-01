@@ -225,6 +225,15 @@ class OllamaDispatcher:
                 "messages": ollama_messages,
                 "stream": True,
                 "keep_alive": self.config.keep_alive,
+                # Suppress qwen3-style chain-of-thought. Without this the
+                # model emits a `<think>…</think>` block before the actual
+                # answer; in /api/chat that surfaces as `message.thinking`
+                # tokens with `message.content` empty for several seconds.
+                # Visible UX symptom: 5–10 s of dead air per turn before
+                # the first content delta. The chat-model-probe (ADR 012)
+                # validates that catalog models honor this — if a model
+                # leaks thinking despite `think: False` it fails the probe.
+                "think": False,
                 "options": {
                     "num_predict": self.config.max_tokens,
                     "temperature": self.config.temperature,
@@ -252,12 +261,31 @@ class OllamaDispatcher:
                             tool_use_id=_synthesize_tool_call_id(),
                         )
 
-                # Final chunk carries `done=True` plus authoritative token counts.
+                # Final chunk carries `done=True` plus authoritative token
+                # counts and per-stage timings. The durations feed the
+                # per-turn telemetry line in the chat UI and the
+                # observed-tok/s health watcher (ADR 005 §C trigger 2):
+                #
+                #   eval_duration         — decode pass (output token gen)
+                #   prompt_eval_duration  — prefill pass (input encode)
+                #   load_duration         — model load; ~0 when warm,
+                #                           non-zero when Ollama re-mmapped
+                #                           weights between turns (a memory-
+                #                           pressure proxy).
+                #   total_duration        — wall clock end-to-end
+                #
+                # All four are nanoseconds in the Ollama wire format. We
+                # forward them verbatim and let the chat router compute
+                # decode_tps / TTFT in one place.
                 if chunk.done and (chunk.prompt_eval_count is not None or chunk.eval_count is not None):
                     yield StreamEvent(
                         type="usage",
                         input_tokens=chunk.prompt_eval_count or 0,
                         output_tokens=chunk.eval_count or 0,
+                        eval_duration_ns=getattr(chunk, "eval_duration", None),
+                        prompt_eval_duration_ns=getattr(chunk, "prompt_eval_duration", None),
+                        load_duration_ns=getattr(chunk, "load_duration", None),
+                        total_duration_ns=getattr(chunk, "total_duration", None),
                     )
 
             yield StreamEvent(type="done")

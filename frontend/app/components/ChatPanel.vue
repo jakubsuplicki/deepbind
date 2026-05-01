@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import type { ChatMessage, OrbState, UrlIngestResult } from '~/types'
+import type { ChatMessage, ChatTurnMetrics, OrbState, UrlIngestResult } from '~/types'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { useChatHealth } from '~/composables/useChatHealth'
 import { useSpecialists } from '~/composables/useSpecialists'
 
 marked.setOptions({ breaks: true, gfm: true })
@@ -33,7 +34,54 @@ function formatTime(iso?: string): string {
   })
 }
 
+// Per-turn telemetry helpers — render a compact mono readout next to the
+// model label (`12.4 t/s · 0.85s`). The full breakdown lives in the
+// title attribute so the bubble stays uncluttered. Hidden when
+// decode_tps is missing (empty turn / no timings reported).
+function formatTtft(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return ''
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(2)}s`
+}
+
+function metricsTooltip(m?: ChatTurnMetrics): string {
+  if (!m) return ''
+  const parts: string[] = []
+  if (m.decode_tps != null) parts.push(`Decode: ${m.decode_tps.toFixed(2)} tok/s (${m.eval_count} tokens)`)
+  if (m.prefill_tps != null) parts.push(`Prefill: ${m.prefill_tps.toFixed(0)} tok/s (${m.prompt_eval_count} tokens)`)
+  parts.push(`TTFT: ${formatTtft(m.ttft_ms)}`)
+  if (m.load_ms > 1) parts.push(`Load: ${formatTtft(m.load_ms)} (cold)`)
+  parts.push(`Total: ${formatTtft(m.total_ms)}`)
+  return parts.join('\n')
+}
+
 const { activeSpecialists, deactivate } = useSpecialists()
+const chatHealth = useChatHealth()
+chatHealth.ensureBaselinesLoaded()
+
+function statusFor(model?: string): 'healthy' | 'slow' | 'fast' | 'unknown' {
+  return model ? chatHealth.statusFor(model) : 'unknown'
+}
+
+// The most recent assistant turn that carried metrics drives the chat-
+// header health banner — when the latest sample for that model is
+// classified `slow`, show a discreet advisory linking to the probe.
+// We don't show a banner for `fast` because the upgrade hint already
+// fires once via toast; a persistent fast banner would nag.
+const latestHealthStatus = computed<'healthy' | 'slow' | 'fast' | 'unknown'>(() => {
+  for (let i = props.messages.length - 1; i >= 0; i--) {
+    const m = props.messages[i]
+    if (m.role === 'assistant' && m.model && m.metrics?.decode_tps != null) {
+      return chatHealth.statusFor(m.model)
+    }
+  }
+  return 'unknown'
+})
+
+const slowHealthMessage = computed(() => {
+  if (latestHealthStatus.value !== 'slow') return null
+  return 'Recent turns are running below this model\'s probe baseline.'
+})
 
 const props = defineProps<{
   messages: ChatMessage[]
@@ -165,6 +213,16 @@ watch(
       <span>{{ slowResponse }}</span>
     </div>
 
+    <!-- Sustained-slow advisory (ADR 005 §C trigger 2). Only renders
+         when the latest turn's decode_tps for the active model is below
+         the slow threshold against its probe baseline. Click-through to
+         the probe panel re-tests in place. -->
+    <div v-if="slowHealthMessage" class="chat-panel__health-banner">
+      <span class="chat-panel__health-banner-glyph">▾</span>
+      <span class="chat-panel__health-banner-text">{{ slowHealthMessage }}</span>
+      <NuxtLink to="/settings#local-models" class="chat-panel__health-banner-link">Re-test models</NuxtLink>
+    </div>
+
     <div ref="messagesContainer" class="chat-panel__messages">
       <div
         v-for="(msg, i) in messages"
@@ -176,10 +234,21 @@ watch(
           class="chat-panel__bubble"
           :class="{ 'chat-panel__bubble--md': msg.role === 'assistant' }"
         >
-          <div v-if="msg.role === 'assistant' && (msg.model || msg.timestamp)" class="chat-panel__meta">
+          <div v-if="msg.role === 'assistant' && (msg.model || msg.timestamp || msg.metrics)" class="chat-panel__meta">
             <span v-if="msg.model" class="chat-panel__meta-model">
               <span class="chat-panel__meta-icon" v-html="providerIcon(msg.provider)" />
               {{ modelLabel(msg.provider, msg.model) }}
+            </span>
+            <span
+              v-if="msg.metrics?.decode_tps != null"
+              class="chat-panel__meta-tps"
+              :class="`chat-panel__meta-tps--${statusFor(msg.model)}`"
+              :title="metricsTooltip(msg.metrics)"
+            >
+              <span class="chat-panel__meta-tps-num">{{ msg.metrics.decode_tps.toFixed(1) }}</span>
+              <span class="chat-panel__meta-tps-unit">t/s</span>
+              <span class="chat-panel__meta-tps-sep">·</span>
+              <span class="chat-panel__meta-tps-ttft">{{ formatTtft(msg.metrics.ttft_ms) }}</span>
             </span>
             <span v-if="msg.timestamp" class="chat-panel__meta-time">{{ formatTime(msg.timestamp) }}</span>
           </div>
@@ -376,6 +445,48 @@ watch(
   font-size: 0.85rem;
 }
 
+/* Sustained-slow chat-side advisory. Mono so it pairs with the per-turn
+   tps pill; amber-tinted but quieter than the OOM banner. The link is
+   the chat-side counterpart to the snackbar's "Re-test models" action. */
+.chat-panel__health-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.42rem 0.95rem;
+  margin: 0.3rem 1.5rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.72rem;
+  color: var(--neon-orange);
+  background: rgba(251, 146, 60, 0.04);
+  border: 1px solid rgba(251, 146, 60, 0.18);
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.chat-panel__health-banner-glyph {
+  color: rgba(251, 146, 60, 0.7);
+  font-size: 0.65rem;
+}
+
+.chat-panel__health-banner-text {
+  flex: 1;
+  color: var(--text-secondary);
+}
+
+.chat-panel__health-banner-link {
+  color: var(--neon-orange);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(251, 146, 60, 0.4);
+  padding-bottom: 1px;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.chat-panel__health-banner-link:hover {
+  color: rgba(251, 146, 60, 1);
+  border-bottom-color: rgba(251, 146, 60, 0.9);
+}
+
 .chat-panel__message {
   display: flex;
   animation: slideIn 0.25s ease-out;
@@ -515,6 +626,80 @@ watch(
 .chat-panel__meta-time {
   margin-left: auto;
   white-space: nowrap;
+}
+
+/* Per-turn telemetry readout (ADR 005 §C trigger 2) — sits between the
+   model label and the timestamp. Mono so it reads as a technical
+   readout (matches the chat-model-probe evidence list); tinted by
+   health status. The full breakdown lives in the native title tooltip
+   so this row stays a single uncluttered glyph-stripe. */
+.chat-panel__meta-tps {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  padding: 1px 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: rgba(2, 254, 255, 0.04);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+  cursor: help;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.chat-panel__meta-tps:hover {
+  border-color: var(--neon-cyan-30);
+  background: var(--neon-cyan-08);
+}
+
+.chat-panel__meta-tps-num {
+  color: var(--neon-cyan-60);
+  font-weight: 600;
+}
+
+.chat-panel__meta-tps-unit {
+  color: var(--text-muted);
+  font-size: 0.92em;
+}
+
+.chat-panel__meta-tps-sep {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.chat-panel__meta-tps-ttft {
+  color: var(--text-secondary);
+}
+
+/* Health-status tints. The watcher's classification of *current* perf
+   for the active model leaks into the historical bubble: a slow turn
+   keeps reading slow even after the model recovers, which is the
+   honest reading — that turn was slow when it happened. */
+.chat-panel__meta-tps--slow {
+  border-color: rgba(251, 146, 60, 0.25);
+  background: rgba(251, 146, 60, 0.04);
+}
+.chat-panel__meta-tps--slow .chat-panel__meta-tps-num {
+  color: var(--neon-orange);
+}
+.chat-panel__meta-tps--slow:hover {
+  border-color: rgba(251, 146, 60, 0.5);
+  background: rgba(251, 146, 60, 0.08);
+}
+
+.chat-panel__meta-tps--fast {
+  border-color: rgba(52, 211, 153, 0.25);
+  background: rgba(52, 211, 153, 0.04);
+}
+.chat-panel__meta-tps--fast .chat-panel__meta-tps-num {
+  color: #34d399;
+}
+.chat-panel__meta-tps--fast:hover {
+  border-color: rgba(52, 211, 153, 0.5);
+  background: rgba(52, 211, 153, 0.08);
 }
 
 .chat-panel__cursor {

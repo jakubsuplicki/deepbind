@@ -34,7 +34,7 @@ Per [ADR 002](architecture/decisions/002-pure-local-product-shape.md) and [ADR 0
 
 **Backend** — FastAPI sidecar (Python 3.12+) frozen with PyInstaller. Orchestrates retrieval, chat dispatch via the [`OllamaDispatcher`](../backend/services/ollama_dispatcher.py), tool execution, and file I/O. The chat endpoint streams the local model's response over WebSocket, executes tool calls server-side, and loops back for multi-turn tool use (up to 5 rounds).
 
-**Inference** — Ollama 0.22.0 runtime bundled inside the `.app` (under `Contents/Resources/ollama-runtime/`). The Tauri shell spawns it on a private port (`:11435`) on app launch, separate from any user-installed Ollama on `:11434`. Per [ADR 005](architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md), the first-run orchestrator picks a hardware-tiered primary chat model and pulls it on first launch.
+**Inference** — Ollama 0.18.0 runtime bundled inside the `.app` (under `Contents/Resources/ollama-runtime/`). The Tauri shell spawns it on a private port (`:11435`) on app launch, separate from any user-installed Ollama on `:11434`. Per [ADR 005](architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md), the first-run orchestrator picks a hardware-tiered primary chat model and pulls it on first launch.
 
 **Data flow** — User message → hybrid retrieval (FTS5 + graph neighbors) → context assembly → `OllamaDispatcher` → streamed response + optional tool calls (write notes, create plans, query graph) → results saved to Markdown files → SQLite re-indexed.
 
@@ -46,7 +46,7 @@ Per [ADR 002](architecture/decisions/002-pure-local-product-shape.md) and [ADR 0
 | Frontend framework | Nuxt 4 / Vue 3.5 / TypeScript (strict) |
 | Frontend build | Vite, static `nuxt generate` for bundling |
 | Backend framework | FastAPI (Python 3.12+), packaged via PyInstaller |
-| Inference runtime | Ollama 0.22.0 (bundled), official `ollama` Python client (Apache-2.0) |
+| Inference runtime | Ollama 0.18.0 (bundled), official `ollama` Python client (Apache-2.0) |
 | Default chat model | Hardware-tiered: `qwen3:8b` (Tier A) / `qwen3:30b-a3b-instruct-2507` (Tier B) / `gpt-oss:120b` (Tier C). User-pinnable. |
 | Embeddings | fastembed ONNX (multilingual MiniLM, bundled — ~240 MB) |
 | Database | SQLite via aiosqlite (FTS5 for search) |

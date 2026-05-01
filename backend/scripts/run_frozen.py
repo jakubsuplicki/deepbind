@@ -28,11 +28,13 @@ handshake).
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import socket
 import sys
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # When PyInstaller bundles a script as the entry point, the package layout
@@ -72,6 +74,48 @@ def _watch_shell_and_exit() -> None:
             os._exit(0)
 
 
+def _setup_logging() -> Path:
+    """Wire a rotating FileHandler so the bundled sidecar's logs survive.
+
+    The Tauri shell drains the sidecar's stdout/stderr only until the READY
+    handshake, then drops the receiver — anything `logger.info(...)` would
+    print after READY goes into a closed channel. We set up our own
+    persistent log file under the standard macOS log location so an
+    operator (or this codebase's `_prefill_log` diagnostic) can surface
+    its output without rebuilding the bundle.
+
+    Returns the resolved log file path. Idempotent: callers can re-invoke
+    safely on hot reload.
+    """
+    if sys.platform == "darwin":
+        log_dir = Path.home() / "Library" / "Logs" / "DeepFilesAI"
+    elif sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        log_dir = (Path(local) if local else Path.home() / "AppData" / "Local") / "DeepFilesAI" / "Logs"
+    else:
+        xdg = os.environ.get("XDG_STATE_HOME")
+        log_dir = (Path(xdg) if xdg else Path.home() / ".local" / "state") / "DeepFilesAI" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "sidecar.log"
+
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    file_handler = RotatingFileHandler(
+        log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(fmt)
+
+    root = logging.getLogger()
+    # Drop any existing FileHandlers for this exact path so re-init doesn't
+    # accumulate duplicates on dev hot reload.
+    for h in list(root.handlers):
+        if isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")) == log_path:
+            root.removeHandler(h)
+    root.setLevel(logging.INFO)
+    root.addHandler(file_handler)
+    return log_path
+
+
 def _resolve_host() -> str:
     return os.environ.get("JARVIS_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 
@@ -100,6 +144,11 @@ def _bind_socket(host: str, port: int) -> socket.socket:
 
 
 def main() -> int:
+    log_path = _setup_logging()
+    logging.getLogger("jarvis-sidecar").info(
+        "sidecar starting; logs at %s", log_path
+    )
+
     host = _resolve_host()
     requested_port = _resolve_port()
     sock = _bind_socket(host, requested_port)

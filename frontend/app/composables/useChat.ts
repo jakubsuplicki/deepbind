@@ -1,4 +1,5 @@
 import type { ChatMessage, TraceItem, WsEvent } from '~/types'
+import { useChatHealth } from '~/composables/useChatHealth'
 import { useChatModel } from '~/composables/useChatModel'
 import { useLocalModels } from '~/composables/useLocalModels'
 import { useWebSocket } from '~/composables/useWebSocket'
@@ -23,6 +24,7 @@ export function useChat() {
   let _removeReconnectListener: (() => void) | null = null
 
   const { isConnected, connect, send, onMessage, close, onReconnect, setSessionId } = useWebSocket()
+  const chatHealth = useChatHealth()
 
   function _setError(msg: string, retryable = false): void {
     error.value = msg
@@ -108,8 +110,20 @@ export function useChat() {
         if (_pendingTrace && _pendingTrace.length > 0) {
           msg.trace = _pendingTrace
         }
+        if (event.metrics) {
+          msg.metrics = event.metrics
+        }
         messages.value.push(msg)
         currentResponse.value = ''
+        // ADR 005 §C trigger 2 — feed the just-completed turn's decode
+        // throughput into the health watcher. The watcher rolls a per-
+        // model window and emits a soft hint when sustained-slow vs
+        // probe baseline (or sustained-fast with a heavier rung
+        // installed). Cooldowns and policy live inside the watcher;
+        // this is a pure forward.
+        if (event.metrics?.decode_tps != null && event.model) {
+          chatHealth.recordTurn(event.model, event.metrics.decode_tps)
+        }
       }
       _pendingTrace = null
       isLoading.value = false
@@ -196,13 +210,16 @@ export function useChat() {
     const payload: Record<string, string> = { type: 'message', content: _lastContent, session_id: sessionId.value }
     if (options?.graphScope) payload.graph_scope = options.graphScope
 
-    // ADR 015 — single dispatcher (local Ollama). Attach the chosen model
-    // and the runtime base URL; no API key, no provider abstraction.
+    // ADR 015 — single dispatcher (local Ollama). Attach the chosen model;
+    // base_url is forwarded only when the user has set an explicit override
+    // in Settings → Advanced. In the bundled product the backend's
+    // JARVIS_OLLAMA_BASE_URL env var (set by the Tauri shell to the private
+    // bundled-Ollama port) wins by default. No API key, no provider abstraction.
     const { activeModel } = useChatModel()
     const { baseUrl } = useLocalModels()
     payload.provider = 'ollama'
     payload.model = activeModel.value
-    payload.base_url = baseUrl.value
+    if (baseUrl.value) payload.base_url = baseUrl.value
 
     const sent = send(payload)
     if (!sent) {

@@ -17,6 +17,7 @@ sources:
   - backend/services/web_search.py
   - backend/services/token_tracking.py
   - frontend/app/composables/useChat.ts
+  - frontend/app/composables/useChatHealth.ts
   - frontend/app/composables/useWebSocket.ts
   - frontend/app/components/ChatPanel.vue
   - frontend/app/components/TraceList.vue
@@ -47,7 +48,7 @@ For each user message the backend (`_handle_message` in `chat.py`) runs the foll
 2. **Context assembly via `ContextStrategy`** — Session history is fetched via `session_service.get_messages` and passed through the active `ContextStrategy` (default: `FullHistoryStrategy`, which is identity). The strategy is the swap point through which compaction and retrieval-substitution alternatives plug in (ADR 010). Production today behaves exactly as before; the eval harness injects alternative strategies via the `context_strategy` parameter on `_handle_message`.
 3. **Context retrieval** — `build_system_prompt` calls `build_context` (from `context_builder`) to find relevant notes and appends them to the base system prompt. If a specialist is active, its prompt fragment is injected first.
 4. **Tool filtering** — `specialist_service.filter_tools` narrows the full `TOOLS` list to those permitted by the active specialist (or all tools if none is active).
-5. **First LLM stream** — `OllamaDispatcher.stream_response` opens an `ollama.AsyncClient.chat(stream=True)` request. The adapter maps Ollama chunks to `StreamEvent` shapes (`text_delta`, `tool_use`, `done`, `error`) so the chat router and WS event consumers see the same surface they did before ADR 015.
+5. **First LLM stream** — `OllamaDispatcher.stream_response` opens an `ollama.AsyncClient.chat(stream=True)` request. The adapter maps Ollama chunks to `StreamEvent` shapes (`text_delta`, `tool_use`, `done`, `error`) so the chat router and WS event consumers see the same surface they did before ADR 015. The request always sets `think: False` — without this, qwen3-family models emit a `<think>…</think>` block before the actual answer, the response surfaces as `message.thinking` tokens with empty `message.content` for several seconds per turn (5–10 s of dead air visible to the user). Models that don't natively support `think` (gemma4, ministral, devstral, gpt-oss in our catalog) silently ignore the flag — no harm. Models that *should* honor it but don't (the chain-of-thought leak class) are caught by the chat-model-probe and not auto-recommended on first run.
 6. **Tool call handling** — If the model emits a tool call, the dispatcher synthesizes a stable id (Ollama's wire format omits ids), accumulates the JSON `function.arguments`, and yields a `tool_use` `StreamEvent` once complete. The router executes the tool, appends both the assistant tool-use block and the tool result to the message list, and calls `_stream_follow_up` to get the LLM's next response. The Anthropic-style tool_result block is converted to Ollama's `{role: "tool", tool_name, content}` shape at the dispatcher boundary.
 7. **Recursive tool rounds** — `_stream_follow_up` is recursive. Each recursive call increments a `depth` counter. The chain is cut off at `MAX_TOOL_ROUNDS = 5` to prevent runaway loops. Within the loop, `_compact_stale_tool_results` collapses older tool_result payloads to a short reminder (the model has already read them) — this is an in-loop optimization separate from the `ContextStrategy` swap point above.
 8. **Session save** — `add_message` auto-persists after each append (crash protection). On WebSocket disconnect the session is additionally written to `memory/` as a Markdown note.
@@ -101,6 +102,29 @@ Thresholds and recent-N defaults are tunable per-deployment via the env vars `JA
 ### Latency benchmark harness
 
 A sibling harness at [`backend/tests/eval/latency/`](../../backend/tests/eval/latency/) measures user-perceived chat latency (TTFT, decode tokens/sec, end-to-end wall clock) on the actual ICP hardware. Same discipline as the conversation harness — committed JSON baselines, opt-in pre-merge gate, bootstrap-CI verdict — applied to the speed axis instead of answer-quality. Runs the streaming Ollama HTTP `/api/chat` endpoint with `temperature: 0` and a fixed seed, captures TTFT from the first non-empty content delta, and reads `eval_count / eval_duration` from the `done` event for honest decode throughput. One Anthropic Claude Sonnet reference scenario provides the explicit "are we faster than the cloud option?" benchmark; skips silently when no API key. CLI: `python -m tests.eval.latency.run_bench`. See [`docs/concepts/latency-baseline.md`](../concepts/latency-baseline.md) and [ADR 011](../architecture/decisions/011-latency-benchmark-harness.md).
+
+### Per-turn telemetry & health watcher (ADR 005 §C trigger 2)
+
+Every chat turn carries Ollama's authoritative per-stage timings from the `done` event through to the frontend, where they drive two surfaces: a per-turn readout next to each assistant message, and a health watcher that compares observed decode speed against the install-time probe baseline.
+
+**Backend wire path.** [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py) captures `eval_duration`, `prompt_eval_duration`, `load_duration`, and `total_duration` (all nanoseconds) on the final Ollama chunk and forwards them on the `usage` `StreamEvent`. The chat router (`_handle_message` in [`backend/routers/chat.py`](../../backend/routers/chat.py)) folds them into a per-turn accumulator: decode and prefill durations sum across all rounds (a tool-using turn has multiple); TTFT is captured from the first round's load + prefill (the user's *felt* initial latency, not the per-round average). On the `done` WS event the accumulator renders into a `metrics` payload — `{decode_tps, prefill_tps, ttft_ms, load_ms, total_ms, eval_count, prompt_eval_count}` — with `decode_tps` and `prefill_tps` precomputed server-side so the frontend never has to repeat the math. Turns that report no timings (older Ollama versions, error states) omit the field entirely; consumers treat absent `metrics` as "no telemetry this turn" and degrade silently.
+
+**Frontend telemetry surface.** [`useChat`](../../frontend/app/composables/useChat.ts) attaches the `metrics` payload to the just-completed `ChatMessage`. [`ChatPanel.vue`](../../frontend/app/components/ChatPanel.vue) renders a compact mono pill in the existing meta row — `12.4 t/s · 0.85s` — with the full breakdown (decode/prefill TPS, load_ms when cold, total wall clock, both token counts) in the native `title` tooltip so the row stays uncluttered. The pill is tinted by current health status: cyan-tinted neutral when healthy or unknown, amber when the watcher classifies the latest sample as `slow` for that model, soft green when it's `fast`. Status leaks honestly into historical bubbles — a turn that *was* slow keeps reading slow even after the model recovers, which is the truthful reading.
+
+**Health watcher (`useChatHealth`).** A new composable at [`frontend/app/composables/useChatHealth.ts`](../../frontend/app/composables/useChatHealth.ts) loads per-machine baselines from `GET /api/local/chat-model-probe` (the persisted [ADR 012](../architecture/decisions/012-chat-model-self-test.md) probe record's `realistic_tps` per candidate model — already captured during install, regenerable via "Re-run probe"). Each turn's observed `decode_tps` is appended to a per-model rolling window of 5 samples. When the *full* window stays below 50% of baseline, a single soft-hint snackbar surfaces (cooldown 10 min/model): *"{model} is running at ~{n}% of expected speed. Try a smaller model or close other apps."* The action button lands the user at `/settings#local-models` for an in-place re-test. When the full window stays above 105% of baseline AND the user has a heavier installed catalog rung that *also* has a passing probe baseline, a complementary upgrade hint surfaces (cooldown 24h/model): *"You may have headroom for {heavier rung}."* A single turn that swings high or low is noise — only the full window fires. ChatPanel additionally renders an inline "Re-test models" advisory banner for the duration of any sustained-slow window.
+
+**Strict non-goals.** The watcher never gates dispatch, never auto-swaps models, never refuses a turn. It is purely advisory. Actual memory exhaustion is caught downstream by the OOM-retry-walk-the-ladder loop ([ADR 005 §C trigger 1](../architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md#c-downgrade-ladder)). This replaces the disabled pre-flight RAM check ([ADR 005 §C trigger 2 amendment, 2026-05-01](../architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md#c-downgrade-ladder)) — instead of *predicting* whether a model will run via `psutil.available × 0.8 ≥ footprint` (a prediction that fights macOS unified memory), we *observe* what it actually does and surface the data to the user.
+
+**Prefill-cost diagnostic (temporary).** [`_prefill_log` in `chat.py`](../../backend/routers/chat.py) emits one structured INFO line per chat turn:
+```
+chat_turn session=… turn=N sp_hash=<sha12> prefix_stable=True/False
+  sp_total_tok=… sp_ctx_tok=… ctx_truncated=…
+  prefill_count=… prefill_ms=… ttft_ms=… load_ms=… decode_tps=… prefill_tps=…
+  tool_calls=… tool_rounds=… model=…
+```
+Active investigation: every-turn 30s+ TTFT reported during G4b6 cold-launch smoke. Hypothesis under test — the system prompt embeds retrieval output (`build_context` glues retrieved notes into the system block, [`system_prompt.py:258`](../../backend/services/system_prompt.py)), so the prefix changes turn-to-turn → Ollama's KV cache prefix-match fails at token 0 → full re-prefill (~3-5K tokens) every turn. The `prefix_stable` field tells us whether the SHA actually held across consecutive turns within a session; combined with `prefill_count` and `prefill_ms` from Ollama's own timings this either confirms or rejects the hypothesis from the sidecar log alone (no WS scraping needed). Per-session state (turn counter + last system-prompt SHA12) is capped at 256 sessions FIFO so it can't grow unbounded. To remove cleanly once the question is answered: delete the `_PERF_TURN_STATE` + `_prefill_log` block and its single callsite in `_handle_message`.
+
+**Where the logs land in the bundled app.** The Tauri shell drains the sidecar's stdout/stderr only until the READY handshake (`desktop/src-tauri/src/lib.rs::await_sidecar_ready`), so anything `logger.info(...)` prints after that goes into a dropped channel. To make the diagnostic actually surface in production, [`backend/scripts/run_frozen.py::_setup_logging`](../../backend/scripts/run_frozen.py) installs a `RotatingFileHandler(5 MB × 3)` on the root logger at INFO and writes to platform-conventional log paths — `~/Library/Logs/DeepFilesAI/sidecar.log` on macOS, `%LOCALAPPDATA%\DeepFilesAI\Logs\sidecar.log` on Windows, `${XDG_STATE_HOME:-~/.local/state}/DeepFilesAI/logs/sidecar.log` elsewhere. Operator workflow: launch the bundled .app, run a few chat turns, then `tail -f ~/Library/Logs/DeepFilesAI/sidecar.log | grep chat_turn`.
 
 ### Canonical chat model — Qwen3-14B (until per-machine probe lands)
 
@@ -194,9 +218,21 @@ All frames are JSON. The client sends; the server sends back a stream of events 
 // Older clients ignore unknown event types; safe to skip.
 
 { "type": "done", "session_id": string,
-  "model"?: string, "provider"?: string, "tool_mode"?: string }
+  "model"?: string, "provider"?: string, "tool_mode"?: string,
+  "metrics"?: {
+    "decode_tps"?: number, "prefill_tps"?: number,
+    "ttft_ms": number, "load_ms": number, "total_ms": number,
+    "eval_count": number, "prompt_eval_count": number
+  } }
 // Turn is complete. The final assembled response is already in session history.
 // `tool_mode` is sent for ollama provider so the frontend can show tool support.
+// `metrics` carries Ollama's authoritative per-stage timings when at least one
+// round in the turn reported them — decode and prefill durations sum across
+// rounds; TTFT is the *first* round's load + prefill (the user-felt initial
+// latency); `decode_tps` and `prefill_tps` are precomputed server-side and
+// rounded to 2 decimals; `load_ms` is non-zero only on a cold first round.
+// Absent when no round emitted timings (older Ollama, error path) — clients
+// must treat absence as "no telemetry this turn."
 
 { "type": "error", "content": string }
 // Recoverable or fatal error. Check content for user-facing message.

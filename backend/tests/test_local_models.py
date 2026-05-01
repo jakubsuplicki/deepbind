@@ -833,6 +833,7 @@ class TestChatModelProbeEndpoints:
                     "ollama_version": "0.18.0",
                     "platform": _platform_string(),
                     "candidates_evaluated": [],
+                    "catalog_models": [],
                     "recommended_model": "qwen3:14b",
                 }
             }),

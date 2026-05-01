@@ -36,8 +36,32 @@ def anyio_backend(request):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _chunk(content: str = "", *, tool_calls=None, done: bool = False, prompt_eval_count=None, eval_count=None) -> ChatResponse:
-    """Build a single streaming chunk in the ChatResponse shape Ollama emits."""
+def _chunk(
+    content: str = "",
+    *,
+    tool_calls=None,
+    done: bool = False,
+    prompt_eval_count=None,
+    eval_count=None,
+    eval_duration=None,
+    prompt_eval_duration=None,
+    load_duration=None,
+    total_duration=None,
+) -> ChatResponse:
+    """Build a single streaming chunk in the ChatResponse shape Ollama emits.
+
+    Per-stage durations are nanoseconds, matching Ollama's wire format.
+    They feed the per-turn telemetry surface (ADR 005 §C trigger 2).
+    """
+    extras = {}
+    if eval_duration is not None:
+        extras["eval_duration"] = eval_duration
+    if prompt_eval_duration is not None:
+        extras["prompt_eval_duration"] = prompt_eval_duration
+    if load_duration is not None:
+        extras["load_duration"] = load_duration
+    if total_duration is not None:
+        extras["total_duration"] = total_duration
     return ChatResponse(
         model="qwen3:8b",
         created_at="2026-04-30T12:00:00Z",
@@ -45,6 +69,7 @@ def _chunk(content: str = "", *, tool_calls=None, done: bool = False, prompt_eva
         done=done,
         prompt_eval_count=prompt_eval_count,
         eval_count=eval_count,
+        **extras,
     )
 
 
@@ -144,6 +169,63 @@ async def test_done_chunk_without_token_counts_does_not_emit_usage():
     assert types[-1] == "done"
 
 
+# ── Per-stage duration forwarding (ADR 005 §C trigger 2) ─────────────────────
+
+
+@pytest.mark.anyio
+async def test_done_chunk_forwards_per_stage_durations_on_usage_event():
+    """Ollama's authoritative timings reach the StreamEvent.
+
+    Without these, the chat router can't compute decode_tps and the
+    per-turn telemetry / health watcher have no data to surface.
+    """
+    d = _make_dispatcher()
+    chunks = (
+        _chunk("hi"),
+        _chunk(
+            "",
+            done=True,
+            prompt_eval_count=10,
+            eval_count=20,
+            eval_duration=1_500_000_000,         # 1.5 s decode
+            prompt_eval_duration=80_000_000,      # 80 ms prefill
+            load_duration=300_000_000,            # 300 ms cold load
+            total_duration=2_000_000_000,         # 2 s end-to-end
+        ),
+    )
+
+    with patch.object(d._client, "chat", new=AsyncMock(return_value=_astream(*chunks))):
+        events = [e async for e in d.stream_response([], "system", [])]
+
+    usage = next(e for e in events if e.type == "usage")
+    assert usage.eval_duration_ns == 1_500_000_000
+    assert usage.prompt_eval_duration_ns == 80_000_000
+    assert usage.load_duration_ns == 300_000_000
+    assert usage.total_duration_ns == 2_000_000_000
+
+
+@pytest.mark.anyio
+async def test_done_chunk_without_durations_yields_usage_with_none_durations():
+    """Older Ollama versions / partial responses: token counts present,
+    durations absent. The dispatcher must emit usage with token counts
+    and None durations rather than dropping the event."""
+    d = _make_dispatcher()
+    chunks = (
+        _chunk("hi"),
+        _chunk("", done=True, prompt_eval_count=4, eval_count=2),  # no durations
+    )
+
+    with patch.object(d._client, "chat", new=AsyncMock(return_value=_astream(*chunks))):
+        events = [e async for e in d.stream_response([], "system", [])]
+
+    usage = next(e for e in events if e.type == "usage")
+    assert usage.input_tokens == 4 and usage.output_tokens == 2
+    assert usage.eval_duration_ns is None
+    assert usage.prompt_eval_duration_ns is None
+    assert usage.load_duration_ns is None
+    assert usage.total_duration_ns is None
+
+
 # ── chat() call-arg verification ─────────────────────────────────────────────
 
 
@@ -160,6 +242,10 @@ async def test_chat_called_with_options_keep_alive_and_no_tools_when_empty():
     assert kwargs["stream"] is True
     assert kwargs["keep_alive"] == "15m"
     assert kwargs["options"] == {"num_predict": 2048, "temperature": 0.5}
+    # think: False — qwen3-style chain-of-thought suppression at the API
+    # level (see dispatcher comment). Without this, message.thinking
+    # tokens surface for several seconds before any content delta.
+    assert kwargs["think"] is False
     assert "tools" not in kwargs  # empty tools list → not passed
 
 

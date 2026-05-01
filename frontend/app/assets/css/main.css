@@ -71,6 +71,21 @@ a:hover {
   text-shadow: 0 0 8px var(--neon-cyan-30);
 }
 
+/* Default cursor states for interactive elements — components can override
+   when they need cursor:not-allowed on disabled or cursor:progress on busy. */
+button:not(:disabled),
+[role='button']:not([aria-disabled='true']),
+summary,
+[role='tab'],
+label[for] {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
 input, textarea {
   font-family: inherit;
   font-size: inherit;

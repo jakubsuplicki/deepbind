@@ -93,6 +93,21 @@ export interface TraceItem {
   signals?: Record<string, number>
 }
 
+// Per-turn telemetry surfaced by the backend on the `done` event
+// (ADR 005 §C trigger 2). Replaces the disabled pre-flight RAM check —
+// the frontend renders a tok/s · TTFT line under each assistant turn
+// and the health watcher compares decode_tps against the per-machine
+// probe baseline (`realistic_tps` from ADR 012).
+export interface ChatTurnMetrics {
+  decode_tps?: number
+  prefill_tps?: number
+  ttft_ms: number
+  load_ms: number
+  total_ms: number
+  eval_count: number
+  prompt_eval_count: number
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
@@ -100,6 +115,7 @@ export interface ChatMessage {
   provider?: string
   timestamp?: string
   trace?: TraceItem[]
+  metrics?: ChatTurnMetrics
 }
 
 export interface WsTextDelta {
@@ -125,6 +141,7 @@ export interface WsDone {
   model?: string
   provider?: string
   tool_mode?: string
+  metrics?: ChatTurnMetrics
 }
 
 export interface WsError {

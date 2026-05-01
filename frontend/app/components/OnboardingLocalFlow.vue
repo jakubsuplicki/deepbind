@@ -19,7 +19,6 @@
 
 const emit = defineEmits<{
   (e: 'model-ready'): void
-  (e: 'back'): void
 }>()
 
 const localModels = useLocalModels()
@@ -311,8 +310,12 @@ const wizardStep = computed<1 | 2 | 3>(() => {
             Using {{ primaryEntry?.label ?? firstRun.status.value.primary_ollama_model }} locally on this computer
           </p>
 
+          <!-- Probe (running): live terminal-style readout above the CTA so
+               the user sees the ongoing self-test. Once the probe finishes
+               this unmounts and the post-run summary appears under the CTA
+               instead — quieter, doesn't compete with "Jarvis is ready". -->
           <ChatModelProbePanel
-            v-if="probe.running.value || probe.events.value.length > 0"
+            v-if="probe.running.value"
             variant="onboarding"
             externally-driven
           />
@@ -356,6 +359,14 @@ const wizardStep = computed<1 | 2 | 3>(() => {
           </div>
 
           <button class="local-flow__primary-btn" @click="handleFinish">Open Jarvis</button>
+
+          <!-- Post-run probe summary: collapsed single-line diagnostic.
+               Sits below the CTA so it doesn't outshout the headline. -->
+          <ChatModelProbePanel
+            v-if="!probe.running.value && probe.status.value?.persisted"
+            variant="onboarding"
+            externally-driven
+          />
 
           <div class="local-flow__ready-actions">
             <button class="local-flow__link-btn" @click="handleDownloadAnother">
@@ -604,12 +615,6 @@ const wizardStep = computed<1 | 2 | 3>(() => {
     <p v-if="localModels.error.value" class="local-flow__error">
       {{ localModels.error.value }}
     </p>
-
-    <div class="local-flow__footer">
-      <button class="local-flow__back" @click="emit('back')">
-        ← Back to choices
-      </button>
-    </div>
   </div>
 </template>
 
@@ -1302,26 +1307,4 @@ const wizardStep = computed<1 | 2 | 3>(() => {
   padding: 0.45rem 0.7rem;
 }
 
-/* ---- Footer ---- */
-.local-flow__footer {
-  margin-top: 1.5rem;
-  display: flex;
-  justify-content: flex-start;
-}
-
-.local-flow__back {
-  padding: 0.35rem 0.75rem;
-  background: transparent;
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font-size: 0.82rem;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.local-flow__back:hover {
-  border-color: var(--neon-cyan-30);
-  color: var(--text-primary);
-}
 </style>

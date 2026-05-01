@@ -45,12 +45,25 @@ DESKTOP_DIR="$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )"
 REPO_ROOT="$( cd -- "$DESKTOP_DIR/.." &> /dev/null && pwd )"
 
 # --- pinned upstream Ollama -------------------------------------------------
-OLLAMA_VERSION="0.22.0"
-# SHA-256 of upstream Ollama-darwin.zip @ v0.22.0. To bump:
+OLLAMA_VERSION="0.18.0"
+# SHA-256 of upstream Ollama-darwin.zip @ v0.18.0. To bump:
 #   1. update OLLAMA_VERSION above
 #   2. delete this value, run the script, copy the printed SHA back here
 #   3. commit the OLLAMA_VERSION + SHA together in one diff
-OLLAMA_DARWIN_ZIP_SHA256="a410e2f722fb25d6f87ad2ac23a9d44e330b078762e19bfe5a3b0162d236b278"
+#
+# Pinned at 0.18.0 because >=0.21.2 ships a bundled GGML metal-kernel library
+# whose `MPPTensorOpsMatMul2dImpl` instantiations fail Apple M5's strict
+# bfloat/half type-matching at MTLLibrary compile time. Symptom: the runner
+# subprocess SIGABRTs during `ggml_metal_library_init`, Ollama returns 500
+# "model failed to load". Reproduced on this M5 box with both upstream
+# 0.21.2 (homebrew) and 0.22.0 (the version we previously bundled). The
+# eval-latency baselines under tests/eval/latency/baselines/apple-m5-*.json
+# were all captured against 0.18.0 and pass.
+#
+# Re-evaluate this pin when upstream Ollama bumps GGML to a release that
+# carries the M5 fix. Track via the upstream release notes; the fix is
+# in llama.cpp's metal kernels, not Ollama's own code.
+OLLAMA_DARWIN_ZIP_SHA256="97641e4f0e163b6b549dcfe0765595073dea0f38154617b72279450363f5ff31"
 OLLAMA_DARWIN_ZIP_URL="https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/Ollama-darwin.zip"
 
 # --- output -----------------------------------------------------------------

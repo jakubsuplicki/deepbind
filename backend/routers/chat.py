@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Optional
@@ -16,11 +17,174 @@ from services.workspace_service import get_api_key
 
 logger = logging.getLogger(__name__)
 
+# ── Per-turn prefill-cost diagnostic (TEMPORARY) ────────────────────────────
+#
+# Investigation of "every-turn 30s+ TTFT" reported during G4b6 cold-launch
+# smoke. Hypothesis: the system prompt embeds retrieval output, so the prefix
+# changes turn-to-turn → Ollama's KV cache prefix-match fails at token 0 →
+# full re-prefill (~3-5K tokens) every turn. This logger emits one structured
+# line per chat turn so we can confirm or reject that hypothesis from the
+# sidecar log without scraping the WS payload.
+#
+# Track per-session: turn counter, last system-prompt SHA so we can flag when
+# the prefix actually mutated. Cap memory at 256 sessions (FIFO) so an
+# always-on instance doesn't grow unbounded.
+_PERF_TURN_STATE: "dict[str, tuple[int, str]]" = {}
+_PERF_TURN_STATE_CAP = 256
+
+
+def _prefill_log(
+    *,
+    session_id: str,
+    system_prompt: str,
+    prompt_stats: dict,
+    metrics_acc: list[int],
+    tool_acc: list[int],
+    model: Optional[str],
+) -> None:
+    sp_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:12]
+    prev = _PERF_TURN_STATE.get(session_id)
+    turn_no = (prev[0] + 1) if prev else 1
+    prefix_stable = bool(prev) and prev[1] == sp_hash
+    if len(_PERF_TURN_STATE) >= _PERF_TURN_STATE_CAP and session_id not in _PERF_TURN_STATE:
+        _PERF_TURN_STATE.pop(next(iter(_PERF_TURN_STATE)), None)
+    _PERF_TURN_STATE[session_id] = (turn_no, sp_hash)
+
+    payload = _build_metrics_payload(metrics_acc) or {}
+    logger.info(
+        "chat_turn session=%s turn=%d sp_hash=%s prefix_stable=%s "
+        "sp_total_tok=%s sp_ctx_tok=%s ctx_truncated=%s "
+        "prefill_count=%s prefill_ms=%s ttft_ms=%s load_ms=%s decode_tps=%s prefill_tps=%s "
+        "tool_calls=%s tool_rounds=%s model=%s",
+        session_id, turn_no, sp_hash, prefix_stable,
+        prompt_stats.get("total_tokens"),
+        prompt_stats.get("context_tokens"),
+        prompt_stats.get("context_truncated"),
+        payload.get("prompt_eval_count"),
+        round(metrics_acc[1] / 1_000_000, 1) if metrics_acc[5] else None,
+        payload.get("ttft_ms"),
+        payload.get("load_ms"),
+        payload.get("decode_tps"),
+        payload.get("prefill_tps"),
+        tool_acc[0] if tool_acc else 0,
+        tool_acc[1] if tool_acc else 0,
+        model,
+    )
+
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 async def _send_event(ws: WebSocket, event_type: str, **fields) -> None:
     await ws.send_json({"type": event_type, **fields})
+
+
+# ── Per-turn telemetry accumulator (ADR 005 §C trigger 2) ───────────────────
+#
+# `metrics_acc` is a 6-slot list threaded through `_handle_message` and
+# `_stream_follow_up`. Per-round usage events update it in place; the final
+# `done` emission rolls it up into the `metrics` payload the frontend
+# attaches to the just-finished assistant message.
+#
+# Slot layout — keep in lockstep with the helpers below:
+#   [0] sum eval_duration_ns          (decode pass, all rounds)
+#   [1] sum prompt_eval_duration_ns   (prefill pass, all rounds)
+#   [2] first round's load_duration_ns + prompt_eval_duration_ns (TTFT)
+#   [3] first round's load_duration_ns
+#   [4] sum total_duration_ns         (wall clock, all rounds)
+#   [5] flag — has any round reported timings? 0/1
+#   [6] sum eval_count                (decode tokens, all rounds)
+#   [7] sum prompt_eval_count         (prefill tokens, all rounds)
+#
+# Why a list of slots instead of a TypedDict: matches the existing
+# `usage_acc` / `tool_acc` callsite shape and stays cheap to thread
+# through the recursive `_stream_follow_up` without a class.
+#
+# Why we track token counts here too rather than reading from
+# `usage_acc`: `usage_acc` is the billing accumulator and intentionally
+# is *not* reset on the OOM-retry path (failed round's tokens still
+# flow into the per-turn token log — pre-existing accounting behavior).
+# The metrics surface needs to reset on OOM-retry so decode_tps and
+# prefill_tps are computed against *only* the round whose model
+# `done.model` reports. Decoupling here keeps the two concerns clean.
+
+_M_EVAL_NS = 0
+_M_PREFILL_NS = 1
+_M_TTFT_NS = 2
+_M_LOAD_NS = 3
+_M_TOTAL_NS = 4
+_M_HAS_TIMINGS = 5
+_M_EVAL_COUNT = 6
+_M_PREFILL_COUNT = 7
+
+
+def _new_metrics_acc() -> list[int]:
+    return [0, 0, 0, 0, 0, 0, 0, 0]
+
+
+def _update_metrics_acc(acc: list[int], event: StreamEvent) -> None:
+    """Fold one round's `usage` event into the per-turn accumulator.
+
+    "Timed round" requires at least an `eval_duration_ns` or a
+    `prompt_eval_duration_ns`. A `total_duration_ns` alone (e.g. an
+    in-flight cancel where Ollama reports wall-clock only) is not
+    sufficient — without a decode or prefill measurement we can't
+    compute either of the two ratios the watcher cares about, and
+    marking the round as timed would leak a `ttft_ms: 0` into the
+    payload that the frontend would render as a real "0 ms" reading.
+
+    On rounds with no timings at all, this helper is a no-op; the
+    caller's `usage_acc` still tracks the token counts for billing.
+    """
+    if event.eval_duration_ns is None and event.prompt_eval_duration_ns is None:
+        return
+    if not acc[_M_HAS_TIMINGS]:
+        # First round with timings — capture the user's *felt* TTFT as
+        # the load + prefill of this round. Subsequent rounds accrue to
+        # the wall-clock + decode totals but don't move TTFT.
+        first_load = event.load_duration_ns or 0
+        first_prefill = event.prompt_eval_duration_ns or 0
+        acc[_M_TTFT_NS] = first_load + first_prefill
+        acc[_M_LOAD_NS] = first_load
+        acc[_M_HAS_TIMINGS] = 1
+    acc[_M_EVAL_NS] += event.eval_duration_ns or 0
+    acc[_M_PREFILL_NS] += event.prompt_eval_duration_ns or 0
+    acc[_M_TOTAL_NS] += event.total_duration_ns or 0
+    acc[_M_EVAL_COUNT] += event.output_tokens or 0
+    acc[_M_PREFILL_COUNT] += event.input_tokens or 0
+
+
+def _build_metrics_payload(acc: list[int]) -> Optional[dict]:
+    """Render the accumulator into the `metrics` field of the `done` event.
+
+    Returns None when no round reported timings — the frontend treats an
+    absent `metrics` field as "no telemetry this turn" and suppresses
+    the per-turn line + skips the health-watcher sample.
+
+    All inputs come from `acc` — including token counts — so an
+    OOM-retry that resets the accumulator produces a payload describing
+    *only* the retry round, even though `usage_acc` still carries the
+    failed round's tokens for billing.
+    """
+    if not acc[_M_HAS_TIMINGS]:
+        return None
+    eval_count = acc[_M_EVAL_COUNT]
+    prompt_eval_count = acc[_M_PREFILL_COUNT]
+    eval_ns = acc[_M_EVAL_NS]
+    prefill_ns = acc[_M_PREFILL_NS]
+    decode_tps = (eval_count / (eval_ns / 1_000_000_000)) if (eval_count and eval_ns) else None
+    prefill_tps = (prompt_eval_count / (prefill_ns / 1_000_000_000)) if (prompt_eval_count and prefill_ns) else None
+    payload: dict = {
+        "eval_count": eval_count,
+        "prompt_eval_count": prompt_eval_count,
+        "ttft_ms": round(acc[_M_TTFT_NS] / 1_000_000, 1),
+        "load_ms": round(acc[_M_LOAD_NS] / 1_000_000, 1),
+        "total_ms": round(acc[_M_TOTAL_NS] / 1_000_000, 1),
+    }
+    if decode_tps is not None:
+        payload["decode_tps"] = round(decode_tps, 2)
+    if prefill_tps is not None:
+        payload["prefill_tps"] = round(prefill_tps, 2)
+    return payload
 
 
 async def _run_tool(event: StreamEvent, session_id: str = "", api_key: str = "", specialist_id: str = "") -> str:
@@ -201,6 +365,7 @@ async def _stream_follow_up(
     depth: int = 1,
     tool_acc: list[int] | None = None,
     specialist_id: str = "",
+    metrics_acc: list[int] | None = None,
 ) -> str:
     """Stream the follow-up turn after tool execution.
 
@@ -233,6 +398,8 @@ async def _stream_follow_up(
         elif event.type == "usage":
             usage_acc[0] += event.input_tokens
             usage_acc[1] += event.output_tokens
+            if metrics_acc is not None:
+                _update_metrics_acc(metrics_acc, event)
         elif event.type == "error":
             await _send_event(ws, "error", content=event.content)
 
@@ -258,7 +425,7 @@ async def _stream_follow_up(
         text += await _stream_follow_up(
             ws, claude, next_messages, system_prompt, tools,
             session_id, api_key, usage_acc, depth + 1, tool_acc=tool_acc,
-            specialist_id=specialist_id,
+            specialist_id=specialist_id, metrics_acc=metrics_acc,
         )
 
     return text
@@ -272,14 +439,22 @@ async def _apply_memory_pressure_swap(
     base_url: Optional[str],
     ctx_len_tokens: Optional[int],
 ) -> tuple[Optional[str], bool]:
-    """Pre-flight memory-pressure swap (ADR 005 §C trigger 2).
+    """Pre-dispatch model swap.
 
-    Returns ``(new_model_litellm, floor_refused)``. ``model`` is unchanged
-    when no swap is needed, swapped to the next runnable ladder entry when
-    free RAM can't fit the requested model, or set to ``None`` (with
-    ``floor_refused=True``) when even the floor refuses to fit. On floor
-    refusal the caller MUST short-circuit — this helper does NOT emit the
-    error+done sequence so the caller controls cleanup ordering.
+    Now scoped to the explicit lightweight-mode toggle (ADR 005 §C trigger 3).
+    The auto-downgrade pre-flight (ADR 005 §C trigger 2) was removed: it
+    gated dispatch on `psutil.virtual_memory().available × 0.8 >= footprint`,
+    which on macOS unified memory ignores the reclaimable inactive/cached
+    pool that Ollama itself can use. The check produced its own failure mode
+    (floor-refused → "Insufficient RAM" toast) on machines where Ollama
+    would have happily mmap-loaded the model — confirmed empirically on a
+    24 GB Apple Silicon box where a 30B model loaded fine from the terminal
+    but the in-app 8B was being refused. The OOM-retry-walk-the-ladder
+    loop downstream (trigger 1) is the real safety net: if the load
+    actually OOMs we step down. No reason to pre-emptively second-guess.
+
+    Returns ``(new_model_litellm, floor_refused)``. ``floor_refused`` is
+    now always False; kept for caller signature stability.
 
     No-op for Ollama models that aren't in the catalog (custom user pulls
     or off-ladder dev tags).
@@ -294,50 +469,33 @@ async def _apply_memory_pressure_swap(
     if requested_entry is None:
         return model, False
 
-    try:
-        installed_raw = await list_installed_models(base_url or DEFAULT_OLLAMA_BASE_URL)
-    except Exception:  # noqa: BLE001 — network/runtime — skip the check, not the turn
-        logger.warning("memory_pressure: list_installed_models failed; skipping pre-flight swap")
+    if not _is_lightweight_mode_on():
         return model, False
 
+    try:
+        installed_raw = await list_installed_models(base_url or DEFAULT_OLLAMA_BASE_URL)
+    except Exception:  # noqa: BLE001 — network/runtime — skip the swap, not the turn
+        logger.warning("memory_pressure: list_installed_models failed; skipping lightweight pin")
+        return model, False
     installed_tags = [m.get("name", "") for m in installed_raw if m.get("name")]
-    ctx_len = ctx_len_tokens or requested_entry.effective_context_tokens
 
     try:
         tier = mpm.current_tier()
     except Exception:  # noqa: BLE001 — psutil/sysctl env-dependent
-        logger.warning("memory_pressure: tier probe failed; skipping pre-flight swap")
+        logger.warning("memory_pressure: tier probe failed; skipping lightweight pin")
         return model, False
 
-    # ADR 005 §C trigger 3 — Lightweight mode hard-pins the active model to
-    # the smallest installed rung on the tier's ladder, *regardless* of
-    # current free RAM. The user explicitly asked for "just works under
-    # memory pressure"; the auto-downgrade path's "fits but smaller than
-    # requested" warning is the wrong UX for that case. Short-circuit the
-    # pressure check entirely when the toggle is on and the floor differs
-    # from the requested model.
-    if _is_lightweight_mode_on():
-        floor = mpm.floor_entry_for_tier(tier, installed_ollama_tags=installed_tags)
-        if floor is not None and floor.id != requested_entry.id:
-            await _send_event(
-                ws,
-                "warning",
-                content=f"Lightweight mode — using {floor.label or floor.id}",
-            )
-            return f"ollama_chat/{floor.ollama_model}", False
-        # floor == requested OR no installed-on-ladder fallback → fall through
-
-    swap = mpm.pick_runnable_model(
-        requested_entry,
-        tier=tier,
-        ctx_len_tokens=ctx_len,
-        installed_ollama_tags=installed_tags,
-    )
-    if swap.chosen is None:
-        return None, True
-    if swap.did_swap:
-        await _send_event(ws, "warning", content=swap.reason or "Switched models due to memory pressure")
-        return f"ollama_chat/{swap.chosen.ollama_model}", False
+    # Lightweight mode hard-pins the active model to the smallest installed
+    # rung on the tier's ladder, regardless of current free RAM. User
+    # explicitly opted in to this behaviour.
+    floor = mpm.floor_entry_for_tier(tier, installed_ollama_tags=installed_tags)
+    if floor is not None and floor.id != requested_entry.id:
+        await _send_event(
+            ws,
+            "warning",
+            content=f"Lightweight mode — using {floor.label or floor.id}",
+        )
+        return f"ollama_chat/{floor.ollama_model}", False
     return model, False
 
 
@@ -606,14 +764,11 @@ async def _handle_message(
         base_url=base_url,
         ctx_len_tokens=prompt_stats.get("context_tokens"),
     )
-    if floor_refused:
-        await _send_event(
-            ws,
-            "error",
-            content="Insufficient RAM: no installed local model fits in available memory. Free up RAM or pick a smaller model in Settings.",
-        )
-        await _send_event(ws, "done", session_id=session_id)
-        return
+    # `floor_refused` is now structurally always False — the auto-downgrade
+    # pre-flight check was removed (see _apply_memory_pressure_swap). Kept
+    # for callsite stability; if Ollama actually OOMs at load we walk the
+    # ladder via _ladder_step_after_oom downstream.
+    assert not floor_refused
     model = swapped_model
 
     claude = get_llm(api_key or "", provider, model, base_url) if get_llm else _make_llm(provider, model, api_key or "", base_url)
@@ -630,6 +785,8 @@ async def _handle_message(
     usage_acc = [0, 0]
     # [tool_calls, tool_rounds] accumulated across all rounds
     tool_acc = [0, 0]
+    # Per-stage timings (decode, prefill, load, total) — see _new_metrics_acc
+    metrics_acc = _new_metrics_acc()
     pending_tools: list[StreamEvent] = []
 
     # OOM-retry loop (ADR 005 §C trigger 1). Up to one walk-the-ladder
@@ -661,6 +818,7 @@ async def _handle_message(
             elif event.type == "usage":
                 usage_acc[0] += event.input_tokens
                 usage_acc[1] += event.output_tokens
+                _update_metrics_acc(metrics_acc, event)
 
             elif event.type == "error":
                 if (
@@ -690,6 +848,14 @@ async def _handle_message(
                 content="Out of memory and no smaller installed model fits. Free up RAM and try again.",
             )
             break
+        # Reset the metrics accumulator before retrying. If Ollama emitted
+        # a `usage` event with partial timings before the OOM error in the
+        # failed round (uncommon but possible — partial-chunk abort path),
+        # those timings belong to the *evicted* model. Carrying them into
+        # the retried round's `done.metrics` would attribute the failed
+        # model's load+prefill to the smaller fallback and feed a
+        # mis-attributed sample to the chat-health watcher.
+        metrics_acc = _new_metrics_acc()
         model = new_model
         await _send_event(ws, "warning", content=warning or "Switched to smaller model after OOM")
         claude = (
@@ -715,7 +881,7 @@ async def _handle_message(
         assistant_text += await _stream_follow_up(
             ws, claude, tool_messages, system_prompt, tools,
             session_id, api_key, usage_acc, tool_acc=tool_acc,
-            specialist_id=active_specialist_id,
+            specialist_id=active_specialist_id, metrics_acc=metrics_acc,
         )
 
     if assistant_text:
@@ -749,6 +915,29 @@ async def _handle_message(
         "model": model or "claude-sonnet-4-20250514",
         "provider": provider or "ollama",
     }
+    # Per-turn telemetry (ADR 005 §C trigger 2) — forwarded only when
+    # any round in this turn reported timings. The frontend attaches
+    # the payload to the just-finished assistant message and feeds it
+    # to the chat-health watcher for the observed-vs-baseline ratio.
+    metrics_payload = _build_metrics_payload(metrics_acc)
+    if metrics_payload is not None:
+        done_fields["metrics"] = metrics_payload
+
+    # Prefill-cost diagnostic — fires whether or not Ollama returned timings,
+    # so we can also detect "all rounds aborted before usage" cases. See
+    # `_prefill_log` for the hypothesis under test.
+    try:
+        _prefill_log(
+            session_id=session_id,
+            system_prompt=system_prompt,
+            prompt_stats=prompt_stats,
+            metrics_acc=metrics_acc,
+            tool_acc=tool_acc,
+            model=model,
+        )
+    except Exception:  # noqa: BLE001 — diagnostic must never break the turn
+        logger.debug("prefill_log failed", exc_info=True)
+
     # Include tool_mode for local models so the frontend can show tool support info
     if provider == "ollama" and model:
         from services.ollama_service import MODEL_CATALOG, _tool_mode_for

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 
@@ -459,12 +459,16 @@ def _persisted(
     ollama_version: str = "0.18.0",
     platform: str = "darwin-arm64-macos14",
     models: tuple[str, ...] = ("qwen3:14b", "qwen3:8b"),
+    catalog_models: Optional[tuple[str, ...]] = None,
 ) -> dict:
     return {
         "schema_version": 1,
         "ollama_version": ollama_version,
         "platform": platform,
         "candidates_evaluated": [{"model": m, "verdict": "pass"} for m in models],
+        "catalog_models": list(
+            catalog_models if catalog_models is not None else models
+        ),
     }
 
 
@@ -520,6 +524,50 @@ def test_needs_rerun_when_catalog_adds_models():
     rerun, reason = needs_rerun(persisted, env)
     assert rerun is True
     assert reason == "catalog_added_models"
+
+
+def test_needs_rerun_false_when_probe_stopped_early_but_catalog_unchanged():
+    """The orchestrator stops on the first passing candidate, so
+    ``candidates_evaluated`` is a *subset* of the catalog. Comparing the
+    current catalog against ``candidates_evaluated`` would falsely return
+    ``catalog_added_models`` on every load — the banner would stick. The fix
+    persists a ``catalog_models`` snapshot at probe time and compares against
+    that instead.
+    """
+    persisted = _persisted(
+        models=("qwen3:30b", "qwen3:14b"),  # only #1 + #2 evaluated; #2 passed
+        catalog_models=("qwen3:14b", "qwen3:30b", "qwen3:8b"),  # full catalog
+    )
+    env = CurrentEnvironment(
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos14",
+        catalog_models=("qwen3:14b", "qwen3:30b", "qwen3:8b"),
+    )
+    rerun, reason = needs_rerun(persisted, env)
+    assert rerun is False
+    assert reason == "fresh"
+
+
+def test_needs_rerun_when_catalog_models_field_missing():
+    """Pre-snapshot persisted records (predating the ``catalog_models`` field)
+    must force a fresh probe so the new shape gets written. Falling back to
+    ``candidates_evaluated`` would re-introduce the early-exit false-positive.
+    """
+    persisted = {
+        "schema_version": 1,
+        "ollama_version": "0.18.0",
+        "platform": "darwin-arm64-macos14",
+        "candidates_evaluated": [{"model": "qwen3:14b", "verdict": "pass"}],
+        # no "catalog_models"
+    }
+    env = CurrentEnvironment(
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos14",
+        catalog_models=("qwen3:14b",),
+    )
+    rerun, reason = needs_rerun(persisted, env)
+    assert rerun is True
+    assert reason == "no_prior_probe"
 
 
 def test_needs_rerun_false_when_catalog_only_shrinks():
@@ -664,6 +712,6 @@ async def test_iter_probe_events_complete_payload_matches_persisted_shape(monkey
     expected_keys = {
         "schema_version", "timestamp_utc", "ollama_version", "platform",
         "ram_gb", "recommended_model", "safe_fallback_used",
-        "candidates_evaluated", "user_override",
+        "candidates_evaluated", "user_override", "catalog_models",
     }
     assert set(payload.keys()) == expected_keys

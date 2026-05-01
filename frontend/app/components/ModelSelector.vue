@@ -191,7 +191,9 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 .model-selector__dropdown {
   position: absolute;
   bottom: calc(100% + 6px);
-  left: 0;
+  /* Anchor right — the trigger sits in the bottom-right corner of the
+     chat composer, so left:0 grows the dropdown off the viewport edge. */
+  right: 0;
   min-width: 220px;
   max-width: 280px;
   max-height: 360px;

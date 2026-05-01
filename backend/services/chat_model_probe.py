@@ -144,6 +144,11 @@ class ProbeResult:
     safe_fallback_used: bool
     candidates_evaluated: tuple[ProbeEvidence, ...] = field(default_factory=tuple)
     user_override: Optional[str] = None
+    # Sorted snapshot of the user-pickable catalog at probe time. Used by
+    # ``needs_rerun`` to detect catalog *additions* — comparing against
+    # ``candidates_evaluated`` would falsely flag every model the orchestrator
+    # skipped after the first-passing-candidate break.
+    catalog_models: tuple[str, ...] = field(default_factory=tuple)
 
 
 # ── Probe 1 — Correctness ──────────────────────────────────────────────────
@@ -322,6 +327,7 @@ async def iter_probe_events(
     generator.
     """
     candidate_list = candidates if candidates is not None else _candidates_for_probe()
+    catalog_snapshot = tuple(sorted(e.ollama_model for e in candidate_list))
     available_ram = _available_ram_bytes()
     hw = probe_hardware()
     client = OllamaTimedClient(base_url=base_url)
@@ -440,6 +446,7 @@ async def iter_probe_events(
         safe_fallback_used=recommended is None,
         candidates_evaluated=tuple(evidence),
         user_override=None,
+        catalog_models=catalog_snapshot,
     )
     yield {
         "event": "complete",
@@ -464,6 +471,7 @@ def _result_as_dict(result: ProbeResult) -> dict:
         "safe_fallback_used": result.safe_fallback_used,
         "candidates_evaluated": [asdict(e) for e in result.candidates_evaluated],
         "user_override": result.user_override,
+        "catalog_models": list(result.catalog_models),
     }
 
 
@@ -500,6 +508,7 @@ async def recommend_chat_model(
                     ProbeEvidence(**e) for e in payload["candidates_evaluated"]
                 ),
                 user_override=payload["user_override"],
+                catalog_models=tuple(payload.get("catalog_models") or ()),
             )
     assert final is not None, "iter_probe_events must yield a complete event"
     return final
@@ -589,12 +598,16 @@ def needs_rerun(
         return True, "ollama_version_changed"
     if persisted.get("platform") != current.platform:
         return True, "platform_changed"
-    persisted_models = {
-        e.get("model")
-        for e in persisted.get("candidates_evaluated") or []
-        if e.get("model")
-    }
-    added = set(current.catalog_models) - persisted_models
+    # Compare against the catalog snapshot taken at probe time. Falling back
+    # to ``candidates_evaluated`` would falsely flag every model the
+    # orchestrator skipped after the first-passing-candidate break — so a
+    # 4-model catalog where #2 passes would always show 2 "added" models.
+    snapshot = persisted.get("catalog_models")
+    if snapshot is None:
+        # Pre-snapshot record (predates the field). Treat as missing context
+        # and force a fresh probe so the new shape gets persisted.
+        return True, "no_prior_probe"
+    added = set(current.catalog_models) - set(snapshot)
     if added:
         return True, "catalog_added_models"
     return False, "fresh"
@@ -670,6 +683,7 @@ def set_user_override(
                 "recommended_model": None,
                 "safe_fallback_used": True,
                 "candidates_evaluated": [],
+                "catalog_models": [],
             }
         record["user_override"] = model
         config[PROBE_CONFIG_KEY] = record

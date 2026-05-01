@@ -1101,15 +1101,26 @@ async def probe_runtime_load(base_url: str = DEFAULT_OLLAMA_BASE_URL) -> Runtime
 
 
 async def probe_runtime(base_url: str = DEFAULT_OLLAMA_BASE_URL) -> RuntimeStatus:
-    """Check if Ollama is installed and running."""
+    """Check if Ollama is installed and running.
+
+    `installed` semantic: "an Ollama runtime is available to this app". It is
+    true when EITHER a global `ollama` binary is on PATH (legacy/dev case)
+    OR the configured base URL answers (bundled-runtime case — ADR 003 +
+    ADR 015). Without this dual condition the bundled-app first-run wizard
+    would fall back to "Download Ollama" because the binary inside
+    `<app>.app/Contents/Resources/ollama-runtime/` is intentionally not on
+    PATH.
+    """
     base_url = _normalize_and_validate_ollama_base_url(base_url)
     status = RuntimeStatus(base_url=base_url)
 
-    # 1. Check if ollama binary exists
+    # 1. Check if a global ollama binary is on PATH (legacy / dev case).
     ollama_path = shutil.which("ollama")
-    status.installed = ollama_path is not None
+    cli_on_path = ollama_path is not None
 
-    # 2. Try to reach the API
+    # 2. Try to reach the API at the configured base URL. In the bundled
+    # product this is the private port (e.g. 11435) the Tauri shell tells
+    # the backend about via JARVIS_OLLAMA_BASE_URL.
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
             resp = await client.get(f"{base_url}/api/version")
@@ -1129,6 +1140,10 @@ async def probe_runtime(base_url: str = DEFAULT_OLLAMA_BASE_URL) -> RuntimeStatu
         pass
     except Exception as exc:
         logger.debug("Ollama probe unexpected error: %s", exc)
+
+    # `installed = on PATH OR reachable`. Reachable → installed somewhere
+    # (bundled, daemon, remote — doesn't matter for the wizard's purposes).
+    status.installed = cli_on_path or status.reachable
 
     return status
 

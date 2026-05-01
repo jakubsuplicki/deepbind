@@ -238,6 +238,7 @@ async def run_chat_model_probe(
                             ProbeEvidence(**e) for e in payload["candidates_evaluated"]
                         ),
                         user_override=existing_override,
+                        catalog_models=tuple(payload.get("catalog_models") or ()),
                     )
                     persist_probe_result(
                         result,

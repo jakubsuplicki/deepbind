@@ -14,8 +14,8 @@ sources:
 	- frontend/app/pages/onboarding.vue
 	- frontend/app/pages/main.vue
 depends_on: [local-models, latency-benchmark, preferences-settings]
-last_reviewed: 2026-04-29
-last_updated: 2026-04-29
+last_reviewed: 2026-05-01
+last_updated: 2026-05-01
 ---
 
 # Chat Model Self-Test (Probe)
@@ -68,6 +68,12 @@ manually.
   platform, catalog_models)` for re-run-trigger comparison. `platform`
   includes the macOS major version on darwin (`darwin-arm64-macos14`)
   because the Qwen3-30B-A3B leak appeared on macOS 26 but not 14.
+- `catalog_models` is a sorted snapshot of the user-pickable catalog at
+  probe time. `needs_rerun` compares against this — *not* against
+  `candidates_evaluated`, which is a subset because the orchestrator
+  breaks on the first passing candidate. Without the snapshot, every
+  unevaluated catalog entry would falsely trigger `catalog_added_models`
+  on every load.
 - `needs_rerun(persisted, current) → (bool, reason)` — returns the
   re-run reason (`no_prior_probe` / `ollama_version_changed` /
   `platform_changed` / `catalog_added_models` / `fresh`). Catalog
@@ -156,7 +162,8 @@ Stored under the `chat_model_probe` key in `app/config.json`:
       {"model": "qwen3:14b", "verdict": "pass",
        "warm_short_total_ms": 299, "realistic_tps": 14.0}
     ],
-    "user_override": null
+    "user_override": null,
+    "catalog_models": ["qwen3:14b", "qwen3:30b-a3b", "qwen3:8b"]
   }
 }
 ```
@@ -167,7 +174,7 @@ the run finishes.
 
 ## Testing
 
-40 unit tests in `test_chat_model_probe.py` cover:
+42 unit tests in `test_chat_model_probe.py` cover:
 
 - Thinking-prose pattern panel (8 leaked + 7 clean cases).
 - Hardware-fit at threshold edges + KV-architecture differences
@@ -179,7 +186,11 @@ the run finishes.
   override-vs-recommendation precedence.
 - `set_user_override` on empty config / existing record / clear.
 - `needs_rerun` across all five reason codes; macOS-major version is
-  baked into `platform`.
+  baked into `platform`. Two regression tests cover the
+  `catalog_models` snapshot path: (1) early-exit evidence subset must
+  not falsely trigger `catalog_added_models`, and (2) pre-snapshot
+  records (missing the field) force a fresh probe so the new shape
+  gets persisted.
 - `iter_probe_events` event sequence + final-event payload shape
   matches the persisted record.
 

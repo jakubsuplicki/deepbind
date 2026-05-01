@@ -1,13 +1,25 @@
 import type { HardwareProfile, RuntimeStatus, ModelRecommendation, PullProgress } from '~/types'
 
 const OLLAMA_BASE_URL_KEY = 'jarvis-ollama-base-url'
-const DEFAULT_BASE_URL = 'http://localhost:11434'
+
+// Empty string means "no client-side override — let the backend's
+// JARVIS_OLLAMA_BASE_URL env var win". In the bundled product the Tauri
+// shell points the backend at `http://127.0.0.1:11435` (the private
+// bundled-Ollama port), so the frontend has no business hardcoding
+// `:11434` (the upstream Ollama default) on top. The Settings →
+// Advanced UI is the only path that should set a non-empty value.
+const LEGACY_DEFAULT_BASE_URL = 'http://localhost:11434'
 
 function _readBaseUrl(): string {
   try {
-    return localStorage.getItem(OLLAMA_BASE_URL_KEY) ?? DEFAULT_BASE_URL
+    const v = localStorage.getItem(OLLAMA_BASE_URL_KEY) ?? ''
+    // Old builds shipped with `:11434` written to localStorage on first
+    // load. That value used to be a no-op default; under the bundled
+    // architecture it now actively overrides the correct backend URL.
+    // Treat it as "not set" so we don't fight the backend.
+    return v === LEGACY_DEFAULT_BASE_URL ? '' : v
   } catch {
-    return DEFAULT_BASE_URL
+    return ''
   }
 }
 
@@ -24,6 +36,15 @@ export function useLocalModels() {
   let _healthInterval: ReturnType<typeof setInterval> | null = null
   let _pullAbortController: AbortController | null = null
 
+  // Helpers — only forward base_url when the user has explicitly set one.
+  // Empty string means "use backend default" (bundled :11435 in production).
+  function _baseUrlParams(): Record<string, string> {
+    return baseUrl.value ? { base_url: baseUrl.value } : {}
+  }
+  function _baseUrlBody<T extends Record<string, unknown>>(extra: T): T {
+    return baseUrl.value ? ({ ...extra, base_url: baseUrl.value } as T) : extra
+  }
+
   async function fetchHardware(): Promise<void> {
     try {
       hardware.value = await $fetch<HardwareProfile>(apiUrl('/api/local/hardware'))
@@ -35,7 +56,7 @@ export function useLocalModels() {
   async function fetchRuntime(): Promise<void> {
     try {
       runtime.value = await $fetch<RuntimeStatus>(apiUrl('/api/local/runtime'), {
-        params: { base_url: baseUrl.value },
+        params: _baseUrlParams(),
       })
     } catch (e: unknown) {
       runtime.value = {
@@ -51,7 +72,7 @@ export function useLocalModels() {
   async function fetchCatalog(): Promise<void> {
     try {
       catalog.value = await $fetch<ModelRecommendation[]>(apiUrl('/api/local/models/catalog'), {
-        params: { base_url: baseUrl.value },
+        params: _baseUrlParams(),
       })
       // If the selected model is no longer installed, fall back to the
       // first active/installed model so the UI doesn't look broken.
@@ -97,10 +118,7 @@ export function useLocalModels() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: _pullAbortController.signal,
-        body: JSON.stringify({
-          model: model.ollama_model,
-          base_url: baseUrl.value,
-        }),
+        body: JSON.stringify(_baseUrlBody({ model: model.ollama_model })),
       })
 
       if (!response.ok || !response.body) {
@@ -171,11 +189,10 @@ export function useLocalModels() {
     try {
       await $fetch(apiUrl('/api/local/models/select'), {
         method: 'POST',
-        body: {
+        body: _baseUrlBody({
           model_id: model.model_id,
           litellm_model: model.litellm_model,
-          base_url: baseUrl.value,
-        },
+        }),
       })
       await fetchCatalog()
       // Sync chat-side active model so the ModelSelector in the chat
@@ -195,7 +212,7 @@ export function useLocalModels() {
     try {
       await $fetch(apiUrl(`/api/local/models/${encodeURIComponent(ollamaModel)}`), {
         method: 'DELETE',
-        params: { base_url: baseUrl.value },
+        params: _baseUrlParams(),
       })
       await fetchCatalog()
     } catch (e: unknown) {
@@ -226,7 +243,7 @@ export function useLocalModels() {
     try {
       await $fetch(apiUrl('/api/local/models/warm-up'), {
         method: 'POST',
-        body: { model: ollamaModel, base_url: baseUrl.value },
+        body: _baseUrlBody({ model: ollamaModel }),
       })
     } catch {
       // Fire-and-forget; ignore errors
