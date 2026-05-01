@@ -39,6 +39,7 @@
           :voice-supported="isVoiceAvailable"
           :ollama-down="localModels.ollamaDown.value"
           :slow-response="slowResponse"
+          :sidecar-warm="sidecarWarm"
           @send="handleSend"
           @retry="chat.retry()"
           @toggle-voice="handleVoiceToggle"
@@ -60,7 +61,7 @@ import { useLocalModels } from '~/composables/useLocalModels'
 
 const { checkHealth, chatActive } = useAppState()
 const chat = useChat()
-const { messages, currentResponse, isLoading, toolActivity, error, canRetry, slowResponse, init, sendMessage } = chat
+const { messages, currentResponse, isLoading, toolActivity, error, canRetry, slowResponse, sidecarWarm, init, sendMessage } = chat
 
 const sessionsState = useSessions()
 const { sessions, activeSessionId } = sessionsState

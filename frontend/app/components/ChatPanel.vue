@@ -95,6 +95,19 @@ const props = defineProps<{
   voiceSupported?: boolean
   ollamaDown?: boolean
   slowResponse?: string
+  /**
+   * True once the sidecar has produced at least one successful response in
+   * this WS connection (set on first `done` event in `useChat`). Drives
+   * the cold-bootstrap surface gating: only show `ChatFirstTurnWarmup`
+   * when the sidecar is genuinely cold (`sidecarWarm === false`). Once
+   * warm, every turn — fresh session or follow-up — uses the typing-dots
+   * indicator instead. Without this flag the bootstrap surface fired
+   * for the first turn of every new session, even when the sidecar was
+   * already warm and the actual wait was 1-2 s — which made the 4-stage
+   * "BOOTSTRAPPING LOCAL MODEL" instrument-panel readout overpromise on
+   * latency and feel patronizing.
+   */
+  sidecarWarm?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -178,21 +191,23 @@ watch(
 
 // ── First-turn warmup surface ────────────────────────────────────────
 //
-// Show the bootstrap surface only when this is genuinely the first turn
-// of the session — there's no prior assistant message in the history.
-// Resumed sessions get the existing typing-dots indicator (the model
-// might still be cold if keep_alive expired between sessions, but
-// over-firing the warmup surface on resume would feel patronizing on
-// turns that come back fast).
-const hasAnyAssistantMessage = computed(() =>
-  props.messages.some(m => m.role === 'assistant'),
-)
-
+// Show the bootstrap surface only when the sidecar is genuinely cold —
+// no successful response has come back through this WS connection yet
+// (`sidecarWarm` flips true on the first `done` event in useChat). This
+// supersedes the prior session-local "no assistant messages yet"
+// heuristic, which over-fired on every "+ New" session even when the
+// model was already resident and the actual wait was 1-2 s. The cold
+// cost is process-scoped, not session-scoped: once the sidecar has
+// produced any output, all subsequent turns — across any session, on
+// any "+ New" — should use the lighter typing-dots indicator. Only
+// when the user genuinely has a cold sidecar (fresh launch, sidecar
+// never produced output yet) should the 4-stage instrument readout
+// make a promise about a 15 s wait.
 const isFirstTurnWaiting = computed(() =>
   props.isLoading
   && !props.currentResponse
   && !props.toolActivity
-  && !hasAnyAssistantMessage.value,
+  && !props.sidecarWarm,
 )
 
 const firstTurnStartedAt = ref<number>(0)

@@ -12,6 +12,21 @@ export function useChat() {
   const error = ref('')
   const sessionId = ref('')
   const canRetry = ref(false)
+  // Tracks "has the sidecar produced at least one successful response since
+  // this composable instantiated?" — flips true on the first `done` event
+  // and stays true until the composable unmounts (which only happens on
+  // app restart). Consumed by ChatPanel to gate the cold-bootstrap surface
+  // (`ChatFirstTurnWarmup`): we only show that surface when the sidecar
+  // is genuinely cold, not on every "first turn of a new session" — those
+  // turns are typically ~2 s when the model is already resident, and the
+  // 4-stage instrument-panel readout would imply a 15 s wait that won't
+  // happen. Independent of session boundaries by design: switching
+  // sessions or starting "+ New" mid-app-session keeps `sidecarWarm`
+  // true, so bootstrap stays hidden. The flag intentionally does NOT
+  // reset on WS disconnect — Tauri usually reconnects to the same
+  // sidecar process and the model stays resident; treating disconnect
+  // as cold would over-fire the surface.
+  const sidecarWarm = ref(false)
   let _lastContent = ''
   // Step 28a — trace event arrives between text_delta and done; held here
   // until `done` flushes the assistant message into the history.
@@ -99,6 +114,13 @@ export function useChat() {
     }
 
     if (event.type === 'done') {
+      // ADR 009 amendment 2026-05-01 follow-up — once the sidecar has
+      // delivered any successful response, the cold-bootstrap surface
+      // should never show again for the lifetime of this WS / composable.
+      // Set this even when currentResponse is empty (pure-tool-use turn)
+      // so the flag tracks "sidecar produced output" not "user-visible
+      // text rendered". Idempotent.
+      sidecarWarm.value = true
       if (currentResponse.value) {
         const msg: ChatMessage = {
           role: 'assistant',
@@ -272,6 +294,7 @@ export function useChat() {
     sessionId,
     isConnected,
     slowResponse,
+    sidecarWarm,
     init,
     sendMessage,
     retry,
