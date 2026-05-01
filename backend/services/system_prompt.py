@@ -205,22 +205,47 @@ async def build_system_prompt_with_stats(
     system_prompt_budget_tokens: Optional[int] = None,
     tokenizer_id: Optional[str] = None,
 ) -> tuple[str, dict]:
-    """Build the system prompt and return token-attribution stats.
+    """Build the (now stable) system prompt and return retrieval as a separate block.
 
-    Stats breaks the prompt into buckets so callers can log where tokens go:
+    ADR 009 amendment 2026-05-01 (stable-prefix shift): the retrieved-
+    context block no longer lives inside the system prompt. The system
+    prompt returned here is byte-stable across turns within a session —
+    persona + specialist directives + JARVIS extensions + language
+    reminder. Retrieval mutates per turn (different user message →
+    different notes pulled), so glueing it into the system prompt makes
+    the prompt prefix unstable and defeats Ollama's KV cache prefix-
+    match. With retrieval moved out, the cache reuses the long prefix
+    on every warm turn, dropping warm-turn TTFT from ~8 s to <1 s on
+    a 24 GB M5.
+
+    Callers (chat router, eval runner) consume ``stats["retrieval_block"]``
+    and prepend it to the latest user message via
+    :func:`attach_retrieval_to_user_message` before dispatch. The
+    retrieval string keeps the same XML framing build_context already
+    emits (``<retrieved_note>`` tags, etc.) — only its position in the
+    final assembled prompt changes.
+
+    Stats breaks the costs into buckets so callers can log where tokens go:
       - base_tokens: core SYSTEM_PROMPT + specialist directives
-      - context_tokens: retrieved notes / issues / decisions context block
-      - lang_tokens: language reminder footer
-      - total_tokens: sum (approx, 4 chars ≈ 1 token)
+      - context_tokens: retrieved-notes block (now in user-message position)
+      - lang_tokens: language reminder
+      - total_tokens: system_prompt token count (NO LONGER includes retrieval —
+        callers wanting the dispatched-prompt-total should sum total_tokens
+        + context_tokens themselves).
+      - retrieval_block: the formatted retrieval string for caller to attach
+        to the latest user message ("" when nothing was retrieved).
+      - context_truncated: whether ADR 009 budget enforcement kicked in.
+      - trace: per-note retrieval trace for the WS surface.
 
     When ``system_prompt_budget_tokens`` is supplied (typically derived
     from the active model's ``effective_context_tokens × 0.30``), the
-    retrieved-context block is iteratively truncated until the total
-    fits. Per ADR 009 §"System-prompt budget enforcement" the truncation
-    keeps the highest-priority retrieved notes (which arrive first in
-    the assembled context) and discards the tail. ``tokenizer_id`` is
-    optional; ``None`` falls back to the ``count_tokens`` char/4
-    estimator.
+    retrieved-context block is iteratively truncated until it fits inside
+    the budget. The cap now applies to the retrieval block standalone
+    (since base + lang_reminder live elsewhere). Per ADR 009 the
+    truncation keeps the highest-priority retrieved notes (which arrive
+    first in the assembled context) and discards the tail.
+    ``tokenizer_id`` is optional; ``None`` falls back to the
+    ``count_tokens`` char/4 estimator.
     """
     from services import specialist_service
     from services.context_builder import build_graph_scoped_context
@@ -261,18 +286,21 @@ async def build_system_prompt_with_stats(
             user_message, workspace_path=workspace_path,
         )
 
-    # Detect user message language and append a final reminder AFTER any retrieved
-    # context. Small models have recency bias — the last instruction before the
-    # assistant token wins over instructions buried at the top of a long prompt.
+    # The language reminder lives at the END of the system prompt. It
+    # used to sit AFTER the retrieved context for recency-bias reasons
+    # (small models attend more to instructions closer to assistant
+    # generation); with retrieval now positioned in the user message
+    # instead, the reminder still benefits from being last in the
+    # system prompt — there is just no in-system-prompt context for
+    # the user's notes to drift between.
     lang_reminder = _language_reminder(user_message)
 
-    # ADR 009 — enforce a total system-prompt budget when supplied. Only the
-    # retrieved-context block is truncated; base persona + language reminder
-    # are stable in size and load-bearing. The trace stays attached to the
-    # original retrieval ranking so the UI continues to show the user *why*
-    # a note was picked even if its body was truncated to fit. The helper
-    # also returns the token counts it already computed so the stats block
-    # below doesn't re-encode the same strings.
+    # ADR 009 — enforce the retrieval-block budget when supplied. The
+    # cap (typically 30% of effective_context_tokens) now applies to
+    # the retrieval block standalone, since base + lang_reminder are
+    # not at the same position any more. The helper still returns the
+    # token counts it already computed so the stats block below doesn't
+    # re-encode the same strings.
     (
         context,
         context_truncated,
@@ -287,28 +315,30 @@ async def build_system_prompt_with_stats(
         tokenizer_id=tokenizer_id,
     )
 
-    if not context:
-        prompt = base + "\n\n" + lang_reminder
-    else:
-        prompt = (
-            base
-            + "\n\nHere are potentially relevant notes from the user's memory:\n"
+    # Stable system prompt: base + lang_reminder ONLY. No retrieval.
+    prompt = base + "\n\n" + lang_reminder
+
+    # Retrieval block — what the caller will glue onto the latest user
+    # message. We keep the natural-language framing line so the model sees
+    # the block as evidence rather than instruction. When retrieval is
+    # empty (no matches, or budget enforcement zeroed it out), the block
+    # is empty and the caller skips the attach step.
+    if context:
+        retrieval_block = (
+            "Here are potentially relevant notes from the user's memory:\n"
             + context
-            + "\n\n"
-            + lang_reminder
         )
+    else:
+        retrieval_block = ""
 
     # Use the configured tokenizer when one is available so the stats the
     # audit log forwards (via prompt_stats["context_tokens"] in log_usage)
     # match the numbers the compaction trigger and the system-prompt budget
     # enforcement actually saw. The pre-ADR-009 char/4 path stays as the
-    # fallback when no tokenizer_id is in scope. Without this alignment the
-    # audit logs diverge 20–40% from the budget on Polish/Chinese/Arabic
-    # content, which is exactly the languages the tokenizer was added for.
+    # fallback when no tokenizer_id is in scope.
     #
     # When budget enforcement ran, it already paid the encode cost for
-    # base / context / lang_reminder; reuse those counts. Only the final
-    # assembled prompt count needs a fresh encode either way.
+    # base / context / lang_reminder; reuse those counts.
     from services.token_counting import count_tokens
 
     base_tok = base_tok_cached if base_tok_cached is not None \
@@ -324,6 +354,11 @@ async def build_system_prompt_with_stats(
         "context_tokens": context_tok,
         "lang_tokens": lang_tok,
         "total_tokens": total_tok,
+        # ADR 009 amendment 2026-05-01 — retrieval is no longer in the system
+        # prompt; the caller glues it onto the latest user message via
+        # `attach_retrieval_to_user_message`. Empty string when nothing was
+        # retrieved. Token cost is in `context_tokens`.
+        "retrieval_block": retrieval_block,
         # ADR 009 — surface whether the system-prompt budget kicked in so
         # callers can log it alongside the compaction event.
         "context_truncated": context_truncated,
@@ -355,6 +390,18 @@ def _enforce_system_prompt_budget(
     ``None`` when the helper short-circuited (no budget, no context); the
     caller then falls back to computing counts itself, identical to the
     pre-fix behavior.
+
+    Post ADR 009 amendment 2026-05-01 the retrieval block ships in the
+    user-message position rather than glued into the system prompt. The
+    budget invariant is the same as before — ``base + lang_reminder +
+    context ≤ budget_tokens`` — but now interprets as "the system-prompt
+    portion (base + lang) plus the retrieval block we'll attach to the
+    user message stays under the model's safe ceiling," not "the assembled
+    system prompt stays under the ceiling." Same arithmetic, different
+    physical layout. Callers (chat router) compute ``budget_tokens`` from
+    ``effective_context_tokens × 0.30`` so the dispatched prompt-prefix
+    (system + retrieval, before history + user question) leaves headroom
+    for history + reply.
 
     The truncation is **proportional** rather than note-by-note. Doing this
     at the retrieval-result granularity would require routing the structured
@@ -463,5 +510,62 @@ def _language_reminder(user_message: str) -> str:
     return (
         f"LANGUAGE REMINDER — this overrides everything above:\n"
         f'The user\'s message is in {lang}. Your ENTIRE reply MUST be in {lang}.\n'
-        f"Do not use any other language. Not even one sentence. The notes above may be in a different language — ignore that when writing your reply."
+        f"Do not use any other language. Not even one sentence. Any retrieved notes attached to the user's message may be in a different language — ignore that when writing your reply."
     )
+
+
+# ── Caller-side helper: glue retrieval onto the latest user message ─────────
+
+
+def attach_retrieval_to_user_message(
+    messages: list[dict],
+    retrieval_block: str,
+) -> list[dict]:
+    """Return a shallow copy of ``messages`` with ``retrieval_block`` prepended
+    to the content of the **last user-role message**.
+
+    ADR 009 amendment 2026-05-01 (stable-prefix shift). The system prompt
+    is now byte-stable across turns; retrieval lives on the just-sent user
+    message instead. This helper is the only sanctioned place that mutation
+    happens, so the chat router and the eval runner can share the contract.
+
+    Behavior:
+    * Empty ``retrieval_block`` → returns ``messages`` unchanged (same list,
+      not a copy — caller may rely on this for fast-path).
+    * Last message is text-content user message → retrieval is prepended
+      with a blank line separator before the user's actual text.
+    * Last message is structured-content user message (e.g. a tool_result
+      block carrier) → retrieval is inserted as a leading text block in the
+      content list. Tool_result blocks remain untouched in their existing
+      positions.
+    * No user-role message exists at the tail (shouldn't happen in
+      production — the chat router always appends the user turn before
+      assembling) → returns ``messages`` unchanged. This is a defensive
+      no-op rather than an exception, so a malformed strategy can't drop
+      a turn into the void.
+
+    The retrieval block carries its own framing line ("Here are
+    potentially relevant notes from the user's memory:"); the helper
+    only handles positioning.
+    """
+    if not retrieval_block or not messages:
+        return messages
+
+    last = messages[-1]
+    if last.get("role") != "user":
+        # The chat router always appends the user message before calling here,
+        # so the tail is always a user turn in production. Defensive no-op
+        # otherwise — better to dispatch without retrieval than to glue it
+        # onto an assistant or tool_result turn and corrupt the conversation.
+        return messages
+
+    content = last.get("content")
+    out = list(messages)
+    if isinstance(content, str):
+        out[-1] = {**last, "content": retrieval_block + "\n\n" + content}
+    elif isinstance(content, list):
+        out[-1] = {**last, "content": [{"type": "text", "text": retrieval_block}, *content]}
+    else:
+        # Unknown content shape — defensive no-op for the same reason as above.
+        return messages
+    return out

@@ -9,7 +9,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from services import session_service
 from services import specialist_service
 from services.chat import DEFAULT_STRATEGY, ContextStrategy
-from services.system_prompt import StreamEvent, build_system_prompt, build_system_prompt_with_stats
+from services.system_prompt import (
+    StreamEvent,
+    attach_retrieval_to_user_message,
+    build_system_prompt,
+    build_system_prompt_with_stats,
+)
 from services.ollama_dispatcher import OllamaDispatchConfig, OllamaDispatcher
 from services.tools import TOOLS, ToolNotFoundError, execute_tool
 from services.token_tracking import check_budget, log_usage
@@ -43,6 +48,11 @@ def _prefill_log(
     model: Optional[str],
 ) -> None:
     sp_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:12]
+    retrieval_block = prompt_stats.get("retrieval_block", "") or ""
+    rb_hash = (
+        hashlib.sha256(retrieval_block.encode("utf-8")).hexdigest()[:12]
+        if retrieval_block else "-"
+    )
     prev = _PERF_TURN_STATE.get(session_id)
     turn_no = (prev[0] + 1) if prev else 1
     prefix_stable = bool(prev) and prev[1] == sp_hash
@@ -52,11 +62,11 @@ def _prefill_log(
 
     payload = _build_metrics_payload(metrics_acc) or {}
     logger.info(
-        "chat_turn session=%s turn=%d sp_hash=%s prefix_stable=%s "
+        "chat_turn session=%s turn=%d sp_hash=%s prefix_stable=%s rb_hash=%s "
         "sp_total_tok=%s sp_ctx_tok=%s ctx_truncated=%s "
         "prefill_count=%s prefill_ms=%s ttft_ms=%s load_ms=%s decode_tps=%s prefill_tps=%s "
         "tool_calls=%s tool_rounds=%s model=%s",
-        session_id, turn_no, sp_hash, prefix_stable,
+        session_id, turn_no, sp_hash, prefix_stable, rb_hash,
         prompt_stats.get("total_tokens"),
         prompt_stats.get("context_tokens"),
         prompt_stats.get("context_truncated"),
@@ -622,6 +632,7 @@ async def _maybe_compact(
     *,
     session_id: str,
     system_prompt: str,
+    retrieval_block: str = "",
     provider: Optional[str],
     model: Optional[str],
     ws: WebSocket,
@@ -635,6 +646,12 @@ async def _maybe_compact(
     Skipped for models not in the catalog (custom user pulls or off-ladder
     dev tags) — compaction needs the catalog's effective_context_tokens
     field to know when to fire.
+
+    Per ADR 009 amendment 2026-05-01 the retrieval block lives in the
+    user-message position rather than the system prompt, but it still
+    counts toward the dispatched prefix size; pass it in so the headroom
+    math (``effective_ctx - prefix - output_reserve``) reflects what
+    Ollama will actually see, not just the system prompt.
     """
     if not model:
         return messages
@@ -656,12 +673,16 @@ async def _maybe_compact(
             return messages
 
         system_prompt_tokens = count_tokens(system_prompt, tokenizer_id=entry.tokenizer_id)
+        retrieval_tokens = (
+            count_tokens(retrieval_block, tokenizer_id=entry.tokenizer_id)
+            if retrieval_block else 0
+        )
 
         result = await compact_messages(
             messages,
             effective_context_tokens=entry.effective_context_tokens,
             tokenizer_id=entry.tokenizer_id,
-            system_prompt_tokens=system_prompt_tokens,
+            system_prompt_tokens=system_prompt_tokens + retrieval_tokens,
             current_session_id=session_id,
         )
 
@@ -735,13 +756,29 @@ async def _handle_message(
     # boundary, never inside _stream_follow_up. Triggered when projected
     # tokens exceed `threshold_pct × effective_ctx_tokens`. No-ops when
     # the active model has no catalog entry (off-ladder dev tags).
+    #
+    # Note: compaction runs against the *clean* history (user messages
+    # without the per-turn retrieval glue). Retrieval is attached AFTER
+    # compaction so old turns get folded into the recall block without
+    # carrying stale retrieval forward.
     messages = await _maybe_compact(
         messages,
         session_id=session_id,
         system_prompt=system_prompt,
+        retrieval_block=prompt_stats.get("retrieval_block", "") or "",
         provider=provider,
         model=model,
         ws=ws,
+    )
+
+    # ADR 009 amendment 2026-05-01 — retrieval lives in the user-message
+    # position so the system prompt stays byte-identical across turns and
+    # Ollama's KV cache prefix-match reuses the long stable prefix on
+    # warm follow-ups. Attach the just-built retrieval block onto the
+    # latest user message in `messages` before dispatch. No-op when
+    # retrieval was empty.
+    messages = attach_retrieval_to_user_message(
+        messages, prompt_stats.get("retrieval_block", "") or ""
     )
     active_specs = specialist_service.get_active_specialists()
     tools = specialist_service.filter_tools(TOOLS, specialists=active_specs)

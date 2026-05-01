@@ -217,15 +217,23 @@ async def _build_system_prompt_for_turn(
     fallback_system_prompt: str,
     workspace_path: Optional[Path],
     graph_scope: Optional[str],
-) -> str:
-    """Resolve the system prompt for an assistant_target turn.
+) -> tuple[str, str]:
+    """Resolve the system prompt + retrieval block for an assistant_target turn.
+
+    Returns ``(system_prompt, retrieval_block)``. The retrieval block is
+    empty when retrieval is disabled or returned no matches; the caller
+    glues it onto the latest user message via
+    :func:`attach_retrieval_to_user_message` so the eval mirrors the
+    shipped chat path post ADR 009 amendment 2026-05-01 (stable system
+    prompt + retrieval at user-message position).
 
     When ``retrieval_enabled`` is ``False`` (the default), we hand back
-    the fixed fallback prompt — fast, deterministic, and isolates the
-    strategy variable. When ``True``, we mirror production by calling
-    ``build_system_prompt_with_stats`` against the most recent user
-    message; this exercises retrieval-augmented context the way the
-    shipped chat path does.
+    the fixed fallback prompt and an empty retrieval block — fast,
+    deterministic, and isolates the strategy variable. When ``True``,
+    we mirror production by calling ``build_system_prompt_with_stats``
+    against the most recent user message; this exercises retrieval-
+    augmented context the way the shipped chat path does, including
+    the user-message-position glue.
 
     The ``services.system_prompt`` import is local so that running the
     eval without retrieval doesn't pay the cost of importing the
@@ -233,17 +241,17 @@ async def _build_system_prompt_for_turn(
     SQLite index, and a fair amount of other infrastructure).
     """
     if not retrieval_enabled:
-        return fallback_system_prompt
+        return fallback_system_prompt, ""
 
     user_message = _last_user_message_text(history)
     from services.system_prompt import build_system_prompt_with_stats
 
-    prompt, _stats = await build_system_prompt_with_stats(
+    prompt, stats = await build_system_prompt_with_stats(
         user_message,
         workspace_path=workspace_path,
         graph_scope=graph_scope,
     )
-    return prompt
+    return prompt, stats.get("retrieval_block", "") or ""
 
 
 def _percentile(values: list[float], pct: float) -> float:
@@ -385,13 +393,20 @@ async def run_fixture(
                     f"{type(assembled).__name__}; expected list"
                 )
 
-            turn_system_prompt = await _build_system_prompt_for_turn(
+            turn_system_prompt, retrieval_block = await _build_system_prompt_for_turn(
                 history,
                 retrieval_enabled=retrieval_enabled,
                 fallback_system_prompt=sys_prompt,
                 workspace_path=workspace_path,
                 graph_scope=graph_scope,
             )
+
+            # ADR 009 amendment 2026-05-01: retrieval lives in user-message
+            # position so the eval matches the shipped chat path. No-op when
+            # retrieval_block is empty.
+            if retrieval_block:
+                from services.system_prompt import attach_retrieval_to_user_message
+                assembled = attach_retrieval_to_user_message(assembled, retrieval_block)
 
             t0 = time.perf_counter()
             response = await chat(assembled, turn_system_prompt)

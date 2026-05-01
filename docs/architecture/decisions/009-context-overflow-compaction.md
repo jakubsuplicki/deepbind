@@ -1,7 +1,7 @@
 # ADR 009 — Retrieval-first context-overflow compaction
 
 **Status:** Accepted — production wiring landed
-**Date:** 2026-04-27 (initial), amended 2026-04-28 (eval-side `retrieval-substitution-v1` landed; gate verdict justified production wiring), 2026-04-29 (production-side compaction wiring landed; same-day code-review fixes pass)
+**Date:** 2026-04-27 (initial), amended 2026-04-28 (eval-side `retrieval-substitution-v1` landed; gate verdict justified production wiring), 2026-04-29 (production-side compaction wiring landed; same-day code-review fixes pass), 2026-05-01 (stable system-prompt prefix — retrieval moves to user-message position to restore Ollama KV-cache reuse on warm turns)
 **Related:** [`docs/features/retrieval.md`](../../features/retrieval.md) · [`docs/features/sessions.md`](../../features/sessions.md) · [`docs/features/chat.md`](../../features/chat.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §5
 
 ## Context
@@ -324,6 +324,31 @@ Backend behavior is stable; the open chunk is the **frontend UI surface** (ADR 0
 - Compaction expand-summary view consuming the audit log.
 
 That chunk attaches to the `compaction` WebSocket event this chunk now emits and the `compaction_events` array this chunk now persists, so the contract for the frontend is set.
+
+## Amendment 2026-05-01 — Stable system-prompt prefix (retrieval moves to user-message position)
+
+**What changed.** The retrieved-context block no longer lives inside the system prompt. `build_system_prompt_with_stats` now returns a system prompt that is byte-stable across turns within a session (persona + specialist directives + JARVIS extensions + language reminder); retrieval is surfaced as a separate `stats["retrieval_block"]` and the chat router glues it onto the latest user message before dispatch via the new `attach_retrieval_to_user_message` helper. Same notes get retrieved with the same ranking and the same trace; only the position in the assembled prompt changes.
+
+**Why.** The G4b6 cold-launch smoke on Apple M5 24 GB measured ~7.7 s warm-turn TTFT with `prefix_stable=False` — the system-prompt SHA mutated turn-to-turn because retrieval (which depends on the user message) was glued into the system block. Ollama's KV cache prefix-match looks at the literal prompt prefix; any mutation at byte 0 invalidates the cache and forces a full re-prefill of the entire ~2.7 K-token prefix every turn. With retrieval moved out, the system prompt becomes byte-identical session-long, the cache reuses the long prefix on every warm turn, and only the just-asked user turn (small) gets prefilled. Empirically this collapses warm TTFT from ~7.7 s to under 1 s on the same hardware. The cold first turn is unaffected (cache is empty either way).
+
+**What it does NOT change.** Retrieval pipeline (BM25 + cosine + graph scoring), what gets retrieved, the `<retrieved_note>` XML wrapping, the per-note trace surfaced to the frontend, memory-writing tools, specialist directives, or the persona text. The system prompt structurally has the same components in the same order minus the retrieved-context block.
+
+**Compaction interaction.** Compaction operates on the `messages` list *before* retrieval is glued onto the latest user message. This means old user messages in history are clean (no per-turn retrieval) — when compaction folds them into a recall block, no stale retrieval leaks through. Only the just-dispatched turn carries retrieval, and that turn isn't compaction-eligible (it's the current `recent_n` window). The compaction headroom math is updated to pass `system_prompt_tokens + retrieval_tokens` (rather than just `system_prompt_tokens`) so the dispatched-prefix size still maps to the correct trigger threshold; `_maybe_compact` gains a `retrieval_block` parameter to thread this through.
+
+**Budget enforcement.** Same 30%-of-`effective_context_tokens` cap on the retrieved-context block — same arithmetic, same proportional truncation, same trace preservation. The cap now anchors at the user-message position instead of the system-prompt position, but `_enforce_system_prompt_budget`'s invariant ("base + lang + context ≤ budget") still holds because the budget is a property of the dispatched prefix, not of any one role.
+
+**Quality posture.** Qwen3 (and Qwen3-class models generally) are trained on RAG patterns where context arrives via tool_result / user-position blocks rather than via system prompt. Moving retrieval to the user-message position is *toward* the training distribution, not away from it. The Polish/multilingual language-leak risk is reduced because notes (which may be in a different language) are no longer at the same prompt position as the language-reminder instruction; the XML `<retrieved_note>` wrapping continues to mark them as evidence not instruction. The language-reminder text itself is updated to be position-agnostic ("any retrieved notes attached to the user's message" instead of "the notes above").
+
+**Tests.** New `backend/tests/test_system_prompt_stable_prefix.py` pins:
+- `system_prompt` excludes retrieved-note content even when retrieval has results.
+- `system_prompt` is byte-identical across two calls with different user messages but the same persona / specialist / language posture.
+- `attach_retrieval_to_user_message` glues onto the tail user message correctly for both string and list content shapes; defensive no-op when the tail isn't user-role or the block is empty.
+
+Backwards-compat note: `build_system_prompt_with_stats` keeps its `(prompt: str, stats: dict)` return shape; the new `retrieval_block` field is added to `stats`. Existing callers (chat router, eval runner, JARVIS-self test, security tests, context-builder trace tests) all work without test updates because none of them asserted retrieval content was *inside* the prompt string. The eval runner is updated to call `attach_retrieval_to_user_message` so the eval harness mirrors the production prompt shape.
+
+Diagnostic coverage: the per-turn `chat_turn` log line in [`backend/routers/chat.py::_prefill_log`](../../../backend/routers/chat.py) surfaces a separate `rb_hash` (retrieval-block SHA12) alongside `sp_hash` so a future regression where retrieval starts leaking back into the system prompt would show as `prefix_stable=False` again.
+
+The full backend suite (1,434 passed / 1 skipped) plus the 11 new prefix-stability tests stay green after the change.
 
 ## Open follow-ups (non-blocking)
 
