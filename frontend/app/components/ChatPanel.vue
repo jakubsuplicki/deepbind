@@ -206,6 +206,72 @@ watch(
   { immediate: true },
 )
 
+// ── Throttled streaming markdown render ────────────────────────────────
+//
+// Why throttle: build #6 chat_step instrumentation found that a 27-token
+// reply spent 13.5s in the streaming loop while Ollama itself reported
+// only 3.4s of work — a 10s gap. Each text_delta event triggered a full
+// re-render of the streaming bubble; `renderMarkdown(currentResponse)`
+// re-parses the *entire accumulated string* through marked + DOMPurify
+// every time a new token arrives. As the response grows, that work
+// grows with it. The Tauri webview gets stuck doing markdown parses and
+// can't drain the WebSocket fast enough; the backend's `await
+// ws.send_json(...)` calls back-pressure on each text_delta, stretching
+// the streaming loop wall-clock far past Ollama's actual emit time.
+//
+// Fix: only re-parse markdown at most every STREAM_RENDER_MS during
+// streaming. The user perceives a smooth update because the human eye
+// can't distinguish 50 ms from 80 ms anyway, but the WS now drains at
+// full speed and end-to-end latency tracks Ollama's real performance.
+// The trailing-edge timer guarantees the final state always renders
+// even if the last token lands inside a throttle window. When the
+// message moves into `messages[]` (stream complete), the per-message
+// `v-html="renderMarkdown(msg.content)"` in the messages loop renders
+// the final markdown — that path stays untouched.
+const STREAM_RENDER_MS = 80
+const renderedStream = ref('')
+let _streamRenderTimer: ReturnType<typeof setTimeout> | null = null
+let _streamRenderLast = 0
+
+watch(
+  () => props.currentResponse,
+  (text) => {
+    if (!text) {
+      renderedStream.value = ''
+      _streamRenderLast = 0
+      if (_streamRenderTimer) {
+        clearTimeout(_streamRenderTimer)
+        _streamRenderTimer = null
+      }
+      return
+    }
+    const now = Date.now()
+    const sinceLast = now - _streamRenderLast
+    if (sinceLast >= STREAM_RENDER_MS) {
+      renderedStream.value = renderMarkdown(text)
+      _streamRenderLast = now
+      if (_streamRenderTimer) {
+        clearTimeout(_streamRenderTimer)
+        _streamRenderTimer = null
+      }
+    }
+    else if (!_streamRenderTimer) {
+      _streamRenderTimer = setTimeout(() => {
+        renderedStream.value = renderMarkdown(props.currentResponse)
+        _streamRenderLast = Date.now()
+        _streamRenderTimer = null
+      }, STREAM_RENDER_MS - sinceLast)
+    }
+  },
+)
+
+onBeforeUnmount(() => {
+  if (_streamRenderTimer) {
+    clearTimeout(_streamRenderTimer)
+    _streamRenderTimer = null
+  }
+})
+
 watch(
   () => [props.messages.length, props.currentResponse],
   () => {
@@ -296,7 +362,12 @@ watch(
 
       <div v-if="currentResponse" class="chat-panel__message assistant">
         <div class="chat-panel__bubble chat-panel__bubble--md">
-          <span v-html="renderMarkdown(currentResponse)" />
+          <!-- Throttled markdown — see `renderedStream` watcher above for
+               why this isn't `renderMarkdown(currentResponse)` directly.
+               Short version: that synchronous re-parse on every WS
+               text_delta backed up the WebSocket and stretched the
+               streaming loop wall-clock far past Ollama's emit time. -->
+          <span v-html="renderedStream" />
           <span class="chat-panel__cursor">▊</span>
         </div>
       </div>
