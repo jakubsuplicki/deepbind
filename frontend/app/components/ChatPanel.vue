@@ -4,6 +4,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useChatHealth } from '~/composables/useChatHealth'
 import { useSpecialists } from '~/composables/useSpecialists'
+import ChatFirstTurnWarmup from '~/components/ChatFirstTurnWarmup.vue'
 
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -175,6 +176,36 @@ watch(
   },
 )
 
+// ── First-turn warmup surface ────────────────────────────────────────
+//
+// Show the bootstrap surface only when this is genuinely the first turn
+// of the session — there's no prior assistant message in the history.
+// Resumed sessions get the existing typing-dots indicator (the model
+// might still be cold if keep_alive expired between sessions, but
+// over-firing the warmup surface on resume would feel patronizing on
+// turns that come back fast).
+const hasAnyAssistantMessage = computed(() =>
+  props.messages.some(m => m.role === 'assistant'),
+)
+
+const isFirstTurnWaiting = computed(() =>
+  props.isLoading
+  && !props.currentResponse
+  && !props.toolActivity
+  && !hasAnyAssistantMessage.value,
+)
+
+const firstTurnStartedAt = ref<number>(0)
+watch(
+  () => isFirstTurnWaiting.value,
+  (active, wasActive) => {
+    if (active && !wasActive) {
+      firstTurnStartedAt.value = Date.now()
+    }
+  },
+  { immediate: true },
+)
+
 watch(
   () => [props.messages.length, props.currentResponse],
   () => {
@@ -268,8 +299,26 @@ watch(
         </div>
       </div>
 
-      <!-- Typing indicator (dots) when loading but no response yet -->
-      <div v-if="isLoading && !currentResponse && !toolActivity" class="chat-panel__message assistant">
+      <!-- First-turn-of-session bootstrap surface — replaces the generic
+           typing dots for the one turn where the wait is actually long
+           (~16s on M5 24 GB). Communicates the one-time nature of the
+           cost so the user has a stable mental model after turn 1
+           lands. See `ChatFirstTurnWarmup.vue` for design intent. -->
+      <ChatFirstTurnWarmup
+        v-if="isFirstTurnWaiting && firstTurnStartedAt > 0"
+        :started-at="firstTurnStartedAt"
+        :estimated-total-sec="15"
+      />
+
+      <!-- Typing indicator (dots) — for follow-up turns where the wait
+           is short (1-2s warm) or merely longer-than-cached (eviction,
+           tool-loop second dispatch). Always reachable as the lower-
+           drama loading state once the session has had at least one
+           assistant turn. -->
+      <div
+        v-else-if="isLoading && !currentResponse && !toolActivity"
+        class="chat-panel__message assistant"
+      >
         <div class="chat-panel__bubble chat-panel__typing">
           <span class="chat-panel__dot" />
           <span class="chat-panel__dot" />
