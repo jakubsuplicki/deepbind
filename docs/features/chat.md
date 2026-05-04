@@ -36,9 +36,24 @@ This is the core conversation loop of Jarvis: a WebSocket channel carries user m
 
 ### Connection lifecycle
 
-The frontend opens a single persistent WebSocket to `GET /api/chat/ws` on page load. The backend immediately creates a session and sends `session_start` with a `session_id`. That ID travels with every subsequent message so the backend appends to the correct conversation history. If the connection drops, `useWebSocket` schedules an exponential backoff reconnect (1 s → 2 s → 4 s → … capped at 15 s) and sends a synthetic `disconnected` event so the chat UI can reset its loading state without waiting.
+The frontend opens a single persistent WebSocket to `GET /api/chat/ws` on page load. The backend immediately creates a session, sends `session_start` with a `session_id`, and registers `(ws, get_llm, asyncio.Lock)` under that session in `_active_sessions`. That ID travels with every subsequent message so the backend appends to the correct conversation history. If the connection drops, `useWebSocket` schedules an exponential backoff reconnect (1 s → 2 s → 4 s → … capped at 15 s) and sends a synthetic `disconnected` event so the chat UI can reset its loading state without waiting.
 
-A heartbeat ping is sent from the frontend every 25 seconds to keep the connection alive through proxies. The backend silently ignores `ping` frames.
+A heartbeat ping is sent from the frontend every 25 seconds; the backend echoes a `pong` for each one. The frontend tracks `_lastPongAt` (refreshed on every inbound frame) and uses it to detect stale TCP sockets. On macOS, App Nap, OS sleep, and NAT timeouts can silently kill the underlying connection without transitioning the JS WebSocket out of `OPEN` — `ws.send()` then succeeds into a dead OS buffer and the message stalls in TCP retransmits for ~20 + s. When `send()` is called and `Date.now() - _lastPongAt > 30 s`, the composable queues the frame to a small outbound buffer (cap 8), force-closes the stale socket with a single-use `_suppressNextDisconnect` flag (so the close handler does not broadcast `disconnected` to chat consumers and flash an error), and immediately reconnects. The new `onopen` drains the queue so the message that triggered the reconnect rides the fresh connection. If the reconnect itself fails the suppression flag has already been consumed, so that close fires `disconnected` normally and the user sees a real error. The exponential-backoff reconnect schedule (1 s → 2 s → 4 s → … capped at 15 s) still applies to involuntary closes; force-close bypasses it because the close was deliberate.
+
+### Send path: WebSocket vs Tauri IPC (ADR 016)
+
+User chat-message sends do **not** go over the WebSocket in the bundled app. They go through a Tauri Rust command (`send_chat_message`) that POSTs the payload to `POST /api/chat/message` via loopback HTTP. The streaming response still flows back over the WebSocket — only the SEND direction is split off.
+
+The motivation: macOS WKWebView (which Tauri 2 uses) throttles in-page WebSocket outbound I/O after the view is idle. Measured impact on Apple M5 24 GB: the second user message of a fresh app session sat for **27 seconds** between `ws.send()` returning and the backend receiving the frame. The streaming receive direction is unaffected; only outbound sends are throttled. Routing sends through the Rust shell's network stack bypasses WKWebView entirely.
+
+`useWebSocket.send()` detects the Tauri environment via `'__TAURI_INTERNALS__' in window` and routes accordingly:
+
+- **Bundled (Tauri):** `await invoke('send_chat_message', { payload })`. The Rust command POSTs to the sidecar over loopback HTTP using a long-lived `reqwest::Client`. Heartbeat pings stay on the WS — they need to exercise the same socket the server is streaming on so the staleness detector has a real signal.
+- **Browser dev mode:** `ws.send(JSON.stringify(payload))`, the legacy path. Both paths converge at `_process_chat_payload` on the backend, so behaviour is identical.
+
+`POST /api/chat/message` looks up the session's WebSocket in `_active_sessions`, validates the payload, and dispatches `_handle_message` as a background task. The HTTP request returns 200 immediately; streaming flows back over the WS. The per-session `asyncio.Lock` in the registry serialises concurrent dispatches whether they arrive over WS or HTTP.
+
+The wire-time diagnostic logs `transport=http` or `transport=ws` on the `chat_step received` line so we can confirm the fix is doing what it claims and watch for regressions.
 
 ### Per-message flow
 
@@ -168,7 +183,7 @@ The "single hard-coded canonical model" choice is the wrong shape long-term — 
 - `backend/services/tools/__init__.py` — Re-exports `TOOLS` and `execute_tool` so callers can keep using `from services.tools import …` after the package split.
 - `backend/services/web_search.py` — Thin DuckDuckGo wrapper. The offline-mode entitlement check ([`services/privacy.py`](../../backend/services/privacy.py)) gates outbound network use; when blocked, returns `[{"error": "<reason>"}]`.
 - `backend/services/token_tracking.py` — Append-only JSONL usage log with per-day and all-time aggregation helpers; records `provider="ollama"` and `model` per entry. `cost_estimate` is invariantly `0.0` — there is no inference cost on local models.
-- `frontend/app/composables/useWebSocket.ts` — Persistent WebSocket with heartbeat, exponential-backoff reconnect, and multi-listener message dispatch
+- `frontend/app/composables/useWebSocket.ts` — Persistent WebSocket with bidirectional ping/pong heartbeat, stale-socket detection on send (force-reconnect with frame queueing), exponential-backoff reconnect for involuntary closes, and multi-listener message dispatch
 - `frontend/app/composables/useChat.ts` — Conversation state manager; maps raw WebSocket events to UI state; handles retry logic
 - `frontend/app/components/ChatPanel.vue` — Message list, streaming cursor, typing indicator, tool activity label, error bar with retry, URL ingest toolbar
 
@@ -191,7 +206,7 @@ All frames are JSON. The client sends; the server sends back a stream of events 
   "api_key"?: string          // per-request key from browser storage
 }
 
-// Keep-alive (silently ignored by server)
+// Heartbeat — frontend sends this every 25s
 { "type": "ping" }
 ```
 
@@ -238,6 +253,11 @@ All frames are JSON. The client sends; the server sends back a stream of events 
 
 { "type": "error", "content": string }
 // Recoverable or fatal error. Check content for user-facing message.
+
+{ "type": "pong" }
+// Reply to a client `ping`. useWebSocket consumes these as a liveness
+// signal (refreshes `_lastPongAt`) and does NOT broadcast to chat
+// listeners — pong is a transport-level event, not a chat event.
 ```
 
 `disconnected` is a synthetic client-side-only event emitted by `useWebSocket` on socket close; it never comes from the server. It is included in the `WsEvent` union type as `WsDisconnected`.

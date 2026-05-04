@@ -221,6 +221,18 @@ export function useChat() {
   function sendMessage(content: string, options?: { graphScope?: string }): void {
     if (!content.trim() || isLoading.value) return
 
+    // Wire-time diagnostic timestamps (Date.now() epoch ms). Three points
+    // bracket the JS-side path so the backend can compute where the
+    // latency is — between the user clicking send and chat_step receiving
+    // the frame:
+    //   t_enter_ms   = sendMessage entry (right after the loading guard)
+    //   t_pre_send_ms = right before ws.send() — captures any Vue
+    //                   reactive-flush or watcher work that ran inline
+    //                   between the message push and the actual send
+    //   backend `chat_step received` log records its own arrival time.
+    // If t_pre_send - t_enter is large → JS-side blocking; if backend
+    // arrival - t_pre_send is large → transport-layer delay.
+    const t_enter_ms = Date.now()
     _lastContent = content.trim()
     messages.value.push({ role: 'user', content: _lastContent, timestamp: new Date().toISOString() })
     currentResponse.value = ''
@@ -229,7 +241,7 @@ export function useChat() {
     isLoading.value = true
     _startSlowTimer()
 
-    const payload: Record<string, string> = { type: 'message', content: _lastContent, session_id: sessionId.value }
+    const payload: Record<string, unknown> = { type: 'message', content: _lastContent, session_id: sessionId.value }
     if (options?.graphScope) payload.graph_scope = options.graphScope
 
     // ADR 015 — single dispatcher (local Ollama). Attach the chosen model;
@@ -243,6 +255,9 @@ export function useChat() {
     payload.model = activeModel.value
     if (baseUrl.value) payload.base_url = baseUrl.value
 
+    const t_pre_send_ms = Date.now()
+    payload.t_enter_ms = t_enter_ms
+    payload.t_pre_send_ms = t_pre_send_ms
     const sent = send(payload)
     if (!sent) {
       // WS not ready — reset and show error

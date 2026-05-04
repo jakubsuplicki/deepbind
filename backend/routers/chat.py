@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 from services import session_service
 from services import specialist_service
@@ -866,6 +866,16 @@ async def _handle_message(
     text_started = False
     oom_retry_done = False
     _step_log("before_stream_response")
+    # Per-frame send timing — investigation of the consistently-reproducing
+    # 24 s back-pressure on turn 2 of every fresh app open. If individual
+    # text_delta sends are >100 ms each, the WebSocket / frontend webview
+    # is the bottleneck (frames pile up faster than the renderer can drain).
+    # If individual sends are fast but with long gaps between them, it's
+    # something else in this loop (e.g. waiting on the Ollama stream).
+    # Logged as one summary line at end of stream so we don't flood logs.
+    _send_durations: list[float] = []
+    _send_slow_count = 0
+    _send_max_ms = 0.0
     while True:
         saw_oom_pre_text = False
         async for event in claude.stream_response(
@@ -880,7 +890,14 @@ async def _handle_message(
                     content = attribution_prefix + content
                     attribution_prefix = ""  # Only prepend once
                 assistant_text += content
+                _send_t0 = _time.perf_counter()
                 await _send_event(ws, "text_delta", content=content)
+                _send_dur_ms = (_time.perf_counter() - _send_t0) * 1000.0
+                _send_durations.append(_send_dur_ms)
+                if _send_dur_ms > _send_max_ms:
+                    _send_max_ms = _send_dur_ms
+                if _send_dur_ms > 100.0:
+                    _send_slow_count += 1
 
             elif event.type == "tool_use":
                 pending_tools.append(event)
@@ -995,6 +1012,19 @@ async def _handle_message(
 
     _step_log("after_stream_complete")
 
+    # Per-frame WS send-timing summary. Total = sum of every
+    # `await ws.send_json(text_delta)`; max = slowest single send;
+    # slow_count = # of sends that exceeded 100 ms. If total ≈ stream
+    # wall-clock, the WebSocket is fully back-pressuring (the frontend
+    # can't drain frames fast enough). If total ≪ stream wall-clock,
+    # something else in the streaming loop is blocking.
+    if _send_durations:
+        _send_total_ms = sum(_send_durations)
+        logger.info(
+            "chat_step session=%s step=stream_send count=%d total_ms=%.1f max_ms=%.1f slow_count=%d",
+            session_id, len(_send_durations), _send_total_ms, _send_max_ms, _send_slow_count,
+        )
+
     # Prefill-cost diagnostic — fires whether or not Ollama returned timings,
     # so we can also detect "all rounds aborted before usage" cases. See
     # `_prefill_log` for the hypothesis under test.
@@ -1035,6 +1065,18 @@ async def _handle_message(
     _schedule_session_save(session_id)
 
 
+def _validate_message_dict(data: dict) -> tuple:
+    """Validate a parsed chat-message dict. Returns (data, error_message).
+    Returns (None, None) for control messages like ping that should be silently ignored.
+    """
+    if data.get("type") == "ping":
+        return None, None
+    content = data.get("content", "").strip()
+    if not content:
+        return None, "Message content is required"
+    return data, None
+
+
 def _parse_message(raw: str) -> tuple:
     """Parse raw WS text. Returns (data, error_message).
     Returns (None, None) for control messages like ping that should be silently ignored.
@@ -1043,16 +1085,147 @@ def _parse_message(raw: str) -> tuple:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return None, "Invalid JSON"
+    return _validate_message_dict(data)
 
-    # Silently ignore heartbeat pings
-    if data.get("type") == "ping":
-        return None, None
 
+# ── Session → WebSocket registry ──────────────────────────────────────────
+#
+# Maps session_id to the active WebSocket + that connection's per-session
+# get_llm closure + a per-session asyncio.Lock that prevents two concurrent
+# `_handle_message` runs from corrupting session state.
+#
+# Used by the HTTP `POST /api/chat/message` endpoint (ADR 016) to dispatch
+# inbound user messages onto the same WebSocket the frontend is already
+# listening to. The HTTP endpoint exists because macOS WKWebView can throttle
+# the WebView's outbound WebSocket frames after the view goes idle (measured
+# at ~27 s wire_time on M5 turn 2). Routing sends through the Tauri Rust
+# shell over HTTP bypasses that throttling entirely. Streaming responses
+# still flow back over the WebSocket — the registry is the bridge.
+#
+# Lifecycle: registered when the WS handler accepts a session, removed in
+# the WS handler's `finally` block. Re-registered if the client switches
+# session_id mid-connection (rare; happens on reconnect-with-prior-id when
+# the active session_id from query-param resume differs from a payload
+# `session_id` field). Concurrent same-session sends serialise on `lock`.
+_active_sessions: "dict[str, dict]" = {}
+
+
+async def _process_chat_payload(
+    websocket: WebSocket,
+    session_id: str,
+    data: dict,
+    get_llm,
+    transport: str = "ws",
+) -> str:
+    """Run the wire-time diagnostic + `_handle_message` for a validated
+    payload. Used by both the WS receive loop and the HTTP dispatch
+    endpoint. Returns the (possibly updated) session_id — the caller is
+    responsible for re-registering in `_active_sessions` if it changed.
+    """
+    client_api_key = data.get("api_key") or None
+    client_provider = data.get("provider") or None
+    client_model = data.get("model") or None
+    client_base_url = data.get("base_url") or None
     content = data.get("content", "").strip()
-    if not content:
-        return None, "Message content is required"
 
-    return data, None
+    requested_sid = data.get("session_id")
+    if requested_sid and requested_sid != session_id:
+        if session_service.get_session(requested_sid):
+            session_id = requested_sid
+
+    graph_scope = data.get("graph_scope") or None
+
+    # Wire-time diagnostic — see useChat.sendMessage / Tauri command for the
+    # matching frontend timestamps. `transport` distinguishes WS-direct sends
+    # (legacy / browser dev) from HTTP+IPC sends (production Tauri path).
+    # If the WKWebView throttling theory holds, transport=ws will show large
+    # wire_time on turn-2 sends and transport=http will not.
+    try:
+        _t_enter = data.pop("t_enter_ms", None)
+        _t_pre_send = data.pop("t_pre_send_ms", None)
+        if isinstance(_t_enter, (int, float)) and isinstance(_t_pre_send, (int, float)):
+            import time as _time2
+            _now_ms = _time2.time() * 1000.0
+            _js_block_ms = float(_t_pre_send) - float(_t_enter)
+            _wire_time_ms = _now_ms - float(_t_pre_send)
+            logger.info(
+                "chat_step session=%s step=received js_block_ms=%.1f wire_time_ms=%.1f transport=%s",
+                session_id, _js_block_ms, _wire_time_ms, transport,
+            )
+    except Exception:
+        pass
+
+    await _handle_message(
+        websocket, session_id, content, get_llm,
+        graph_scope=graph_scope, client_api_key=client_api_key,
+        provider=client_provider, model=client_model,
+        base_url=client_base_url,
+    )
+    return session_id
+
+
+@router.post("/message")
+async def http_chat_message(request: Request) -> dict:
+    """Inbound message dispatch over HTTP — the Tauri shell calls this from
+    a Rust `#[tauri::command]` to bypass WKWebView's WebSocket throttling
+    on macOS (ADR 016). The streaming response still goes over the WebSocket
+    that the frontend is already listening on — we look that WS up via
+    `_active_sessions` and dispatch the same `_handle_message` flow.
+
+    Returns 200 immediately; the actual streaming runs as a background task
+    so the HTTP request can complete without blocking the user's UI for the
+    duration of the model response. Errors during processing surface to the
+    frontend as `error` events on the existing WebSocket, matching the
+    legacy WS-direct path's error shape.
+    """
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+
+    session_id = (payload.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+
+    entry = _active_sessions.get(session_id)
+    if entry is None:
+        # No active WS for this session. Either the WS hasn't connected yet
+        # or it just closed. Frontend should reconnect and retry.
+        raise HTTPException(
+            status_code=503,
+            detail=f"No active WebSocket for session {session_id}",
+        )
+
+    data, error = _validate_message_dict(payload)
+    if error:
+        # Surface as a WS event so the chat UI shows the error inline,
+        # matching the WS-path error contract. HTTP 200 because we did
+        # acknowledge the message — the failure is semantic, not transport.
+        try:
+            await _send_event(entry["ws"], "error", content=error)
+        except Exception:
+            pass
+        return {"ok": False, "error": error}
+    if data is None:
+        # Heartbeat-style ping arriving via HTTP — no-op.
+        return {"ok": True, "skipped": "ping"}
+
+    # Dispatch as a background task so the HTTP request returns immediately.
+    # The streaming response goes back over the WS independently.
+    async def _dispatch():
+        try:
+            async with entry["lock"]:
+                new_sid = await _process_chat_payload(
+                    entry["ws"], session_id, data, entry["get_llm"], transport="http",
+                )
+                if new_sid != session_id:
+                    # Re-register under the new session_id (rare path).
+                    _active_sessions.pop(session_id, None)
+                    _active_sessions[new_sid] = entry
+        except Exception:
+            logger.exception("HTTP dispatch failed for session %s", session_id)
+
+    asyncio.create_task(_dispatch())
+    return {"ok": True}
 
 
 @router.websocket("/ws")
@@ -1105,39 +1278,54 @@ async def chat_ws(websocket: WebSocket) -> None:
             _connection_llm_key = cache_key
         return _connection_llm
 
+    # Register this WS in `_active_sessions` so HTTP dispatch (the Tauri-IPC
+    # path used to bypass WKWebView's outbound throttling) can route inbound
+    # user messages onto this socket. Lock prevents two concurrent
+    # `_handle_message` runs for the same session — applies whether messages
+    # arrive over WS or HTTP.
+    _handler_lock = asyncio.Lock()
+    _active_sessions[session_id] = {
+        "ws": websocket,
+        "get_llm": _get_llm,
+        "lock": _handler_lock,
+    }
+
     try:
         while True:
             raw = await websocket.receive_text()
             data, error = _parse_message(raw)
 
-            # Silently ignore pings (data=None, error=None)
+            # Heartbeat ping → echo a pong. Without this echo the frontend
+            # has no inbound liveness signal during idle, so a TCP socket
+            # that died silently (App Nap, OS sleep, NAT timeout) stays in
+            # readyState=OPEN at the JS layer. The next ws.send() then
+            # appears to succeed but stalls in TCP retransmits — measured
+            # at ~23 s end-to-end on M5 after a multi-hour idle gap. With
+            # the pong echo, the frontend can detect staleness on the
+            # next send and force-reconnect instead of trusting readyState.
             if data is None and error is None:
+                try:
+                    await _send_event(websocket, "pong")
+                except Exception:
+                    pass
                 continue
 
             if error:
                 await _send_event(websocket, "error", content=error)
                 continue
 
-            # Extract client-provided API key + provider + model (browser-only storage)
-            client_api_key = data.get("api_key") or None
-            client_provider = data.get("provider") or None
-            client_model = data.get("model") or None
-            client_base_url = data.get("base_url") or None
-
-            content = data.get("content", "").strip()
-
-            requested_sid = data.get("session_id")
-            if requested_sid and requested_sid != session_id:
-                if session_service.get_session(requested_sid):
-                    session_id = requested_sid
-
-            graph_scope = data.get("graph_scope") or None
-            await _handle_message(
-                websocket, session_id, content, _get_llm,
-                graph_scope=graph_scope, client_api_key=client_api_key,
-                provider=client_provider, model=client_model,
-                base_url=client_base_url,
-            )
+            async with _handler_lock:
+                new_sid = await _process_chat_payload(
+                    websocket, session_id, data, _get_llm, transport="ws",
+                )
+                if new_sid != session_id:
+                    _active_sessions.pop(session_id, None)
+                    _active_sessions[new_sid] = {
+                        "ws": websocket,
+                        "get_llm": _get_llm,
+                        "lock": _handler_lock,
+                    }
+                    session_id = new_sid
 
     except WebSocketDisconnect:
         # Cancel any pending debounced save — we'll do a final save now
@@ -1154,6 +1342,13 @@ async def chat_ws(websocket: WebSocket) -> None:
         # Sessions are cleaned up when a new session is explicitly created or
         # the server restarts.
     finally:
+        # Unregister from the active-sessions map. Pop by current session_id;
+        # also pop any other entries that point at THIS websocket so a
+        # reconnect under a different id can't leave a dangling reference.
+        _active_sessions.pop(session_id, None)
+        for _sid, _entry in list(_active_sessions.items()):
+            if _entry.get("ws") is websocket:
+                _active_sessions.pop(_sid, None)
         if _connection_llm is not None:
             try:
                 await _connection_llm.close()

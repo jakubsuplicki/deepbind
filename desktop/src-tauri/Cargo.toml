@@ -22,3 +22,7 @@ tauri = { version = "2.10.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
 tokio = { version = "1", features = ["sync", "time", "io-util", "rt-multi-thread", "macros"] }
+# HTTP client for the Tauri-IPC chat-send path (ADR 016). default-features off
+# so we don't pull in TLS — the sidecar lives on loopback HTTP. `json` enables
+# .json() body helpers; `http2` is fine for localhost too.
+reqwest = { version = "0.12", default-features = false, features = ["json", "http2"] }

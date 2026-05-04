@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{
-    async_runtime, AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder,
+    async_runtime, AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -209,6 +209,7 @@ fn spawn_ollama(app: &AppHandle) -> Result<Child, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![send_chat_message])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -300,6 +301,19 @@ pub fn run() {
                 }
             };
 
+            // Make the backend URL + a shared reqwest client available to
+            // `send_chat_message`. Long-lived client reuses the connection
+            // pool across the whole session — first POST opens a TCP
+            // connection to the sidecar; subsequent ones reuse it, so the
+            // command's overhead stays microseconds, not millis.
+            app.manage(BackendUrlHandle(cfg.backend_url.clone()));
+            app.manage(HttpClient(
+                reqwest::Client::builder()
+                    .pool_idle_timeout(Duration::from_secs(60))
+                    .build()
+                    .map_err(|e| format!("reqwest client build failed: {e}"))?,
+            ));
+
             // 4. Build the window with the config baked in via init_script,
             // so the page loads with `window.__JARVIS_CONFIG__` already set.
             let cfg_json = serde_json::to_string(&serde_json::json!({
@@ -353,3 +367,49 @@ pub fn run() {
 
 struct SidecarHandle(Mutex<Option<CommandChild>>);
 struct OllamaHandle(Mutex<Option<Child>>);
+
+/// Holds the resolved sidecar HTTP base URL so the `send_chat_message`
+/// command knows where to POST. Populated in the setup hook after the
+/// READY handshake and never mutated after.
+struct BackendUrlHandle(String);
+
+/// Long-lived reqwest client reused across `send_chat_message` invocations.
+/// Loopback-only, plain HTTP, so no TLS feature flags. Shared across calls
+/// so we don't pay the per-call connection-pool setup cost.
+struct HttpClient(reqwest::Client);
+
+/// Forward a chat message payload from JS to the sidecar via plain HTTP
+/// POST instead of the WebView's WebSocket. Background: macOS WKWebView
+/// can throttle a view's outbound WebSocket frames after the view goes
+/// idle (measured at ~27 s wire_time on M5 turn-2 sends — see ADR 016).
+/// Routing the send through the Rust shell over loopback HTTP bypasses
+/// that throttling entirely. The streaming response still flows back
+/// over the existing WebSocket — the backend looks up the session's WS
+/// in `_active_sessions` and dispatches `_handle_message` against it,
+/// matching the legacy WS-direct contract.
+///
+/// `payload` is the same dict the WS path expects (type/content/session_id/
+/// provider/model/base_url/t_enter_ms/t_pre_send_ms). The endpoint returns
+/// 200 immediately; errors during processing surface as `error` events on
+/// the WS, matching the legacy error shape.
+#[tauri::command]
+async fn send_chat_message(
+    payload: serde_json::Value,
+    backend: State<'_, BackendUrlHandle>,
+    client: State<'_, HttpClient>,
+) -> Result<(), String> {
+    let url = format!("{}/api/chat/message", backend.0);
+    let resp = client
+        .0
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("send_chat_message HTTP error: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("send_chat_message non-2xx ({status}): {body}"));
+    }
+    Ok(())
+}

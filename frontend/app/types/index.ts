@@ -179,7 +179,11 @@ export interface WsTrace {
   items: TraceItem[]
 }
 
-export type WsEvent = WsTextDelta | WsToolUse | WsToolResult | WsDone | WsError | WsSessionStart | WsSessionHistory | WsDisconnected | WsWarning | WsMemoryChanged | WsTrace
+export interface WsPong {
+  type: 'pong'
+}
+
+export type WsEvent = WsTextDelta | WsToolUse | WsToolResult | WsDone | WsError | WsSessionStart | WsSessionHistory | WsDisconnected | WsWarning | WsMemoryChanged | WsTrace | WsPong
 
 // --- Sessions ---
 
