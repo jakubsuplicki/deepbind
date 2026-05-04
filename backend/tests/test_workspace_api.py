@@ -40,18 +40,18 @@ async def test_post_init_returns_structure(client, ws_path):
 
 @pytest.mark.anyio
 async def test_get_status_after_init(client, ws_path):
-    with patch("services.workspace_service.get_settings") as mock_s, \
-         patch("services.workspace_service.os") as mock_os:
-        mock_os.environ.get.return_value = None
+    with patch("services.workspace_service.get_settings") as mock_s:
         mock_s.return_value.workspace_path = ws_path
         await client.post("/api/workspace/init", json={})
         response = await client.get("/api/workspace/status")
     assert response.status_code == 200
     data = response.json()
     assert data["initialized"] is True
-    # Without env var, api_key_set reflects browser-only mode
-    assert data["api_key_set"] is False
-    assert data["key_storage"] == "browser"
+    # ADR 015 — local-only build does not surface api_key_set / key_storage
+    # on the workspace status response. The fields don't exist; the bundle
+    # has no cloud-provider code paths to gate.
+    assert "api_key_set" not in data
+    assert "key_storage" not in data
 
 
 @pytest.mark.anyio
@@ -64,48 +64,19 @@ async def test_post_init_duplicate(client, ws_path):
 
 
 @pytest.mark.anyio
-async def test_workspace_always_browser_key_storage(client, ws_path):
-    """Workspace always uses browser key storage — no server-side key."""
+async def test_workspace_config_has_no_api_key_fields(client, ws_path):
+    """ADR 015 — config.json never carries api_key_set / key_storage."""
     with patch("services.workspace_service.get_settings") as mock_s:
         mock_s.return_value.workspace_path = ws_path
         await client.post("/api/workspace/init", json={})
     config = json.loads((ws_path / "app" / "config.json").read_text())
-    assert config["api_key_set"] is False
-    assert config["key_storage"] == "browser"
-
-
-@pytest.mark.anyio
-async def test_keyless_workspace_status(client, ws_path):
-    """Status for keyless workspace shows api_key_set=False."""
-    with patch("services.workspace_service.get_settings") as mock_s, \
-         patch("services.workspace_service.os") as mock_os:
-        mock_os.environ.get.return_value = None
-        mock_s.return_value.workspace_path = ws_path
-        await client.post("/api/workspace/init", json={})
-        response = await client.get("/api/workspace/status")
-    data = response.json()
-    assert data["initialized"] is True
-    assert data["api_key_set"] is False
-    assert data["key_storage"] == "browser"
-
-
-@pytest.mark.anyio
-async def test_env_var_key_reflected_in_status(client, ws_path):
-    """If ANTHROPIC_API_KEY env var is set, status reports api_key_set=True."""
-    with patch("services.workspace_service.get_settings") as mock_s, \
-         patch("services.workspace_service.os") as mock_os:
-        mock_os.environ.get.return_value = "sk-ant-env-key"
-        mock_s.return_value.workspace_path = ws_path
-        await client.post("/api/workspace/init", json={})
-        response = await client.get("/api/workspace/status")
-    data = response.json()
-    assert data["api_key_set"] is True
-    assert data["key_storage"] == "environment"
+    assert "api_key_set" not in config
+    assert "key_storage" not in config
 
 
 @pytest.mark.anyio
 async def test_api_key_not_in_any_response(client, ws_path):
-    """API key must never appear in any HTTP response body."""
+    """No API key string appears in any HTTP response body."""
     key = "sk-ant-secret-key-99999999"
     with patch("services.workspace_service.get_settings") as mock_s:
         mock_s.return_value.workspace_path = ws_path

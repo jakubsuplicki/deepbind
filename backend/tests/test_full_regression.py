@@ -42,7 +42,7 @@ def patch_all(tmp_path, monkeypatch):
               "memory/knowledge", "memory/daily", "agents", ".trash", "graph"]:
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
 
-    config = {"version": "0.1.0", "api_key_set": True, "workspace_path": str(tmp_path)}
+    config = {"version": "0.1.0", "workspace_path": str(tmp_path)}
     (tmp_path / "app" / "config.json").write_text(json.dumps(config))
     key_file = tmp_path / "app" / "api_key.json"
     key_file.write_text(json.dumps({"api_key": "sk-test-smoke"}))

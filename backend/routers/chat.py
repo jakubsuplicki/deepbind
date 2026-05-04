@@ -17,7 +17,7 @@ from services.system_prompt import (
 )
 from services.ollama_dispatcher import OllamaDispatchConfig, OllamaDispatcher
 from services.tools import TOOLS, ToolNotFoundError, execute_tool
-from services.token_tracking import check_budget, log_usage
+from services.token_tracking import log_usage
 from services.workspace_service import get_api_key
 
 logger = logging.getLogger(__name__)
@@ -485,7 +485,7 @@ async def _apply_memory_pressure_swap(
     from services import memory_pressure_monitor as mpm
     from services.ollama_service import DEFAULT_OLLAMA_BASE_URL, list_installed_models
 
-    requested_entry = mpm.find_entry_by_litellm_or_ollama(model)
+    requested_entry = mpm.find_entry_by_ollama_model(model)
     if requested_entry is None:
         return model, False
 
@@ -515,7 +515,7 @@ async def _apply_memory_pressure_swap(
             "warning",
             content=f"Lightweight mode — using {floor.label or floor.id}",
         )
-        return f"ollama_chat/{floor.ollama_model}", False
+        return floor.ollama_model, False
     return model, False
 
 
@@ -564,7 +564,7 @@ async def _ladder_step_after_oom(
     from services import memory_pressure_monitor as mpm
     from services.ollama_service import DEFAULT_OLLAMA_BASE_URL, list_installed_models
 
-    failed_entry = mpm.find_entry_by_litellm_or_ollama(model)
+    failed_entry = mpm.find_entry_by_ollama_model(model)
     if failed_entry is None:
         return None, None
 
@@ -590,10 +590,10 @@ async def _ladder_step_after_oom(
         f"Out of memory on {failed_entry.label or failed_entry.id} — "
         f"switched to {swap.chosen.label or swap.chosen.id}"
     )
-    return f"ollama_chat/{swap.chosen.ollama_model}", warning
+    return swap.chosen.ollama_model, warning
 
 
-DEFAULT_OLLAMA_MODEL = "ollama_chat/qwen3:8b"
+DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
 
 def _make_llm(provider: Optional[str], model: Optional[str], api_key: str, base_url: Optional[str] = None):
@@ -627,10 +627,10 @@ def _resolve_system_prompt_budget(
     """
     if not model:
         return None, None
-    from services.ollama_service import get_model_by_litellm
+    from services.ollama_service import get_model_by_ollama_model
     from services.system_prompt import _SYSTEM_PROMPT_BUDGET_FRACTION
 
-    entry = get_model_by_litellm(model)
+    entry = get_model_by_ollama_model(model)
     if entry is None:
         return None, None
     budget = int(entry.effective_context_tokens * _SYSTEM_PROMPT_BUDGET_FRACTION)
@@ -674,11 +674,11 @@ async def _maybe_compact(
     # to _handle_message which has no surrounding try, dropping the WS
     # connection silently.
     try:
-        from services.ollama_service import get_model_by_litellm
+        from services.ollama_service import get_model_by_ollama_model
         from services.compaction_service import compact_messages
         from services.token_counting import count_tokens
 
-        entry = get_model_by_litellm(model)
+        entry = get_model_by_ollama_model(model)
         if entry is None:
             return messages
 
@@ -813,15 +813,6 @@ async def _handle_message(
     active_specs = specialist_service.get_active_specialists()
     tools = specialist_service.filter_tools(TOOLS, specialists=active_specs)
     _step_log("after_specialists_filter")
-    # Check token budget before dispatch
-    budget = check_budget()
-    if budget["level"] == "exceeded":
-        await _send_event(ws, "error", content=f"Daily token budget exceeded ({budget['percent']:.0f}% used). Please try again tomorrow or increase your budget.")
-        await _send_event(ws, "done", session_id=session_id)
-        return
-    if budget["level"] == "warning":
-        await _send_event(ws, "warning", content=f"Approaching daily token budget ({budget['percent']:.0f}% used).")
-
     # Memory-pressure pre-flight swap (ADR 005 §C trigger 2). Runs before
     # _make_llm so the constructed dispatcher points at a model that
     # actually fits in current free RAM.
@@ -1043,7 +1034,10 @@ async def _handle_message(
     # Include tool_mode for local models so the frontend can show tool support info
     if provider == "ollama" and model:
         from services.ollama_service import MODEL_CATALOG, _tool_mode_for
-        ollama_name = model.replace("ollama_chat/", "") if model.startswith("ollama_chat/") else model
+        # Strip a stale `ollama_chat/` prefix in case the WS payload is from a
+        # client that still has the old default in localStorage. Cleaned forms
+        # pass through unchanged.
+        ollama_name = model.replace("ollama_chat/", "", 1) if model.startswith("ollama_chat/") else model
         for entry in MODEL_CATALOG:
             if entry.ollama_model == ollama_name:
                 done_fields["tool_mode"] = _tool_mode_for(entry)

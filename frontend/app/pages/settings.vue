@@ -27,8 +27,6 @@
 
     <SharpenSection />
 
-    <BudgetSection />
-
     <p v-if="status.message.value" class="settings-page__status">
       {{ status.message.value }}
     </p>
@@ -47,7 +45,6 @@ import SmartConnectSection from '~/components/settings/SmartConnectSection.vue'
 import GraphExpansionSection from '~/components/settings/GraphExpansionSection.vue'
 import PrivacySection from '~/components/settings/PrivacySection.vue'
 import SharpenSection from '~/components/settings/SharpenSection.vue'
-import BudgetSection from '~/components/settings/BudgetSection.vue'
 import { useGeneralSettings } from '~/composables/settings/useGeneralSettings'
 import { useSettingsStatus } from '~/composables/settings/useSettingsStatus'
 

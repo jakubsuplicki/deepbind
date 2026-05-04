@@ -7,14 +7,24 @@
   >
     <template #suffix>
       <span class="privacy-badge" :class="{ 'privacy-badge--active': privacy?.offline_mode }">
-        {{ privacy?.offline_mode ? '🛡️ Offline mode active' : 'Hybrid mode' }}
+        <Icon
+          v-if="privacy?.offline_mode"
+          name="ph:shield-check-fill"
+          class="icon--sm icon--success privacy-badge__icon"
+        />
+        <Icon
+          v-else
+          name="ph:globe"
+          class="icon--sm icon--muted privacy-badge__icon"
+        />
+        {{ privacy?.offline_mode ? 'Offline mode active' : 'Network access on' }}
       </span>
     </template>
 
     <p class="settings-page__hint">
       Control which outbound network calls Jarvis is allowed to make.
-      Local Ollama, embeddings and reranker are <strong>never</strong> blocked —
-      they run entirely on this machine.
+      All AI runs locally via Ollama and is <strong>never</strong> blocked —
+      these toggles only gate optional network features (web search, URL ingest).
     </p>
 
     <!-- Master switch -->
@@ -29,32 +39,15 @@
         <span class="privacy-toggle__main">
           <strong>Offline mode</strong>
           <span class="privacy-toggle__sub">
-            Hard-block every outbound integration: cloud LLMs, web search, URL ingest.
-            Only local Ollama works.
+            Hard-block every outbound integration: web search, URL ingest.
+            Local Ollama is unaffected.
           </span>
         </span>
       </label>
       <p v-if="privacy?.offline_mode_locked" class="privacy-locked-note">
-        🔒 Locked by <code>JARVIS_OFFLINE_MODE</code> environment variable.
+        <Icon name="ph:lock-key-fill" class="icon--sm icon--muted privacy-locked-note__icon" />
+        Locked by <code>JARVIS_OFFLINE_MODE</code> environment variable.
       </p>
-    </div>
-
-    <div class="privacy-row" :class="{ 'privacy-row--disabled': privacy?.offline_mode }">
-      <label class="privacy-toggle">
-        <input
-          type="checkbox"
-          :checked="!!privacy?.cloud_providers_enabled"
-          :disabled="privacy?.offline_mode || saving"
-          @change="onSet('cloud_providers_enabled', ($event.target as HTMLInputElement).checked)"
-        />
-        <span class="privacy-toggle__main">
-          <strong>Allow cloud LLM providers</strong>
-          <span class="privacy-toggle__sub">
-            Anthropic / OpenAI / Google. <strong>Sends your prompts and retrieved
-            notes (including imported Jira issues) to the chosen provider.</strong>
-          </span>
-        </span>
-      </label>
     </div>
 
     <div class="privacy-row" :class="{ 'privacy-row--disabled': privacy?.offline_mode }">

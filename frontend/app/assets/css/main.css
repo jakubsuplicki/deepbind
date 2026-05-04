@@ -120,3 +120,74 @@ input:focus, textarea:focus {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--neon-cyan-30);
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Icon system (ADR 017)
+   <Icon name="ph:..."> for UI; <Icon name="simple-icons:..."> for brand.
+   Default rule: Phosphor `regular`. Use `-fill` only for active/selected/
+   success states. Never mix more than two weights in one component.
+   ─────────────────────────────────────────────────────────────────────────── */
+.icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  flex-shrink: 0;
+  color: currentColor;
+  fill: currentColor;
+}
+
+/* Sizes — set on parent or via modifier. Defaults to 1em (inherits font-size). */
+.icon--xs { font-size: 12px; }
+.icon--sm { font-size: 14px; }
+.icon--md { font-size: 18px; }
+.icon--lg { font-size: 22px; }
+.icon--xl { font-size: 28px; }
+.icon--2xl { font-size: 40px; }
+
+/* Semantic state colors — mapped to the Jarvis palette so a `ph:check-circle`
+   reads as success without authoring a one-off CSS rule per use. */
+.icon--success { color: var(--neon-green); }
+.icon--warning { color: var(--neon-yellow); }
+.icon--danger  { color: var(--neon-red); }
+.icon--info    { color: var(--neon-cyan); }
+.icon--accent  { color: var(--neon-cyan); }
+.icon--muted   { color: var(--text-secondary); }
+.icon--subtle  { color: var(--text-muted); }
+
+/* Glow accent for primary cyan icons in dark surfaces — matches the chrome
+   used on links/focus rings so the system feels of-a-piece. */
+.icon--glow {
+  filter: drop-shadow(0 0 4px var(--neon-cyan-30));
+}
+
+/* Brand marks (Simple Icons) sit on dark surfaces — give them a soft outline
+   ring to keep monochrome marks legible without per-brand color rules. */
+.icon--brand {
+  color: var(--text-primary);
+  opacity: 0.9;
+}
+
+.icon--brand:hover {
+  opacity: 1;
+  color: var(--neon-cyan);
+}
+
+/* Spinning utility for loading states — used with ph:spinner or ph:circle-notch */
+.icon--spin {
+  animation: icon-spin 0.9s linear infinite;
+}
+
+@keyframes icon-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Pulse utility for pending/active dots (ph:circle-fill, ph:dot-outline) */
+.icon--pulse {
+  animation: icon-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes icon-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}

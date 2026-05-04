@@ -5,9 +5,7 @@
         class="suggestions__title"
         title="Smart Connect ran automatically when this note was ingested. These are candidate links it found — keep the ones that fit, dismiss the rest. Re-run only if you have changed the note or want fresh suggestions."
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2 L15 8.5 L22 9.5 L17 14.5 L18.5 22 L12 18 L5.5 22 L7 14.5 L2 9.5 L9 8.5 Z"/>
-        </svg>
+        <Icon name="ph:star" class="icon--sm" />
         Smart Connect
       </h3>
       <div class="suggestions__header-actions">
@@ -62,9 +60,7 @@
             :data-tooltip="whyText(s)"
             title=""
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
+            <Icon name="ph:info" class="suggestions__why-icon" aria-hidden="true" />
             <span class="suggestions__why-tooltip" role="tooltip">
               <strong>Why this suggestion?</strong>
               <span v-for="(val, key) in s.score_breakdown" :key="key" class="suggestions__why-row">
@@ -86,7 +82,7 @@
             title="Promote to related"
             @click="onPromote(s.path)"
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <Icon name="ph:check-bold" class="suggestions__btn-icon" />
             Keep
           </button>
           <button
@@ -95,7 +91,7 @@
             title="Dismiss this suggestion forever"
             @click="onDismiss(s.path)"
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <Icon name="ph:x-bold" class="suggestions__btn-icon" />
             Dismiss
           </button>
         </div>
@@ -456,6 +452,14 @@ async function onRerun(): Promise<void> {
 .suggestions__why:focus-visible {
   color: var(--neon-cyan, #00c8ff);
   outline: none;
+}
+
+.suggestions__why-icon {
+  font-size: 11px;
+}
+
+.suggestions__btn-icon {
+  font-size: 11px;
 }
 
 .suggestions__why-tooltip {

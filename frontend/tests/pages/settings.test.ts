@@ -7,14 +7,8 @@ import GraphExpansionSection from '~/components/settings/GraphExpansionSection.v
 function registerSettingsEndpoints(overrides: Record<string, unknown> = {}) {
   registerEndpoint('/api/settings', () => ({
     workspace_path: '/home/user/Jarvis',
-    api_key_set: true,
     voice: { auto_speak: 'false', tts_voice: 'alloy' },
     ...overrides,
-  }))
-  registerEndpoint('/api/settings/usage', () => ({
-    total: 12500,
-    request_count: 42,
-    cost_estimate: 0.19,
   }))
   registerEndpoint('/api/settings/retrieval', () => ({
     graph_expansion: {
@@ -26,21 +20,22 @@ function registerSettingsEndpoints(overrides: Record<string, unknown> = {}) {
 }
 
 describe('pages/settings.vue', () => {
-  it('renders AI Providers section', async () => {
+  it('renders Local Models section (ADR 015 — single-target local stack)', async () => {
     registerSettingsEndpoints()
     const wrapper = await mountSuspended(SettingsPage)
     await flushPromises()
-    expect(wrapper.text()).toContain('AI Providers')
+    expect(wrapper.text()).toContain('Local Models')
   })
 
-  it('shows provider cards with no-key state', async () => {
-    registerSettingsEndpoints({ api_key_set: false })
+  it('does not render any cloud-provider surface', async () => {
+    registerSettingsEndpoints()
     const wrapper = await mountSuspended(SettingsPage)
     await flushPromises()
-    await new Promise(r => setTimeout(r, 50))
-    await flushPromises()
-    // Provider cards show "No key added" when browser has no key stored
-    expect(wrapper.text()).toContain('Anthropic')
+    const text = wrapper.text()
+    expect(text).not.toContain('Anthropic')
+    expect(text).not.toContain('OpenAI')
+    expect(text).not.toContain('AI Providers')
+    expect(text).not.toContain('cloud LLM')
   })
 
   it('renders workspace path', async () => {
@@ -62,24 +57,6 @@ describe('pages/settings.vue', () => {
     expect((checkbox.element as HTMLInputElement).checked).toBe(true)
   })
 
-  it('shows key protection info', async () => {
-    registerSettingsEndpoints()
-    const wrapper = await mountSuspended(SettingsPage)
-    await flushPromises()
-    // The security info section explains browser-only key storage
-    expect(wrapper.text()).toContain('Keys')
-  })
-
-  it('displays token usage stats', async () => {
-    registerSettingsEndpoints()
-    const wrapper = await mountSuspended(SettingsPage)
-    await flushPromises()
-    await new Promise(r => setTimeout(r, 50))
-    await flushPromises()
-    // Usage is in budget-stats section — formatTokens(12500) renders as '13K'
-    expect(wrapper.text()).toContain('13K')
-  })
-
   it('renders workspace section', async () => {
     registerSettingsEndpoints()
     const wrapper = await mountSuspended(SettingsPage)
@@ -95,6 +72,15 @@ describe('pages/settings.vue', () => {
     const labels = buttons.map(b => b.text())
     expect(labels).toContain('Reindex Memory')
     expect(labels).toContain('Rebuild Graph')
+  })
+
+  it('does not render the Token Budget section (deleted under local-only)', async () => {
+    registerSettingsEndpoints()
+    const wrapper = await mountSuspended(SettingsPage)
+    await flushPromises()
+    const text = wrapper.text()
+    expect(text).not.toContain('Token Usage & Budget')
+    expect(text).not.toContain('Daily token budget')
   })
 })
 
@@ -116,9 +102,9 @@ describe('GraphExpansionSection', () => {
     const wrapper = await mountSuspended(GraphExpansionSection)
     await flushPromises()
     const checkboxes = wrapper.findAll('input[type="checkbox"]')
-    expect((checkboxes[0].element as HTMLInputElement).checked).toBe(true)
-    expect((checkboxes[1].element as HTMLInputElement).checked).toBe(true)
-    expect((checkboxes[2].element as HTMLInputElement).checked).toBe(false)
+    expect((checkboxes[0]!.element as HTMLInputElement).checked).toBe(true)
+    expect((checkboxes[1]!.element as HTMLInputElement).checked).toBe(true)
+    expect((checkboxes[2]!.element as HTMLInputElement).checked).toBe(false)
   })
 
   it('reflects server state when use_related is off', async () => {
@@ -128,7 +114,7 @@ describe('GraphExpansionSection', () => {
     const wrapper = await mountSuspended(GraphExpansionSection)
     await flushPromises()
     const checkboxes = wrapper.findAll('input[type="checkbox"]')
-    expect((checkboxes[0].element as HTMLInputElement).checked).toBe(false)
+    expect((checkboxes[0]!.element as HTMLInputElement).checked).toBe(false)
   })
 
   it('calls PATCH on toggle and sends correct shape', async () => {
@@ -149,9 +135,8 @@ describe('GraphExpansionSection', () => {
     const wrapper = await mountSuspended(GraphExpansionSection)
     await flushPromises()
     const checkboxes = wrapper.findAll('input[type="checkbox"]')
-    await checkboxes[1].trigger('change')
+    await checkboxes[1]!.trigger('change')
     await flushPromises()
-    // patch was attempted — component reached PATCH call
     expect(patches.length).toBeGreaterThan(0)
   })
 })

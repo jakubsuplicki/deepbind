@@ -65,7 +65,7 @@ def _stream(*events: StreamEvent):
     return _gen
 
 
-def _send_and_collect(model: str = "ollama_chat/qwen3:8b") -> list[dict]:
+def _send_and_collect(model: str = "qwen3:8b") -> list[dict]:
     """Send one message and collect every WS event up to and including done.
 
     Patches `_schedule_session_save` to a no-op so the 2 s debounced
@@ -109,7 +109,7 @@ def test_done_carries_metrics_when_round_reports_durations():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("ollama_chat/qwen3:8b", False))):
+               new=AsyncMock(return_value=("qwen3:8b", False))):
         events = _send_and_collect()
 
     done = events[-1]
@@ -139,7 +139,7 @@ def test_done_omits_metrics_when_no_round_reports_durations():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("ollama_chat/qwen3:8b", False))):
+               new=AsyncMock(return_value=("qwen3:8b", False))):
         events = _send_and_collect()
 
     done = events[-1]
@@ -157,7 +157,7 @@ def test_done_omits_metrics_when_usage_event_absent_entirely():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("ollama_chat/qwen3:8b", False))):
+               new=AsyncMock(return_value=("qwen3:8b", False))):
         events = _send_and_collect()
 
     done = events[-1]
@@ -183,7 +183,7 @@ def test_metrics_decode_tps_is_round_to_two_decimals():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("ollama_chat/qwen3:8b", False))):
+               new=AsyncMock(return_value=("qwen3:8b", False))):
         events = _send_and_collect()
 
     m = events[-1]["metrics"]
@@ -246,7 +246,7 @@ def test_multiround_turn_takes_ttft_from_first_round_only():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("ollama_chat/qwen3:8b", False))), \
+               new=AsyncMock(return_value=("qwen3:8b", False))), \
          patch("routers.chat._run_tool", new=AsyncMock(side_effect=_fake_run_tool)):
         events = _send_and_collect()
 
@@ -313,12 +313,12 @@ def test_oom_retry_resets_metrics_acc_so_failed_round_does_not_leak():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("ollama_chat/qwen3:30b-a3b-instruct-2507", False))), \
+               new=AsyncMock(return_value=("qwen3:30b-a3b-instruct-2507", False))), \
          patch(
              "routers.chat._ladder_step_after_oom",
-             new=AsyncMock(return_value=("ollama_chat/qwen3:8b", "Switched to qwen3:8b after OOM")),
+             new=AsyncMock(return_value=("qwen3:8b", "Switched to qwen3:8b after OOM")),
          ):
-        events = _send_and_collect(model="ollama_chat/qwen3:30b-a3b-instruct-2507")
+        events = _send_and_collect(model="qwen3:30b-a3b-instruct-2507")
 
     done = events[-1]
     m = done["metrics"]
@@ -353,9 +353,9 @@ def test_done_carries_no_metrics_on_oom_with_no_fallback():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("ollama_chat/qwen3:4b-instruct-2507", False))), \
+               new=AsyncMock(return_value=("qwen3:4b-instruct-2507", False))), \
          patch("routers.chat._ladder_step_after_oom", new=AsyncMock(return_value=(None, None))):
-        events = _send_and_collect(model="ollama_chat/qwen3:4b-instruct-2507")
+        events = _send_and_collect(model="qwen3:4b-instruct-2507")
 
     done = events[-1]
     assert done["type"] == "done"
@@ -392,7 +392,7 @@ def test_total_duration_only_event_does_not_mark_round_as_timed():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("ollama_chat/qwen3:8b", False))):
+               new=AsyncMock(return_value=("qwen3:8b", False))):
         events = _send_and_collect()
 
     done = events[-1]

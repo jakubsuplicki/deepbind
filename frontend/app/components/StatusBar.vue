@@ -24,7 +24,7 @@
       :title="ingestTooltip"
     >
       <span class="status-bar__ingest-spinner" v-if="ingest.activeCount.value > 0" />
-      <span class="status-bar__ingest-check" v-else>✓</span>
+      <Icon v-else name="ph:check-bold" class="icon--sm status-bar__ingest-check" />
       <span class="status-bar__ingest-text">{{ ingestText }}</span>
       <span
         v-if="ingest.activeCount.value > 0 && ingest.totalBytes.value > 0"
@@ -51,11 +51,12 @@
         v-if="reindex.status.value.state === 'running'"
         class="status-bar__reindex-spinner"
       />
-      <span
+      <Icon
         v-else-if="reindex.status.value.state === 'failed'"
-        class="status-bar__reindex-icon"
-      >!</span>
-      <span v-else class="status-bar__reindex-icon">✓</span>
+        name="ph:warning-fill"
+        class="icon--sm status-bar__reindex-icon"
+      />
+      <Icon v-else name="ph:check-bold" class="icon--sm status-bar__reindex-icon" />
       <span class="status-bar__reindex-text">{{ reindexText }}</span>
       <button
         v-if="reindex.status.value.state === 'failed'"
@@ -66,14 +67,24 @@
         class="status-bar__reindex-dismiss"
         aria-label="Dismiss reindex notice"
         @click="reindex.dismiss"
-      >×</button>
+      >
+        <Icon name="ph:x" class="icon--sm" />
+      </button>
     </span>
 
     <span
       class="status-bar__indicator"
       :class="backendStatus"
     >
-      {{ statusText }}
+      {{ statusBaseText }}
+      <template v-if="localModels.activeModel.value">
+        <span class="status-bar__indicator-sep">·</span>
+        <span class="status-bar__indicator-model">{{ localModels.activeModel.value.label }} (local)</span>
+        <Icon
+          :name="ollamaReachable ? 'ph:circle-fill' : 'ph:circle-fill'"
+          :class="['icon--xs', ollamaReachable ? 'icon--success' : 'icon--danger', 'status-bar__indicator-dot']"
+        />
+      </template>
     </span>
 
     <button
@@ -129,15 +140,15 @@ watch(() => route.path, () => {
   menuOpen.value = false
 })
 
-const statusText = computed(() => {
-  const base = backendStatus.value === 'online' ? 'Alive' : backendStatus.value === 'offline' ? 'Offline' : 'Checking...'
-  if (localModels.activeModel.value) {
-    const modelName = localModels.activeModel.value.label
-    const ollamaOk = localModels.runtime.value?.reachable && !localModels.ollamaDown.value
-    return `${base} · ${modelName} (local) · ${ollamaOk ? '🟢' : '🔴'}`
-  }
-  return base
-})
+const statusBaseText = computed(() => (
+  backendStatus.value === 'online' ? 'Alive'
+  : backendStatus.value === 'offline' ? 'Offline'
+  : 'Checking...'
+))
+
+const ollamaReachable = computed(() =>
+  Boolean(localModels.runtime.value?.reachable && !localModels.ollamaDown.value),
+)
 
 const ingestText = computed(() => {
   if (ingest.activeCount.value > 0) return ingest.label.value
@@ -286,10 +297,27 @@ const ingestTooltip = computed(() => {
 
 /* ── Status indicator ── */
 .status-bar__indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   font-size: 0.75rem;
   padding: 0.15rem 0.6rem;
   border-radius: 9999px;
   border: 1px solid transparent;
+}
+
+.status-bar__indicator-sep {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.status-bar__indicator-model {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-bar__indicator-dot {
+  filter: drop-shadow(0 0 4px currentColor);
 }
 
 .status-bar__indicator.online {

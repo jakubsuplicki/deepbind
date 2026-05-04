@@ -9,21 +9,21 @@
         <div class="memory-page__toolbar-actions">
           <div class="memory-page__import-group" :class="{ open: showImportMenu }">
             <button class="memory-page__import-trigger" @click="showImportMenu = !showImportMenu">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <Icon name="ph:plus-bold" class="icon--sm" />
               Import
-              <svg class="memory-page__chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              <Icon name="ph:caret-down" class="icon--xs memory-page__chevron" />
             </button>
             <Transition name="dropdown">
               <div v-if="showImportMenu" v-click-outside="() => showImportMenu = false" class="memory-page__import-dropdown">
                 <button class="memory-page__dropdown-item" @click="showImport = true; showImportMenu = false">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                  <Icon name="ph:file-plus" class="icon--md" />
                   <span class="memory-page__dropdown-label">
                     <strong>File</strong>
                     <small>Upload from disk</small>
                   </span>
                 </button>
                 <button class="memory-page__dropdown-item" @click="showUrlImport = true; showImportMenu = false">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                  <Icon name="ph:link" class="icon--md" />
                   <span class="memory-page__dropdown-label">
                     <strong>URL</strong>
                     <small>Import from link</small>

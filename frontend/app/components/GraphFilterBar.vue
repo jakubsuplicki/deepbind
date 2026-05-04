@@ -27,7 +27,7 @@
         <span class="filter-bar__sprint-dot"></span>
         <span v-if="filters.selectedSprints.size === 0">Sprints</span>
         <span v-else>Sprints · {{ filters.selectedSprints.size }}</span>
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.2" /></svg>
+        <Icon name="ph:caret-down" class="icon--xs" aria-hidden="true" />
       </button>
       <div v-if="sprintMenuOpen" class="filter-bar__sprint-menu">
         <div class="filter-bar__sprint-menu-head">

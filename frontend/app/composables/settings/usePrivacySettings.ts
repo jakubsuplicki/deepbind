@@ -5,7 +5,6 @@ export type PrivacyState = {
   offline_mode_locked: boolean
   web_search_enabled: boolean
   url_ingest_enabled: boolean
-  cloud_providers_enabled: boolean
 }
 
 export function usePrivacySettings() {

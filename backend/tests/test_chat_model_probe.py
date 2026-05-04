@@ -76,7 +76,6 @@ def _entry(*, id: str, gb: float, kv_per_token: int = 4096) -> ModelCatalogEntry
         id=id,
         preset="balanced",
         ollama_model=id,
-        litellm_model=f"ollama_chat/{id}",
         label=id,
         download_size_gb=gb,
         context_window="32K",

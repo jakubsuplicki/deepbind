@@ -4,7 +4,9 @@
     <div class="link-dialog__panel">
       <div class="link-dialog__header">
         <h2 class="link-dialog__title">Import from URL</h2>
-        <button class="link-dialog__close" @click="$emit('update:modelValue', false)">✕</button>
+        <button class="link-dialog__close" @click="$emit('update:modelValue', false)" aria-label="Close">
+          <Icon name="ph:x" class="icon--md" />
+        </button>
       </div>
 
       <label class="link-dialog__label">URL</label>
@@ -17,13 +19,16 @@
       />
 
       <div v-if="urlType === 'youtube'" class="link-dialog__badge link-dialog__badge--yt">
-        🎬 YouTube video detected
+        <Icon name="ph:youtube-logo-fill" class="icon--md" />
+        YouTube video detected
       </div>
       <div v-else-if="urlType === 'webpage'" class="link-dialog__badge link-dialog__badge--web">
-        📄 Web article detected
+        <Icon name="ph:file-text" class="icon--md" />
+        Web article detected
       </div>
       <div v-else-if="url.trim() && urlType === 'invalid'" class="link-dialog__badge link-dialog__badge--err">
-        ❌ Invalid URL
+        <Icon name="ph:x-circle-fill" class="icon--md" />
+        Invalid URL
       </div>
 
       <label class="link-dialog__label">Save to folder</label>
@@ -42,9 +47,12 @@
       <div v-if="loading" class="link-dialog__progress">Importing...</div>
       <div v-if="error" class="link-dialog__error">{{ error }}</div>
       <div v-if="result" class="link-dialog__success">
-        ✅ Saved: {{ result.path }}<br />
-        {{ result.word_count.toLocaleString() }} words · {{ result.type }}
-        <template v-if="result.summary"><br />{{ result.summary }}</template>
+        <Icon name="ph:check-circle-fill" class="icon--md icon--success link-dialog__success-icon" />
+        <span>
+          Saved: {{ result.path }}<br />
+          {{ result.word_count.toLocaleString() }} words · {{ result.type }}
+          <template v-if="result.summary"><br />{{ result.summary }}</template>
+        </span>
       </div>
 
       <div class="link-dialog__actions">
@@ -192,6 +200,9 @@ async function handleImport() {
   color: inherit;
 }
 .link-dialog__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   margin-top: 0.5rem;
   font-size: 0.85rem;
   padding: 0.25rem 0.5rem;
@@ -225,10 +236,17 @@ async function handleImport() {
   color: #ef4444;
 }
 .link-dialog__success {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
   margin-top: 0.75rem;
   color: #22c55e;
   font-size: 0.9rem;
   line-height: 1.5;
+}
+.link-dialog__success-icon {
+  margin-top: 0.15rem;
+  flex-shrink: 0;
 }
 .link-dialog__actions {
   display: flex;

@@ -2,16 +2,12 @@ import { ref } from 'vue'
 
 export type GeneralSettings = {
   workspace_path: string
-  api_key_set: boolean
-  key_storage: string
   voice: { auto_speak: string | boolean; tts_voice: string }
 }
 
 export function useGeneralSettings() {
   const loaded = ref(false)
   const workspacePath = ref('')
-  const serverKeyConfigured = ref(false)
-  const keyStorage = ref('')
   const autoSpeak = ref(false)
   const error = ref('')
 
@@ -19,8 +15,6 @@ export function useGeneralSettings() {
     try {
       const resp = await $fetch<GeneralSettings>(apiUrl('/api/settings'))
       workspacePath.value = resp.workspace_path
-      serverKeyConfigured.value = resp.api_key_set
-      keyStorage.value = resp.key_storage
       autoSpeak.value = resp.voice.auto_speak === 'true' || resp.voice.auto_speak === true
       loaded.value = true
     } catch {
@@ -53,7 +47,7 @@ export function useGeneralSettings() {
   }
 
   return {
-    loaded, workspacePath, serverKeyConfigured, keyStorage, autoSpeak, error,
+    loaded, workspacePath, autoSpeak, error,
     load, updateVoice, reindexMemory, rebuildGraph,
   }
 }

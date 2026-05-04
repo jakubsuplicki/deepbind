@@ -157,7 +157,7 @@ export function useLocalSetupFlow() {
     if (model?.installed) {
       await localModels.selectModel(modelId)
       // Sync selection into useChatModel so ModelSelector reflects it immediately
-      chatModel.selectModel(model.litellm_model)
+      chatModel.selectModel(model.ollama_model)
       downloadingModelId.value = null
       state.value = 'model_ready'
       return true
@@ -180,7 +180,7 @@ export function useLocalSetupFlow() {
     await localModels.selectModel(modelId)
     // Sync into useChatModel so ModelSelector reflects it immediately
     const model = localModels.catalog.value.find((m: ModelRecommendation) => m.model_id === modelId)
-    if (model) chatModel.selectModel(model.litellm_model)
+    if (model) chatModel.selectModel(model.ollama_model)
     state.value = 'model_ready'
   }
 

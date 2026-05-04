@@ -68,8 +68,7 @@ async def cancel_enrichment_queue() -> dict:
     # Unload the enrichment model from Ollama to stop GPU heat immediately
     try:
         from services.enrichment.runtime import select_model_id
-        model_id = select_model_id()
-        ollama_model = model_id.replace("ollama_chat/", "")
+        ollama_model = select_model_id()
         import httpx
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(

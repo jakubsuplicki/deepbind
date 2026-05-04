@@ -1,7 +1,7 @@
 <template>
   <div v-if="visible" class="bulk-promote">
     <div class="bulk-promote__main">
-      <span class="bulk-promote__icon" aria-hidden="true">✨</span>
+      <Icon name="ph:sparkle-fill" class="icon--md icon--accent bulk-promote__icon" aria-hidden="true" />
       <span class="bulk-promote__text">
         <strong>{{ pendingStrong }}</strong>
         high-confidence link{{ pendingStrong === 1 ? '' : 's' }} found

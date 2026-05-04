@@ -24,7 +24,7 @@ def patch_settings(tmp_path, monkeypatch):
     monkeypatch.setattr("routers.settings.get_settings", lambda: settings)
     (tmp_path / "app").mkdir(exist_ok=True)
     (tmp_path / "app" / "logs").mkdir(exist_ok=True)
-    config = {"version": "0.1.0", "api_key_set": True, "workspace_path": str(tmp_path)}
+    config = {"version": "0.1.0", "workspace_path": str(tmp_path)}
     (tmp_path / "app" / "config.json").write_text(json.dumps(config))
     # Store a fake key
     key_file = tmp_path / "app" / "api_key.json"
@@ -45,8 +45,11 @@ async def test_get_settings_200(client, patch_settings):
     assert resp.status_code == 200
     data = resp.json()
     assert "workspace_path" in data
-    assert "api_key_set" in data
     assert "voice" in data
+    # ADR 015 — local-only build never surfaces api_key_set / key_storage on
+    # the settings view. The route below (api-key PATCH) also 404s.
+    assert "api_key_set" not in data
+    assert "key_storage" not in data
 
 
 @pytest.mark.anyio

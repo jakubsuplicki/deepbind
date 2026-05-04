@@ -29,7 +29,6 @@ class TestCheckCanRun:
             id=f"test-{gb}gb",
             preset="everyday",
             ollama_model=f"test:{gb}gb",
-            litellm_model=f"ollama_chat/test:{gb}gb",
             label=f"Test {gb}GB",
             download_size_gb=gb,
             context_window="32K",
@@ -227,29 +226,29 @@ class TestLooksLikeOom:
         assert not looks_like_oom("invalid request")
 
 
-# ── find_entry_by_litellm_or_ollama ─────────────────────────────────────────
+# ── find_entry_by_ollama_model ─────────────────────────────────────────
 
 
 class TestFindEntryByModelString:
     def test_resolves_litellm_prefix(self):
-        from services.memory_pressure_monitor import find_entry_by_litellm_or_ollama
-        entry = find_entry_by_litellm_or_ollama("ollama_chat/qwen3:8b")
+        from services.memory_pressure_monitor import find_entry_by_ollama_model
+        entry = find_entry_by_ollama_model("qwen3:8b")
         assert entry is not None
         assert entry.id == "qwen3-8b"
 
     def test_resolves_raw_ollama_tag(self):
-        from services.memory_pressure_monitor import find_entry_by_litellm_or_ollama
-        entry = find_entry_by_litellm_or_ollama("qwen3:8b")
+        from services.memory_pressure_monitor import find_entry_by_ollama_model
+        entry = find_entry_by_ollama_model("qwen3:8b")
         assert entry is not None
         assert entry.id == "qwen3-8b"
 
     def test_returns_none_for_unknown_tag(self):
-        from services.memory_pressure_monitor import find_entry_by_litellm_or_ollama
-        assert find_entry_by_litellm_or_ollama("ollama_chat/totally-made-up:99x") is None
+        from services.memory_pressure_monitor import find_entry_by_ollama_model
+        assert find_entry_by_ollama_model("totally-made-up:99x") is None
 
     def test_returns_none_for_empty(self):
-        from services.memory_pressure_monitor import find_entry_by_litellm_or_ollama
-        assert find_entry_by_litellm_or_ollama("") is None
+        from services.memory_pressure_monitor import find_entry_by_ollama_model
+        assert find_entry_by_ollama_model("") is None
 
 
 # ── floor_entry_for_tier (ADR 005 §C trigger 3 — lightweight mode floor) ────

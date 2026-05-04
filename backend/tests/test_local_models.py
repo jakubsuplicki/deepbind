@@ -603,11 +603,14 @@ class TestModelCatalog:
         assert base.context_tokens == 32768
         assert ext.context_tokens == 262144
 
-    def test_litellm_model_has_prefix(self):
+    def test_catalog_uses_raw_ollama_model_strings(self):
+        """ADR 015 — catalog stores the raw Ollama tag (e.g. `qwen3:8b`), no
+        LiteLLM-style `ollama_chat/` prefix anywhere. The prefix is gone."""
         from services.ollama_service import get_catalog
 
         for m in get_catalog():
-            assert m.litellm_model.startswith("ollama_chat/")
+            assert not m.ollama_model.startswith("ollama_chat/")
+            assert ":" in m.ollama_model  # tag form like "qwen3:8b"
 
     def test_lookup_by_id(self):
         from services.ollama_service import get_model_by_id
@@ -641,7 +644,7 @@ class TestMakeLlm:
         from routers.chat import _make_llm
         from services.ollama_dispatcher import OllamaDispatcher
 
-        llm = _make_llm("ollama", "ollama_chat/qwen3:8b", "")
+        llm = _make_llm("ollama", "qwen3:8b", "")
         assert isinstance(llm, OllamaDispatcher)
         assert llm.config.api_base == "http://localhost:11434"
 
@@ -649,14 +652,14 @@ class TestMakeLlm:
         from routers.chat import _make_llm
         from services.ollama_dispatcher import OllamaDispatcher
 
-        llm = _make_llm("ollama", "ollama_chat/qwen3:8b", "", base_url="http://myhost:9999")
+        llm = _make_llm("ollama", "qwen3:8b", "", base_url="http://myhost:9999")
         assert isinstance(llm, OllamaDispatcher)
         assert llm.config.api_base == "http://myhost:9999"
 
     def test_ollama_timeout_is_1800(self):
         from routers.chat import _make_llm
 
-        llm = _make_llm("ollama", "ollama_chat/qwen3:8b", "")
+        llm = _make_llm("ollama", "qwen3:8b", "")
         assert llm.config.timeout == 1800
 
     def test_default_returns_dispatcher(self):
@@ -697,11 +700,11 @@ class TestActiveModelConfig:
             # Create app dir
             (tmp_path / "app").mkdir()
 
-            set_active_local_model("qwen3-8b", "ollama_chat/qwen3:8b")
+            set_active_local_model("qwen3-8b", "qwen3:8b")
             active = get_active_local_model()
             assert active is not None
             assert active["model_id"] == "qwen3-8b"
-            assert active["litellm_model"] == "ollama_chat/qwen3:8b"
+            assert active["ollama_model"] == "qwen3:8b"
             assert active["active"] is True
 
             clear_active_local_model()
@@ -779,7 +782,7 @@ class TestLocalModelsAPI:
 
             resp = await client.post("/api/local/models/select", json={
                 "model_id": "qwen3-8b",
-                "litellm_model": "ollama_chat/qwen3:8b",
+                "ollama_model": "qwen3:8b",
             })
             assert resp.status_code == 200
             assert resp.json()["status"] == "ok"

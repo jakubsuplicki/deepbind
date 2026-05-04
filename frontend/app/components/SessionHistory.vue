@@ -30,11 +30,7 @@
             title="Delete session"
             @click.stop="confirmDelete(s)"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="3 6 5 6 21 6"/>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
-              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-            </svg>
+            <Icon name="ph:trash" class="icon--sm" />
           </button>
         </div>
         <span class="session-history__item-meta">{{ formatDate(s.created_at) }} · {{ s.message_count }} msgs</span>

@@ -39,7 +39,7 @@ def _usage_file(workspace_path: Optional[Path] = None) -> Path:
 def log_usage(
     input_tokens: int,
     output_tokens: int,
-    model: str = "ollama_chat/qwen3:8b",
+    model: str = "qwen3:8b",
     context_tokens: int = 0,
     tool_calls: int = 0,
     tool_rounds: int = 0,
@@ -186,7 +186,7 @@ def get_usage_summary(workspace_path: Optional[Path] = None) -> Dict:
     }
 
 
-DEFAULT_DAILY_BUDGET = 100_000
+DEFAULT_DAILY_BUDGET = 0
 
 
 def get_daily_budget(workspace_path: Optional[Path] = None) -> int:

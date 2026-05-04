@@ -6,253 +6,234 @@ sources:
   - backend/routers/preferences.py
   - backend/routers/settings.py
   - backend/services/preference_service.py
+  - backend/services/privacy.py
   - backend/services/token_tracking.py
   - backend/config.py
   - frontend/app/pages/settings.vue
   - frontend/app/composables/usePreferences.ts
-depends_on: [workspace-onboarding]
-last_reviewed: 2026-04-26
-last_updated: 2026-04-26
+depends_on: [workspace-onboarding, local-models, chat-model-probe]
+last_reviewed: 2026-05-04
+last_updated: 2026-05-04
 ---
 
 # Preferences & Settings
 
 ## Summary
 
-Preferences & Settings covers two related but distinct concerns: **user preferences** (arbitrary key/value pairs persisted to disk and injected into Claude's context) and **application settings** (API key management, voice toggles, token budget, token usage, and maintenance actions). Both surface in the `/settings` page and are backed by a flat JSON file in the workspace rather than SQLite, so they survive database resets and remain human-readable.
+Preferences & Settings covers two related concerns:
+- **User preferences** — arbitrary key/value pairs persisted to disk and injected into the model's system prompt via [`preference_service.format_for_prompt()`](../../backend/services/preference_service.py).
+- **Application settings** — the [`/settings`](../../frontend/app/pages/settings.vue) page surface: local-model management, voice toggles, privacy kill-switches, retrieval/graph-expansion tuning, sharpen-with-local-AI, and maintenance actions.
+
+Both are backed by a flat JSON file in the workspace (`{workspace}/app/preferences.json`), so they survive database resets and remain human-readable.
+
+> **Scope under ADR 015.** The single-target local-only stack ([ADR 015](../architecture/decisions/015-single-target-local-only-stack.md)) removed all cloud-provider machinery from the repo. The settings surface no longer carries: the API key entry UI, an "Allow cloud LLM providers" toggle, dollar-cost estimates, or the daily token-budget gate. Anything previously documented here that referenced Anthropic / OpenAI / Google has been deleted along with the underlying code paths.
 
 ## How It Works
 
 ### Two layers, one page
 
-The Settings page (`/settings`) pulls from two separate backend routers on mount:
+The Settings page (`/settings`) composes one Vue section per concern from [`frontend/app/components/settings/`](../../frontend/app/components/settings/). Most sections live in their own feature docs; this page documents the cross-cutting plumbing plus the sections owned by *preferences-settings* itself (privacy, sharpen, maintenance, graph expansion, lightweight mode).
 
-- `GET /api/settings` — assembles a single view-model from workspace metadata, API key status, and voice preferences stored in `preferences.json`.
-- `GET /api/settings/usage` — returns cumulative token totals from `token_tracking`.
-- `GET /api/settings/budget` — returns the current daily token budget, today's usage against it, and warning level.
-
-These are read-only aggregation endpoints. Mutations go to dedicated sub-routes (`PATCH /api/settings/api-key`, `PATCH /api/settings/voice`, `PATCH /api/settings/budget`).
-
-The raw preferences CRUD (`/api/preferences`) is a separate surface used by composables and the Claude context pipeline, not the settings page directly.
+`GET /api/settings` is the small aggregating view-model. Mutations go to dedicated sub-routes (`PATCH /api/settings/voice`, `PATCH /api/settings/privacy`, `PATCH /api/settings/retrieval`, `PATCH /api/settings/lightweight-mode`). The raw preferences CRUD ([`/api/preferences`](../../backend/routers/preferences.py)) is a separate surface used by composables and the system-prompt builder, not by the settings page directly.
 
 ### Preference storage
 
-`preference_service.py` reads and writes a single file: `{workspace}/app/preferences.json`. The format is a flat `{ "key": "value" }` object where all values are strings. There is no schema enforcement beyond the non-empty key check — any string key is accepted.
+[`preference_service.py`](../../backend/services/preference_service.py) reads and writes a single file: `{workspace}/app/preferences.json`. Format is a flat `{ "key": "value" }` object where all values are strings — no schema enforcement beyond the non-empty key check.
 
-On write the service does a read-modify-write cycle: it loads the current file, updates the one key, and overwrites the file. This is not atomic, but because preferences are low-frequency writes from a single local process, the risk of a torn write is negligible.
+On write the service does a read–modify–write cycle: load file, update the one key, overwrite. Not atomic, but preferences are low-frequency writes from a single local process — torn-write risk is negligible.
 
-### Preferences as Claude context
+### Preferences as system-prompt context
 
-`preference_service.format_for_prompt()` converts the full preference map into a bulleted string formatted as `- [key] value`. This is injected into the system prompt by the context builder, giving Claude awareness of the user's declared preferences without requiring a separate retrieval step. If the file is empty or absent, the function returns `None` and nothing is injected.
+`preference_service.format_for_prompt()` converts the full preference map into a bulleted string formatted as `- [key] value`. The system-prompt builder injects this into every chat turn so the model sees declared preferences without a retrieval round-trip. If the file is empty or absent, the function returns `None` and nothing is injected.
 
 ### Voice preferences are namespaced preferences
 
-Voice toggles (`auto_speak`, `tts_voice`) are stored as regular preference entries with a `voice_` prefix. `PATCH /api/settings/voice` enforces a whitelist of valid keys (`auto_speak`, `tts_voice`) before writing them. The settings view-model strips the prefix when returning them to the frontend so callers see plain `auto_speak` / `tts_voice` fields.
-
-### API key handling
-
-The settings router delegates key storage entirely to `workspace_service._store_api_key()`. The settings page only knows three states via the `key_storage` field: `"keyring"` (OS keystore, preferred), `"file"` (fallback plain-file storage), or `"environment"` (key came from the `ANTHROPIC_API_KEY` env var and cannot be updated via the UI path). The UI renders a visible warning when storage falls back to file mode.
-
-#### Status indicator
-
-The API key section header includes a status badge that shows "Connected" (green with a pulsing dot) or "Not configured" (red). Below the header, a status row gives a secondary confirmation: when a key is present it shows "Key stored securely" followed by the storage method in plain English ("via system credential store", "via environment variable", or "via local file"); when absent it shows "No API key configured — Chat and AI features are disabled".
-
-The input field and submit button are contextual: when a key is already set, the placeholder reads "Paste new key to replace..." and the button reads "Replace"; otherwise the placeholder is the key prefix hint "sk-ant-..." and the button reads "Set Key".
-
-#### Backend verification
-
-`get_workspace_status()` in `workspace_service.py` no longer trusts the `api_key_set` flag in `config.json` alone. On every call it executes `get_api_key()` against the actual storage backend (keyring, environment variable, or file) and sets `api_key_set` based on whether a key is actually retrievable. This prevents the UI from showing "Connected" after a key is deleted from the OS keychain without going through the Jarvis settings page.
-
-When `PATCH /api/settings/api-key` stores a new key it also writes `api_key_set: true` back into `config.json` to keep the flag consistent with reality. This write is non-critical: if `config.json` is missing or malformed, the error is silently swallowed and the live verification path in `get_workspace_status()` will still return the correct state.
-
-### Runtime configuration
-
-`config.py` exposes a `Settings` pydantic-settings model cached via `@lru_cache`. It reads environment variables prefixed with `JARVIS_` and falls back to defaults (`workspace_path = ~/Jarvis`, port 8000). A lightweight `.env` parser runs at import time before pydantic-settings takes over, using `os.environ.setdefault` so existing env vars always win.
+Voice toggles (`auto_speak`, `tts_voice`) are stored as regular preference entries with a `voice_` prefix. `PATCH /api/settings/voice` enforces a whitelist of valid keys before writing. The settings view-model strips the prefix when returning them so callers see plain `auto_speak` / `tts_voice` fields.
 
 ### Privacy kill-switches
 
-`services/privacy.py` is the single source of truth for "is this outbound network call allowed?" — every feature that touches the public internet (cloud LLM providers, web search, URL ingest) consults this module before making a request. The model has three layers, in priority order:
+[`services/privacy.py`](../../backend/services/privacy.py) is the single source of truth for "is this outbound network call allowed?" — every feature that touches the public internet (web search, URL ingest) consults this module. The model has three layers, in priority order:
 
-1. **`JARVIS_OFFLINE_MODE` environment variable.** Hard lock. When set to `1`/`true`/`yes`/`on`, every outbound integration is blocked and the UI cannot override it. The settings page receives `offline_mode_locked: true` and disables the toggle.
-2. **`privacy_offline_mode` preference.** User-controlled master toggle. When on, *all* per-feature toggles are forced off regardless of their stored value — flipping the master switch is one click rather than three.
-3. **Per-feature preferences:** `privacy_web_search_enabled`, `privacy_url_ingest_enabled`, `privacy_cloud_providers_enabled`. These default to `true` so existing users see no behavioural change; the kill-switches are opt-in protections.
+1. **`JARVIS_OFFLINE_MODE` environment variable.** Hard lock. When set to `1`/`true`/`yes`/`on`, every outbound integration is blocked and the UI cannot override it. The settings page receives `offline_mode_locked: true` and disables the master toggle.
+2. **`privacy_offline_mode` preference.** User-controlled master toggle. When on, all per-feature toggles are forced off regardless of their stored value — flipping one switch is one click rather than two.
+3. **Per-feature preferences:** `privacy_web_search_enabled`, `privacy_url_ingest_enabled`. Default `true` so existing users see no behavioural change; the kill-switches are opt-in protections.
 
-Local-only providers (Ollama, fastembed, the local cross-encoder reranker) are never gated — `is_local_provider()` returns `true` for them and `assert_provider_allowed()` short-circuits.
+Local Ollama, embeddings, and the cross-encoder reranker are **never gated** — they run on this machine. There is no `cloud_providers_enabled` toggle: the bundle structurally cannot make cloud LLM calls (ADR 015 §F audit signal).
 
 `get_privacy_settings()` returns the *effective* state (offline-mode-aware), not the raw preferences. Callers should always go through this helper rather than reading `privacy_*` preferences directly. `update_privacy_settings()` is the only sanctioned write path: it rejects unknown keys and refuses to disable offline mode while the env-var lock is engaged (raises `PrivacyBlockedError`).
 
-When a feature is blocked, callers must surface the reason rather than silently failing. `web_search.py` returns `[{"error": "Web search is blocked because Offline Mode is enabled."}]` so Claude sees the message and can fall back to local search. `assert_provider_allowed()` raises `PrivacyBlockedError` with a user-readable message that the chat router converts into an error stream event.
+When a feature is blocked, callers must surface the reason rather than silently failing — `web_search.py` returns `[{"error": "Web search is blocked because Offline Mode is enabled."}]` so the model sees the message and can fall back to local search.
 
-### Token budget
+### Token usage tracking (telemetry only)
 
-The daily token budget controls how many tokens Jarvis may consume in a single UTC day before chat is blocked. The budget value is stored as the preference key `daily_token_budget` in `preferences.json` (string-encoded integer). A value of `0` means unlimited.
+[`services/token_tracking.py`](../../backend/services/token_tracking.py) logs per-turn token counts to a JSONL file (`{workspace}/app/logs/usage.jsonl`) and aggregates them via `get_usage_summary()` / `get_usage_today()` / `get_usage_by_day()`. The legacy `cost_estimate` field is hardcoded to `0.0` — local Ollama has no per-call dollar cost.
 
-`token_tracking.get_daily_budget()` reads the preference at check time, falling back to `DEFAULT_DAILY_BUDGET` (100,000 tokens) if the key is absent or unparseable. `check_budget()` compares today's cumulative usage against the budget and returns a warning level:
+The pre-dispatch budget gate that previously blocked chat at 100% budget consumption was removed in 2026-05-04. `DEFAULT_DAILY_BUDGET` is `0` (unlimited). `check_budget()` and `get_daily_budget()` survive as library functions but are not currently consumed by any production code path; the budget UI was deleted along with the gate.
 
-| Level | Condition |
-|---|---|
-| `ok` | Usage below 80% of budget |
-| `warning` | Usage between 80% and 99% of budget |
-| `exceeded` | Usage at or above 100% of budget |
+### Lightweight mode
 
-When the budget is `0` (unlimited), `check_budget()` always returns level `ok` with `percent: 0`.
+The `lightweight_mode` preference (default off) pins chat dispatch to the smallest installed model on the user's hardware tier and bypasses memory-pressure auto-downgrade. Surfaced as the `PerformanceSection` toggle. Useful when the machine is RAM-pressured by other apps and the user wants chat to "just work" without mid-turn switching chatter. See [ADR 005 §C trigger 3](../architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md) for the underlying mechanism.
 
-The settings page exposes this as a full dashboard:
+### Graph-expansion toggles
 
-- **Usage gauge** -- a progress bar with color transitions (cyan at normal, amber at warning, red when exceeded) and an animated striped overflow indicator if usage exceeds 100%.
-- **Budget slider + numeric input** -- range 0 to 2,000,000 in steps of 50,000. Changes are persisted on slider release or input change via `PATCH /api/settings/budget`.
-- **Preset buttons** -- 50K, 100K, 250K, 500K, 1M, and Unlimited (0). Clicking a preset immediately saves.
-- **All-time stats** -- total tokens, request count, and estimated cost pulled from `GET /api/settings/usage`.
-- **14-day history sparkline** -- a bar chart of daily token totals from `GET /api/settings/usage/history`, with a dashed line showing the current budget limit and red bars for days that exceeded it.
+Three boolean knobs persisted under `config.json` → `retrieval.graph_expansion`:
 
-The estimated cost hint uses a blended rate of roughly $9 per million tokens (averaged across input at $3/MTok and output at $15/MTok).
+| Key | Default | Effect |
+|---|---|---|
+| `use_related` | `true` | Pull notes via confirmed `related` edges. Highest-trust. |
+| `use_part_of` | `true` | Pull sibling notes from the same project / area. |
+| `use_suggested_strong` | `false` | Pull notes via unconfirmed `suggested_related` ≥ 80% confidence. Opt-in. |
+
+Surfaced as `GraphExpansionSection`. Wired via `GET/PATCH /api/settings/retrieval`.
 
 ### Frontend composable
 
-`usePreferences.ts` wraps the `/api/preferences` endpoints with an optimistic update pattern: it writes the new value into the local `preferences` ref immediately, calls the API, and reverts to a fresh server fetch if the call fails. This keeps the UI responsive for low-latency feedback while staying consistent on error.
+[`usePreferences.ts`](../../frontend/app/composables/usePreferences.ts) wraps the `/api/preferences` endpoints with an optimistic update pattern: it writes the new value into the local `preferences` ref immediately, calls the API, and reverts to a fresh server fetch if the call fails. Keeps the UI responsive while staying consistent on error.
 
 ### Settings page section breakdown
 
-`settings.vue` is a thin shell composing one Vue component per concern from `frontend/app/components/settings/`. Most sections belong to other features and are documented there:
+[`settings.vue`](../../frontend/app/pages/settings.vue) is a thin shell composing one Vue component per concern. Sections owned elsewhere are documented in their feature docs:
 
 | Section component | Owning feature |
 |---|---|
-| `LocalModelsSection.vue` | local-models |
+| `LocalModelsSection.vue` | local-models *(redesigned 2026-05-04 — see below)* |
+| `PerformanceSection.vue` | preferences-settings (lightweight-mode toggle) |
 | `WorkspaceSection.vue` | workspace-onboarding |
-| `VoiceSection.vue` | voice |
-| `SmartConnectSection.vue` | smart-connect |
 | `McpSection.vue` | mcp-server |
-| `BudgetSection.vue` | preferences-settings (token budget — see above) |
-| `SharpenSection.vue` | preferences-settings (retrieval re-ranking toggles) |
-| `PrivacySection.vue` | preferences-settings (telemetry, error reporting) |
-| `MaintenanceSection.vue` | preferences-settings (reindex, graph rebuild, vacuum) |
-| `GraphExpansionSection.vue` | preferences-settings (graph-expansion budget knobs) |
-| `SettingsSection.vue` | preferences-settings (base wrapper — collapsible card with title/description slot) |
+| `VoiceSection.vue` | voice |
+| `MaintenanceSection.vue` | preferences-settings (reindex, graph rebuild) |
+| `SmartConnectSection.vue` | smart-connect |
+| `GraphExpansionSection.vue` | preferences-settings (graph-expansion knobs) |
+| `PrivacySection.vue` | preferences-settings (offline mode + per-feature toggles) |
+| `SharpenSection.vue` | preferences-settings (local-AI enrichment runner) |
+| `SettingsSection.vue` | preferences-settings (base wrapper — collapsible card) |
 
-Each non-trivial section pairs with a composable under `frontend/app/composables/settings/` (`useBudgetSettings.ts`, `useSharpen.ts`, `usePrivacySettings.ts`, `useGraphExpansionSettings.ts`, `useSettingsStatus.ts`, `useGeneralSettings.ts`) that owns that section's API surface and local state. Composables read/write through the same `/api/preferences` and `/api/settings/*` endpoints described above — there is no per-section backend.
+Each non-trivial section pairs with a composable under [`frontend/app/composables/settings/`](../../frontend/app/composables/settings/) (`useGeneralSettings.ts`, `useSharpen.ts`, `usePrivacySettings.ts`, `useGraphExpansionSettings.ts`, `useSettingsStatus.ts`, `useLightweightMode.ts`). Composables read/write through `/api/preferences` and `/api/settings/*` — no per-section backend.
+
+### LocalModelsSection — active-model hero (redesigned 2026-05-04)
+
+The Local Models section now leads with a hero card for the **active chat model** so switching models and reading current capacity is a one-glance operation:
+
+- **Capacity strip** — shows hardware label (`16 GB · Apple Silicon`) and what the machine runs comfortably (`up to 13B models`) plus effective context window. Driven by `useLocalSetupFlow.hardwareSummary`.
+- **Active model card** — eyebrow ("Active chat model") + pulsing status dot (cyan healthy / amber slow / soft-green fast, per `useChatHealth.statusFor`) + model name + capability descriptor ("Solid chat — good speed and depth") + quality dots. Stats row: real tok/s baseline (from the chat-model-probe via `useChatHealth.getBaseline`) + health pill, context window, size on disk.
+- **Change model** — `<select>` dropdown listing all installed models with quality + context metadata. One-step switch. Disabled when only one model is installed (prompts the user to install another).
+- **Probe panel** — `ChatModelProbePanel` mounts directly below the hero card, so the speed reading and the "re-test" surface live next to the model they belong to.
+- **Install another model** — collapsed disclosure separating *install* from *switch*. Inside: "Recommended for your hardware" (top 3 not yet installed) and "All other models" (the rest).
+- **Advanced** — Ollama URL override + test connection.
+
+The section now defaults open (`:default-open="true"`) since it is the primary control surface for local AI.
 
 ## Key Files
 
-- `backend/routers/preferences.py` — CRUD endpoints for arbitrary key/value preferences; used by composables and internal services.
-- `backend/routers/settings.py` — Aggregated settings view, API key update, voice preference update, budget read/write, and token usage endpoints.
-- `backend/services/preference_service.py` — Reads, writes, and deletes entries in `preferences.json`; provides `format_for_prompt()` for Claude context injection.
-- `backend/services/privacy.py` — Central privacy / network kill-switches. `get_privacy_settings()` resolves env lock + master toggle + per-feature flags into an effective state; `assert_provider_allowed()` and the `web_search_enabled()` / `url_ingest_enabled()` / `cloud_providers_enabled()` helpers gate every outbound integration.
-- `backend/services/token_tracking.py` — JSONL-based token usage logging, daily/all-time aggregation, and budget enforcement via `check_budget()` and `get_daily_budget()`.
-- `backend/config.py` — Pydantic-settings `Settings` model with `JARVIS_`-prefixed env var support and `.env` file bootstrap; singleton via `lru_cache`.
-- `frontend/app/pages/settings.vue` — Settings UI: API key section with connected/not-configured status badge and storage-method detail row, contextual input placeholder and button label, file-storage warning, voice toggles, maintenance actions (reindex, graph rebuild), and token usage and budget dashboard with gauge, slider, presets, all-time stats, and 14-day history sparkline.
-- `frontend/app/composables/usePreferences.ts` — Thin composable over `/api/preferences` with optimistic update and automatic revert on failure.
+- [`backend/routers/preferences.py`](../../backend/routers/preferences.py) — CRUD endpoints for arbitrary key/value preferences; used by composables and internal services.
+- [`backend/routers/settings.py`](../../backend/routers/settings.py) — Aggregated settings view, voice update, privacy CRUD, retrieval graph-expansion CRUD, lightweight-mode CRUD, token-usage read-only endpoints.
+- [`backend/services/preference_service.py`](../../backend/services/preference_service.py) — Reads, writes, and deletes entries in `preferences.json`; provides `format_for_prompt()` for system-prompt injection.
+- [`backend/services/privacy.py`](../../backend/services/privacy.py) — Central privacy / network kill-switches. `get_privacy_settings()` resolves env lock + master toggle + per-feature flags into an effective state; `web_search_enabled()` / `url_ingest_enabled()` gate every outbound integration.
+- [`backend/services/token_tracking.py`](../../backend/services/token_tracking.py) — JSONL-based token-usage logging plus daily / all-time aggregation. Cost field is structurally zero; budget gate is unwired.
+- [`backend/config.py`](../../backend/config.py) — Pydantic-settings `Settings` model with `JARVIS_`-prefixed env-var support and `.env` file bootstrap; singleton via `lru_cache`.
+- [`frontend/app/pages/settings.vue`](../../frontend/app/pages/settings.vue) — Thin shell composing one section per concern.
+- [`frontend/app/composables/usePreferences.ts`](../../frontend/app/composables/usePreferences.ts) — Thin composable over `/api/preferences` with optimistic update and automatic revert on failure.
+- [`frontend/app/composables/settings/useGeneralSettings.ts`](../../frontend/app/composables/settings/useGeneralSettings.ts) — Loads `/api/settings`, exposes `workspacePath` + `autoSpeak`, and provides reindex / rebuild-graph actions.
 
 ## API / Interface
 
 ### `GET /api/settings`
 
-Returns a combined view of workspace metadata and current voice preferences.
+Returns the small view-model used by the settings page on mount.
 
 ```typescript
 {
-  workspace_path: string        // absolute path to Jarvis workspace
-  api_key_set: boolean          // verified by actually reading the stored key, not trusting a flag
-  key_storage: "keyring" | "file" | "environment"
+  workspace_path: string         // absolute path to the workspace
   voice: {
-    auto_speak: string          // "true" | "false" (string, not boolean)
-    tts_voice: string           // "default" or a voice name
+    auto_speak: string           // "true" | "false" (string, not boolean)
+    tts_voice: string            // "default" or a voice name
   }
 }
 ```
 
-### `PATCH /api/settings/api-key`
-
-```typescript
-// Request body
-{ api_key: string }
-
-// Response
-{ api_key_set: true }
-```
-
-Returns 422 if `api_key` is empty or missing. On success, stores the key via `_store_api_key()` and then attempts to write `api_key_set: true` into `config.json` to keep the flag consistent. The config write failure is silently ignored — status correctness is guaranteed by the live verification in `get_workspace_status()`.
+There is no `api_key_set` and no `key_storage` field — keys are not a concept in v1 (ADR 015). `PATCH /api/settings/api-key` returns 404 (route does not exist) — that absence is part of the audit signal a procurement reviewer probes for.
 
 ### `PATCH /api/settings/voice`
 
 ```typescript
-// Request body — any subset of valid keys
+// Request — any subset of valid keys
 { auto_speak?: string, tts_voice?: string }
 
 // Response — full updated voice block
 { auto_speak: string, tts_voice: string }
 ```
 
-Returns 422 if any key in the body is not in the allowed set.
+Returns 422 if any key in the body is not in the allowed set (`{auto_speak, tts_voice}`).
 
-### `GET /api/settings/budget`
+### `GET /api/settings/privacy` / `PATCH /api/settings/privacy`
 
-Returns the current daily budget status including today's usage against the limit.
+```typescript
+// GET response — effective state (env lock + master toggle + per-feature)
+{
+  offline_mode: boolean
+  offline_mode_locked: boolean       // true when JARVIS_OFFLINE_MODE env var is set
+  web_search_enabled: boolean
+  url_ingest_enabled: boolean
+}
+
+// PATCH body — any subset of:
+{ offline_mode?: boolean, web_search_enabled?: boolean, url_ingest_enabled?: boolean }
+```
+
+PATCH returns 409 with a `PrivacyBlockedError` message if the user attempts to disable offline mode while the env-var lock is engaged. Returns 422 for unknown keys or non-boolean values.
+
+### `GET /api/settings/retrieval` / `PATCH /api/settings/retrieval`
 
 ```typescript
 {
-  daily_budget: number     // 0 = unlimited
-  used_today: number       // tokens consumed today (UTC)
-  percent: number          // usage as percentage of budget (0 when unlimited)
-  level: "ok" | "warning" | "exceeded"
+  graph_expansion: {
+    use_related: boolean
+    use_part_of: boolean
+    use_suggested_strong: boolean
+  }
 }
 ```
 
-### `PATCH /api/settings/budget`
+PATCH expects a `graph_expansion` object containing any subset of the three keys. Persisted to `{workspace}/app/config.json` under `retrieval.graph_expansion`.
+
+### `GET /api/settings/lightweight-mode` / `PATCH /api/settings/lightweight-mode`
 
 ```typescript
-// Request body
-{ daily_token_budget: number }   // 0 = unlimited, must be >= 0
-
-// Response
-{ daily_token_budget: number }
+// Both shapes
+{ enabled: boolean }
 ```
 
-Returns 422 if `daily_token_budget` is missing, non-integer, or negative.
+Persisted as the `lightweight_mode` preference (string `"true"` / `"false"`).
 
 ### `GET /api/settings/usage` / `GET /api/settings/usage/today` / `GET /api/settings/usage/history`
 
-Delegate entirely to `token_tracking`. See the chat feature docs for the token tracking schema.
+Read-only delegates to `token_tracking`. `cost_estimate` is always `0.0`. Daily history returns the last 14 UTC days as `[{ date, total_tokens, ... }]`.
 
-### `GET /api/preferences`
-
-Returns the full `preferences.json` as `Record<string, string>`.
-
-### `PATCH /api/preferences`
+### `GET /api/preferences` / `PATCH /api/preferences` / `DELETE /api/preferences/{key}`
 
 ```typescript
-// Request body (PreferenceSetRequest schema)
+// GET response
+Record<string, string>
+
+// PATCH body (PreferenceSetRequest)
 { key: string, value: string }
 
-// Response — full updated preferences map
-Record<string, string>
+// PATCH response
+Record<string, string>            // full updated map
+
+// DELETE response
+{ status: "deleted" }             // idempotent — succeeds even if the key did not exist
 ```
 
-Returns 400 if `key` is empty.
-
-### `DELETE /api/preferences/{key}`
-
-Always returns `{ status: "deleted" }`, even if the key did not exist.
+PATCH returns 400 if `key` is empty.
 
 ## Gotchas
 
-- **All preference values are strings.** The `auto_speak` voice preference is stored as the string `"true"` or `"false"`, not a boolean. The settings page must compare `resp.voice.auto_speak === 'true'` explicitly — a plain truthiness check on a non-empty string would always evaluate to `true`.
-
-- **`format_for_prompt()` returns `None`, not an empty string**, when no preferences exist. Callers in the context builder must guard for `None` before concatenating.
-
-- **`DELETE /api/preferences/{key}` is silently idempotent.** A delete on a non-existent key returns a 200 success rather than 404. This is intentional but callers should not rely on the response to confirm the key ever existed.
-
-- **`lru_cache` on `get_settings()` means runtime env var changes are invisible.** If `JARVIS_WORKSPACE_PATH` changes after the first import, the cached `Settings` instance will still hold the original value. A process restart is required to pick up the new value.
-
-- **The `.env` parser uses `os.environ.setdefault`**, which means values already present in the environment at startup will never be overridden by the `.env` file. This is by design (container/system env takes precedence), but it can surprise developers who edit `.env` and expect it to take effect over a pre-existing shell export.
-
-- **The daily budget is advisory, not a hard gate at the API level.** `check_budget()` returns a status, but it is up to the caller (the chat router) to decide whether to block requests when `level` is `"exceeded"`. The settings page warns the user but does not disable the send button itself -- the backend enforces the block.
-
-- **Budget resets are UTC-based.** The "today" window is determined by `datetime.now(timezone.utc)`, not the user's local timezone. A user in UTC-5 will see their budget reset at 7 PM local time.
-
-- **`get_daily_budget()` does a lazy import of `preference_service`** to avoid circular imports. This means the first call in a process incurs the import overhead, though it is negligible.
-
-- **Workspace must exist before preferences can be written.** `preference_service.save_preference()` creates `app/` with `mkdir(parents=True, exist_ok=True)`, but the parent `workspace/` directory is assumed to already exist from the onboarding flow. Writing preferences before onboarding completes will silently create a partial directory tree.
-
-- **`api_key_set` is verified live on every `GET /api/settings` call.** `get_workspace_status()` calls `get_api_key()` each time to confirm the key is actually present in storage, not just flagged in `config.json`. On systems where the OS keyring is slow or locked (e.g., a headless server without a session unlock), this check adds latency to every settings page load.
-
-- **The storage method string is `"keyring"`, not `"keychain"`.** `get_key_storage_method()` returns `"keyring"` when the key is found via the `keyring` Python package. The UI maps this value to the human-readable label "via system credential store". Comparing against `"keychain"` in any client code will silently fail to match.
+- **All preference values are strings.** The `auto_speak` voice preference is stored as the string `"true"` or `"false"`, not a boolean. UI code must compare against the string explicitly — a plain truthiness check on a non-empty string would always evaluate to `true`.
+- **`format_for_prompt()` returns `None`, not an empty string**, when no preferences exist. Callers in the system-prompt builder must guard for `None` before concatenating.
+- **`DELETE /api/preferences/{key}` is silently idempotent** — a delete on a non-existent key returns 200, not 404. Callers should not rely on the response to confirm the key ever existed.
+- **`lru_cache` on `get_settings()` means runtime env-var changes are invisible.** A process restart is required to pick up a changed `JARVIS_WORKSPACE_PATH`.
+- **The `.env` parser uses `os.environ.setdefault`.** Values already in the environment at startup will never be overridden by `.env`. By design (container/system env wins) but can surprise developers who edit `.env` and expect it to take effect over a pre-existing shell export.
+- **Workspace must exist before preferences can be written.** `preference_service.save_preference()` creates `app/` with `mkdir(parents=True, exist_ok=True)`, but the parent `workspace/` directory is assumed to already exist from the onboarding flow.
+- **Privacy `cloud_providers_enabled` does not exist.** Older clients that PATCH this key receive a 422 (`Unknown key: cloud_providers_enabled`). The bundle has no cloud-provider code paths to gate at runtime — the gate is structural (no SDK, no router, no UI) per [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md).
+- **The token-budget UI is gone.** Any historical reference to setting a daily budget through the settings page no longer applies. The `check_budget()` function survives in the codebase but is not currently consumed; if reintroduced, the gate must apply at a controllable surface (chat router) and ship with a UI to raise the limit.

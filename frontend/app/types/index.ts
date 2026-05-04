@@ -8,7 +8,6 @@ export type BackendStatus = 'unknown' | 'online' | 'offline'
 export interface WorkspaceStatusResponse {
   initialized: boolean
   workspace_path?: string
-  api_key_set?: boolean
 }
 
 export interface WorkspaceInitResponse {
@@ -357,7 +356,6 @@ export interface ModelRecommendation {
   preset: LocalModelPreset
   label: string
   ollama_model: string
-  litellm_model: string
   download_size_gb: number
   context_window: string
   strengths: string[]

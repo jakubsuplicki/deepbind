@@ -62,7 +62,7 @@ def test_resolve_budget_returns_none_for_anthropic():
 
 def test_resolve_budget_returns_none_for_unknown_local_model():
     budget, tok = chat_router._resolve_system_prompt_budget(
-        provider="ollama", model="ollama_chat/mystery:99b",
+        provider="ollama", model="mystery:99b",
     )
     assert budget is None
     assert tok is None
@@ -71,7 +71,7 @@ def test_resolve_budget_returns_none_for_unknown_local_model():
 def test_resolve_budget_returns_value_for_known_local_model():
     """Qwen3 8B is in the catalog at 32K effective context; budget is 30%."""
     budget, tok = chat_router._resolve_system_prompt_budget(
-        provider="ollama", model="ollama_chat/qwen3:8b",
+        provider="ollama", model="qwen3:8b",
     )
     assert budget is not None
     # 32_768 × 0.30 = 9830
@@ -111,7 +111,7 @@ async def test_maybe_compact_noop_when_under_threshold():
         session_id=sid,
         system_prompt="short prompt",
         provider="ollama",
-        model="ollama_chat/qwen3:8b",
+        model="qwen3:8b",
         ws=ws,
     )
     # Under threshold → original messages preserved, no audit event,
@@ -151,7 +151,7 @@ async def test_maybe_compact_records_event_and_emits_ws_when_over_threshold(monk
         session_id=sid,
         system_prompt="sys" * 10,
         provider="ollama",
-        model="ollama_chat/qwen3:8b",
+        model="qwen3:8b",
         ws=ws,
     )
     # Strategy dropped older turns; recent_n default is 8 → 16 messages
@@ -202,7 +202,7 @@ async def test_maybe_compact_internal_failure_returns_uncompacted(monkeypatch):
         session_id=sid,
         system_prompt="sys",
         provider="ollama",
-        model="ollama_chat/qwen3:8b",
+        model="qwen3:8b",
         ws=ws,
     )
     assert out == messages

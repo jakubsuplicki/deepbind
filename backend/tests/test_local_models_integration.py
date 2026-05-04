@@ -68,7 +68,7 @@ class TestTimeoutConfig:
     def test_make_llm_ollama_timeout(self):
         from routers.chat import _make_llm
 
-        llm = _make_llm("ollama", "ollama_chat/qwen3:8b", "")
+        llm = _make_llm("ollama", "qwen3:8b", "")
         assert llm.config.timeout == 1800
 
     def test_make_llm_ollama_no_api_key_needed(self):
@@ -79,14 +79,14 @@ class TestTimeoutConfig:
         from routers.chat import _make_llm
         from services.ollama_dispatcher import OllamaDispatcher
 
-        llm = _make_llm("ollama", "ollama_chat/qwen3:8b", "")
+        llm = _make_llm("ollama", "qwen3:8b", "")
         assert isinstance(llm, OllamaDispatcher)
         assert not hasattr(llm.config, "api_key")
 
     def test_make_llm_ollama_custom_base_url(self):
         from routers.chat import _make_llm
 
-        llm = _make_llm("ollama", "ollama_chat/qwen3:8b", "", base_url="http://myhost:9999")
+        llm = _make_llm("ollama", "qwen3:8b", "", base_url="http://myhost:9999")
         assert llm.config.api_base == "http://myhost:9999"
 
 

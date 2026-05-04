@@ -49,7 +49,7 @@ def test_log_usage_fields(ws):
     assert entry["input_tokens"] == 1000
     assert entry["output_tokens"] == 500
     assert entry["total_tokens"] == 1500
-    assert entry["model"] == "ollama_chat/qwen3:8b"
+    assert entry["model"] == "qwen3:8b"
     assert entry["cost_estimate"] == 0.0
 
 

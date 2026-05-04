@@ -293,7 +293,7 @@ async def test_system_prompt_is_prepended_as_first_message():
 
 
 def test_model_name_strips_litellm_prefix():
-    d = _make_dispatcher(model="ollama_chat/qwen3:8b")
+    d = _make_dispatcher(model="qwen3:8b")
     assert d._model == "qwen3:8b"
 
 
@@ -480,8 +480,8 @@ def test_convert_messages_handles_empty_assistant_text_with_tool_calls():
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
 
-def test_default_keep_alive_is_30m():
-    assert DEFAULT_KEEP_ALIVE == "30m"
+def test_default_keep_alive_is_24h():
+    assert DEFAULT_KEEP_ALIVE == "24h"
 
 
 def test_default_config_uses_module_defaults():
@@ -489,5 +489,5 @@ def test_default_config_uses_module_defaults():
     assert cfg.max_tokens == 4096
     assert cfg.temperature == 0.7
     assert cfg.timeout == 1800.0
-    assert cfg.keep_alive == "30m"
+    assert cfg.keep_alive == "24h"
     assert cfg.api_base is None

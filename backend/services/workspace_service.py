@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -49,19 +48,14 @@ def get_workspace_status(workspace_path: Optional[Path] = None) -> dict:
 
     config_file = path / "app" / "config.json"
     try:
-        config = json.loads(config_file.read_text())
+        json.loads(config_file.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Could not read config.json: %s", exc)
         return {"initialized": False}
 
-    # Keys live in the browser (localStorage/sessionStorage).
-    # The env var is only used for dev/CI — never stored server-side.
-    env_key_available = bool(os.environ.get("ANTHROPIC_API_KEY"))
     return {
         "initialized": True,
         "workspace_path": str(path),
-        "api_key_set": env_key_available,
-        "key_storage": "environment" if env_key_available else "browser",
     }
 
 
@@ -79,10 +73,6 @@ def create_workspace(workspace_path: Optional[Path] = None) -> dict:
         config = {
             "version": "0.1.0",
             "created_at": datetime.now(timezone.utc).isoformat(),
-            # Keys are managed entirely in the browser (localStorage/sessionStorage).
-            # The backend never stores or retrieves API keys.
-            "api_key_set": False,
-            "key_storage": "browser",
             "workspace_path": str(path),
         }
         config_file = path / "app" / "config.json"
@@ -105,6 +95,9 @@ def create_workspace(workspace_path: Optional[Path] = None) -> dict:
 
 
 def get_api_key(workspace_path: Optional[Path] = None) -> Optional[str]:
-    """Return key from environment only (used for dev/CI). Browser keys are
-    sent per-request and never reach this function in production."""
-    return os.environ.get("ANTHROPIC_API_KEY") or None
+    """ADR 015 — local-only stack. There is no API key in v1; the bundle
+    contains no cloud-provider SDK. The function is preserved as an inert
+    `None` so existing chat-router signatures (`api_key: str = ""`) keep
+    working without a router-wide refactor; remove when those callsites
+    drop the parameter."""
+    return None

@@ -52,7 +52,14 @@ DEFAULT_MODEL = "qwen3:8b"
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TIMEOUT_SECONDS = 1800.0  # local first-load can be slow on CPU
-DEFAULT_KEEP_ALIVE = "30m"
+# 24 h: keep the chat model + KV cache resident across normal day-of-use idle
+# gaps. Ollama's own default is 5 min, our prior default was 30 min — both
+# trigger a 17 s cold-reload (mmap of the GGUF + KV-cache rebuild) any time
+# the user steps away for a coffee. The "next conversation in the same
+# session" experience matters more than RAM headroom on a workstation that
+# already chose to install a chat-model. Auto-downgrade (memory_pressure_monitor)
+# can still evict explicitly when it needs to swap models.
+DEFAULT_KEEP_ALIVE = "24h"
 
 
 @dataclass

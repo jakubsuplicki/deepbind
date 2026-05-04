@@ -20,10 +20,7 @@
         </div>
         <div class="spec-card__stats">
           <span class="spec-card__stat">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-            </svg>
+            <Icon name="ph:file-text" class="spec-card__stat-icon" />
             {{ specialist.file_count || 0 }} files
           </span>
           <span class="spec-card__stat-dot">&middot;</span>
@@ -33,7 +30,7 @@
           <template v-if="specialist.default_model">
             <span class="spec-card__stat-dot">&middot;</span>
             <span class="spec-card__stat spec-card__stat--model">
-              <span class="spec-card__model-icon" v-html="providerIcon(specialist.default_model)" />
+              <Icon name="ph:hard-drives" class="spec-card__stat-icon" />
               {{ modelLabel(specialist.default_model) }}
             </span>
           </template>
@@ -47,34 +44,24 @@
           @click="$emit('activate', specialist.id)"
           :title="active ? 'Deactivate' : 'Activate'"
         >
-          <svg v-if="active" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
-            <line x1="12" y1="2" x2="12" y2="12"/>
-          </svg>
-          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="5 3 19 12 5 21 5 3"/>
-          </svg>
+          <Icon
+            :name="active ? 'ph:stop-circle-fill' : 'ph:play-fill'"
+            class="icon--md"
+          />
         </button>
         <button
           class="spec-card__btn spec-card__btn--edit"
           title="Edit specialist"
           @click="$emit('edit', specialist.id)"
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
+          <Icon name="ph:pencil-simple" class="icon--sm" />
         </button>
         <button
           class="spec-card__btn spec-card__btn--delete"
           title="Delete specialist"
           @click="$emit('delete', specialist.id)"
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
-            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-          </svg>
+          <Icon name="ph:trash" class="icon--sm" />
         </button>
         <button
           class="spec-card__btn spec-card__btn--expand"
@@ -82,9 +69,7 @@
           @click="$emit('toggle-expand', specialist.id)"
           title="Toggle knowledge panel"
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
+          <Icon name="ph:caret-down" class="icon--sm" />
         </button>
       </div>
     </div>
@@ -108,10 +93,6 @@ function modelLabel(dm?: { provider: string; model: string } | null): string {
   // the `ollama_chat/` prefix when present, otherwise show the raw tag.
   if (!dm) return ''
   return dm.model.replace(/^ollama(?:_chat)?\//, '')
-}
-
-function providerIcon(_dm?: { provider: string; model: string } | null): string {
-  return ''
 }
 
 defineProps<{
@@ -283,7 +264,8 @@ defineEmits<{
   color: var(--text-muted);
 }
 
-.spec-card__stat svg {
+.spec-card__stat-icon {
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -294,17 +276,6 @@ defineEmits<{
 
 .spec-card__stat--model {
   color: var(--text-secondary);
-}
-
-.spec-card__model-icon {
-  display: inline-flex;
-  width: 11px;
-  height: 11px;
-}
-
-.spec-card__model-icon :deep(svg) {
-  width: 11px;
-  height: 11px;
 }
 
 /* --- Actions --- */

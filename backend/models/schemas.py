@@ -9,7 +9,7 @@ class HealthResponse(BaseModel):
 
 
 class WorkspaceInitRequest(BaseModel):
-    """Workspace creation request. No API key — keys live in the browser."""
+    """Workspace creation request. ADR 015 — local-only, no API keys."""
 
 
 class WorkspaceInitResponse(BaseModel):
@@ -20,8 +20,6 @@ class WorkspaceInitResponse(BaseModel):
 class WorkspaceStatusResponse(BaseModel):
     initialized: bool
     workspace_path: Optional[str] = None
-    api_key_set: Optional[bool] = None
-    key_storage: Optional[str] = None
 
 
 # --- Memory ---

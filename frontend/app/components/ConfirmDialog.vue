@@ -4,13 +4,7 @@
       <div v-if="visible" class="confirm-dialog__overlay" @click.self="$emit('cancel')">
         <div class="confirm-dialog">
           <div class="confirm-dialog__icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="3 6 5 6 21 6"/>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
-              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-              <line x1="10" y1="11" x2="10" y2="17"/>
-              <line x1="14" y1="11" x2="14" y2="17"/>
-            </svg>
+            <Icon name="ph:trash" class="icon--xl" />
           </div>
           <h3 class="confirm-dialog__title">{{ title }}</h3>
           <p class="confirm-dialog__message">{{ message }}</p>

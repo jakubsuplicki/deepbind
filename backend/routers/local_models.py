@@ -125,7 +125,7 @@ async def pull_model(req: PullRequest):
 @router.post("/models/select")
 async def select_model(req: SelectRequest):
     """Set the active local model."""
-    set_active_local_model(req.model_id, req.litellm_model, req.base_url)
+    set_active_local_model(req.model_id, req.ollama_model, req.base_url)
     return {"status": "ok", "active_model": req.model_id}
 
 
@@ -139,7 +139,7 @@ async def remove_model(
     if success:
         # If this was the active model, clear it from config
         active = get_active_local_model()
-        if active and active.get("litellm_model", "").endswith(model_name):
+        if active and active.get("ollama_model", "") == model_name:
             clear_active_local_model()
         return {"status": "ok", "deleted": model_name}
     return {"status": "error", "message": "Failed to delete model"}

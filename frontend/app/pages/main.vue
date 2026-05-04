@@ -1,7 +1,7 @@
 <template>
   <div class="main-page">
     <div v-if="showProbeRerunBanner" class="main-page__probe-banner">
-      <span class="main-page__probe-banner-icon">⚙️</span>
+      <Icon name="ph:gear-six-fill" class="icon--md icon--accent main-page__probe-banner-icon" />
       <div class="main-page__probe-banner-info">
         <span class="main-page__probe-banner-title">Re-test recommended</span>
         <span class="main-page__probe-banner-reason">{{ probeRerunReasonText }}</span>
@@ -9,8 +9,8 @@
       <button class="main-page__probe-banner-btn" @click="handleRerunProbe">
         Re-run
       </button>
-      <button class="main-page__probe-banner-dismiss" @click="probeBannerDismissed = true" title="Dismiss">
-        ×
+      <button class="main-page__probe-banner-dismiss" @click="probeBannerDismissed = true" aria-label="Dismiss">
+        <Icon name="ph:x" class="icon--sm" />
       </button>
     </div>
     <div class="main-page__layout">

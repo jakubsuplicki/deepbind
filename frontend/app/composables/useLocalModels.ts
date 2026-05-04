@@ -79,11 +79,11 @@ export function useLocalModels() {
       try {
         const chatModel = useChatModel()
         const isStillAvailable = catalog.value.some(
-          m => m.installed && m.litellm_model === chatModel.activeModel.value,
+          m => m.installed && m.ollama_model === chatModel.activeModel.value,
         )
         if (isStillAvailable) return
         const fallback = catalog.value.find(m => m.active) ?? catalog.value.find(m => m.installed)
-        if (fallback) chatModel.selectModel(fallback.litellm_model)
+        if (fallback) chatModel.selectModel(fallback.ollama_model)
       } catch { /* ignore — composable unavailable in non-Nuxt contexts */ }
     } catch (e: unknown) {
       error.value = 'Failed to fetch model catalog'
@@ -191,7 +191,7 @@ export function useLocalModels() {
         method: 'POST',
         body: _baseUrlBody({
           model_id: model.model_id,
-          litellm_model: model.litellm_model,
+          ollama_model: model.ollama_model,
         }),
       })
       await fetchCatalog()
@@ -201,7 +201,7 @@ export function useLocalModels() {
       // a stale local one.
       try {
         const chatModel = useChatModel()
-        chatModel.selectModel(model.litellm_model)
+        chatModel.selectModel(model.ollama_model)
       } catch { /* ignore — composable unavailable in non-Nuxt contexts */ }
     } catch (e: unknown) {
       error.value = 'Failed to select model'

@@ -3,10 +3,7 @@
     <!-- Header bar -->
     <div class="know-panel__header">
       <div class="know-panel__header-label">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-        </svg>
+        <Icon name="ph:books" class="icon--md" />
         <span>Knowledge Base</span>
         <span class="know-panel__count">{{ files.length }}</span>
       </div>
@@ -29,11 +26,7 @@
       </div>
       <div v-else class="know-panel__drop-content">
         <div class="know-panel__drop-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="17 8 12 3 7 8"/>
-            <line x1="12" y1="3" x2="12" y2="15"/>
-          </svg>
+          <Icon name="ph:upload-simple" class="icon--lg" />
         </div>
         <span class="know-panel__drop-text">Drop files here</span>
         <button class="know-panel__browse-btn" @click="triggerFileInput">or browse</button>
@@ -50,10 +43,7 @@
 
     <!-- URL ingest bar -->
     <div class="know-panel__url-bar">
-      <svg class="know-panel__url-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-      </svg>
+      <Icon name="ph:link" class="icon--md know-panel__url-icon" />
       <input
         v-model="urlInput"
         class="know-panel__url-input"
@@ -66,10 +56,7 @@
         @click="handleUrlIngest"
       >
         <span v-if="urlIngesting" class="know-panel__spinner know-panel__spinner--small" />
-        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="5" y1="12" x2="19" y2="12"/>
-          <polyline points="12 5 19 12 12 19"/>
-        </svg>
+        <Icon v-else name="ph:arrow-right" class="icon--sm" />
       </button>
     </div>
 
@@ -85,9 +72,7 @@
         :key="file.filename"
         class="know-panel__file"
       >
-        <div class="know-panel__file-icon">
-          {{ fileIcon(file.filename) }}
-        </div>
+        <Icon :name="fileIcon(file.filename)" class="icon--md know-panel__file-icon" />
         <div class="know-panel__file-info">
           <span class="know-panel__file-title">{{ file.title || file.filename }}</span>
           <span class="know-panel__file-meta">{{ formatSize(file.size) }}</span>
@@ -97,10 +82,7 @@
           title="Remove file"
           @click="handleDeleteFile(file.filename)"
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
+          <Icon name="ph:x" class="icon--sm" />
         </button>
       </div>
     </TransitionGroup>
@@ -229,12 +211,13 @@ async function handleDeleteFile(filename: string) {
 function fileIcon(filename: string): string {
   const ext = (filename ?? '').split('.').pop()?.toLowerCase()
   switch (ext) {
-    case 'pdf': return '\u{1F4C4}'
-    case 'md': return '\u{1F4DD}'
-    case 'txt': return '\u{1F4C3}'
-    case 'csv': return '\u{1F4CA}'
-    case 'json': return '\u{1F4CB}'
-    default: return '\u{1F4C1}'
+    case 'pdf': return 'ph:file-pdf'
+    case 'md': return 'ph:file-md'
+    case 'txt': return 'ph:file-text'
+    case 'csv': return 'ph:file-csv'
+    case 'json': return 'ph:file-code'
+    case 'xml': return 'ph:file-code'
+    default: return 'ph:file'
   }
 }
 
@@ -456,10 +439,8 @@ function formatSize(bytes: number): string {
 }
 
 .know-panel__file-icon {
-  font-size: 0.85rem;
   flex-shrink: 0;
-  width: 20px;
-  text-align: center;
+  color: var(--text-secondary);
 }
 
 .know-panel__file-info {

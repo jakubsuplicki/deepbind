@@ -60,7 +60,9 @@ async def call_local_model(
     workspace_path: Optional[Path] = None,
 ) -> tuple[str, int, int, int]:
     base_url = select_base_url(workspace_path)
-    model_name = model_id.replace("ollama_chat/", "", 1)
+    # Strip a stale `ollama_chat/` prefix in case the caller still has the
+    # old format from older config; cleaned forms pass through unchanged.
+    model_name = model_id.removeprefix("ollama_chat/")
 
     payload = {
         "model": model_name,

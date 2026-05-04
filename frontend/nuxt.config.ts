@@ -4,6 +4,24 @@ export default defineNuxtConfig({
   ssr: false,
   devtools: { enabled: false },
 
+  modules: ['@nuxt/icon'],
+
+  // Icon system (ADR 017): Phosphor for UI vocabulary, Simple Icons for brand
+  // marks. Both sets are bundled locally so the Tauri shell never reaches
+  // api.iconify.design at runtime — required for offline-first.
+  icon: {
+    provider: 'iconify',
+    serverBundle: false,
+    clientBundle: {
+      scan: true,
+      includeCustomCollections: true,
+      sizeLimitKb: 512,
+    },
+    collections: ['ph', 'simple-icons'],
+    mode: 'svg',
+    class: 'icon',
+  },
+
   app: {
     head: {
       link: [

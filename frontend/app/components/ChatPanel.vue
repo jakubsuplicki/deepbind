@@ -21,11 +21,6 @@ function modelLabel(provider?: string, model?: string): string {
   return model.replace(/^ollama(?:_chat)?\//, '')
 }
 
-function providerIcon(_provider?: string): string {
-  // Single dispatch target — no per-provider icon.
-  return ''
-}
-
 function formatTime(iso?: string): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -123,7 +118,7 @@ const input = ref('')
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const messagesContainer = ref<HTMLElement | null>(null)
 const ingestLoading = ref(false)
-const ingestResult = ref<string | null>(null)
+const ingestResult = ref<{ ok: boolean; message: string } | null>(null)
 
 const URL_RE = /https?:\/\/[^\s.,;!?)>\]]+/
 const YT_RE = /(?:youtube\.com\/watch\?.*v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([\w-]{11})/
@@ -144,10 +139,10 @@ async function handleSaveUrl() {
   ingestResult.value = null
   try {
     const res = await ingestUrl(detectedUrl.value)
-    ingestResult.value = `✅ Saved: ${res.path} (${res.word_count} words)`
+    ingestResult.value = { ok: true, message: `Saved: ${res.path} (${res.word_count} words)` }
     setTimeout(() => { ingestResult.value = null }, 4000)
   } catch {
-    ingestResult.value = '❌ Import failed'
+    ingestResult.value = { ok: false, message: 'Import failed' }
     setTimeout(() => { ingestResult.value = null }, 4000)
   } finally {
     ingestLoading.value = false
@@ -314,7 +309,7 @@ watch(
 
     <!-- Ollama offline banner -->
     <div v-if="ollamaDown" class="chat-panel__ollama-banner">
-      <span class="chat-panel__ollama-banner-icon">⚠️</span>
+      <Icon name="ph:warning-fill" class="icon--md icon--warning chat-panel__ollama-banner-icon" />
       <span class="chat-panel__ollama-banner-text">Ollama is not responding. Chat is unavailable until the local runtime comes back online.</span>
       <button class="chat-panel__ollama-banner-btn" @click="emit('reconnectOllama')">Reconnect</button>
     </div>
@@ -332,7 +327,7 @@ watch(
          the slow threshold against its probe baseline. Click-through to
          the probe panel re-tests in place. -->
     <div v-if="slowHealthMessage" class="chat-panel__health-banner">
-      <span class="chat-panel__health-banner-glyph">▾</span>
+      <Icon name="ph:gauge" class="icon--sm chat-panel__health-banner-glyph" />
       <span class="chat-panel__health-banner-text">{{ slowHealthMessage }}</span>
       <NuxtLink to="/settings#local-models" class="chat-panel__health-banner-link">Re-test models</NuxtLink>
     </div>
@@ -350,7 +345,7 @@ watch(
         >
           <div v-if="msg.role === 'assistant' && (msg.model || msg.timestamp || msg.metrics)" class="chat-panel__meta">
             <span v-if="msg.model" class="chat-panel__meta-model">
-              <span class="chat-panel__meta-icon" v-html="providerIcon(msg.provider)" />
+              <Icon name="ph:hard-drives" class="chat-panel__meta-icon" aria-label="Local model" />
               {{ modelLabel(msg.provider, msg.model) }}
             </span>
             <span
@@ -420,14 +415,17 @@ watch(
       </div>
 
       <div v-if="error" class="chat-panel__error">
-        <span class="chat-panel__error-icon">⚠</span>
+        <Icon name="ph:warning-fill" class="icon--md icon--warning chat-panel__error-icon" />
         <span class="chat-panel__error-text">{{ error }}</span>
         <button v-if="canRetry" class="chat-panel__error-retry" @click="emit('retry')">Retry</button>
       </div>
     </div>
 
     <div v-if="detectedUrl" class="chat-panel__url-bar">
-      <span class="chat-panel__url-icon">{{ urlType === 'youtube' ? '🎬' : '🔗' }}</span>
+      <Icon
+        :name="urlType === 'youtube' ? 'ph:youtube-logo-fill' : 'ph:link'"
+        class="icon--md icon--accent chat-panel__url-icon"
+      />
       <span class="chat-panel__url-text">{{ detectedUrl }}</span>
       <button
         class="chat-panel__url-action"
@@ -438,8 +436,12 @@ watch(
       </button>
     </div>
 
-    <div v-if="ingestResult" class="chat-panel__url-result">
-      {{ ingestResult }}
+    <div v-if="ingestResult" class="chat-panel__url-result" :class="{ 'chat-panel__url-result--error': !ingestResult.ok }">
+      <Icon
+        :name="ingestResult.ok ? 'ph:check-circle-fill' : 'ph:x-circle-fill'"
+        :class="['icon--sm', ingestResult.ok ? 'icon--success' : 'icon--danger']"
+      />
+      {{ ingestResult.message }}
     </div>
 
     <div class="chat-panel__input-bar">
@@ -460,10 +462,7 @@ watch(
         aria-label="Send message"
         @click="handleSend"
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="22" y1="2" x2="11" y2="13"/>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-        </svg>
+        <Icon name="ph:paper-plane-tilt-fill" class="icon--lg" />
       </button>
     </div>
   </div>
@@ -750,14 +749,9 @@ watch(
 }
 
 .chat-panel__meta-icon {
-  display: inline-flex;
-  width: 12px;
-  height: 12px;
-}
-
-.chat-panel__meta-icon :deep(svg) {
-  width: 12px;
-  height: 12px;
+  font-size: 11px;
+  color: var(--neon-cyan-60);
+  opacity: 0.8;
 }
 
 .chat-panel__meta-time {
@@ -1116,10 +1110,17 @@ watch(
 }
 
 .chat-panel__url-result {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   padding: 0.4rem 1.5rem;
   font-size: 0.8rem;
   border-top: 1px solid var(--border-subtle);
   color: var(--text-secondary);
+}
+
+.chat-panel__url-result--error {
+  color: var(--neon-red);
 }
 
 /* Duel button */

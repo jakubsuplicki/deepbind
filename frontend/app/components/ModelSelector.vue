@@ -16,8 +16,8 @@ const isOpen = ref(false)
 const selectorRef = ref<HTMLElement | null>(null)
 
 const currentModelInfo = computed<ModelInfo | undefined>(() => {
-  const local = installedModels.value.find(m => m.litellm_model === activeModel.value)
-  if (local) return { id: local.litellm_model, label: local.label, cost: 0 }
+  const local = installedModels.value.find(m => m.ollama_model === activeModel.value)
+  if (local) return { id: local.ollama_model, label: local.label, cost: 0 }
   const fallbackLabel = activeModel.value.replace(/^ollama(?:_chat)?\//, '')
   return { id: activeModel.value, label: fallbackLabel, cost: 0 }
 })
@@ -74,9 +74,7 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
       @click.stop="isOpen = !isOpen"
     >
       <span class="model-selector__trigger-label">{{ currentModelInfo?.label ?? activeModel }}</span>
-      <svg class="model-selector__chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="6 9 12 15 18 9" />
-      </svg>
+      <Icon name="ph:caret-down-bold" class="model-selector__chevron" />
     </button>
 
     <Transition name="dropdown">
@@ -87,11 +85,11 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
           </div>
           <button
             v-for="lm in installedModels"
-            :key="lm.litellm_model"
+            :key="lm.ollama_model"
             class="model-selector__option"
-            :class="{ 'model-selector__option--active': activeModel === lm.litellm_model }"
+            :class="{ 'model-selector__option--active': activeModel === lm.ollama_model }"
             :title="qualityDots(lm.preset).label"
-            @click="handleSelect(lm.litellm_model)"
+            @click="handleSelect(lm.ollama_model)"
           >
             <span class="model-selector__option-label">{{ lm.label }}</span>
             <span class="model-selector__quality" :title="qualityDots(lm.preset).label">
@@ -107,14 +105,11 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
                 class="model-selector__dot model-selector__dot--empty"
               />
             </span>
-            <svg
-              v-if="activeModel === lm.litellm_model"
-              class="model-selector__check"
-              width="14" height="14" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
-            >
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
+            <Icon
+              v-if="activeModel === lm.ollama_model"
+              name="ph:check-bold"
+              class="model-selector__check icon--sm"
+            />
           </button>
         </template>
 
@@ -180,6 +175,7 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 
 .model-selector__chevron {
   flex-shrink: 0;
+  font-size: 12px;
   transition: transform 0.2s;
   opacity: 0.6;
 }

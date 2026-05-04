@@ -121,7 +121,6 @@ class ModelCatalogEntry(BaseModel):
     id: str
     preset: str  # "fast" | "everyday" | "balanced" | "long-docs" | "reasoning" | "code" | "best-local" | "plumbing"
     ollama_model: str  # e.g. "qwen3:8b"
-    litellm_model: str  # e.g. "ollama_chat/qwen3:8b"
     label: str
     download_size_gb: float
     context_window: str  # native context (e.g. "32K"). RoPE/YaRN-extended ranges are listed in strengths, not here.
@@ -185,7 +184,6 @@ class ModelRecommendation(BaseModel):
     preset: str
     label: str
     ollama_model: str
-    litellm_model: str
     download_size_gb: float
     context_window: str
     strengths: List[str]
@@ -208,7 +206,7 @@ class PullRequest(BaseModel):
 
 class SelectRequest(BaseModel):
     model_id: str
-    litellm_model: str
+    ollama_model: str
     base_url: str = DEFAULT_OLLAMA_BASE_URL
 
 
@@ -277,7 +275,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="qwen3-1.7b",
         preset="fast",
         ollama_model="qwen3:1.7b",
-        litellm_model="ollama_chat/qwen3:1.7b",
         label="Qwen3 1.7B",
         download_size_gb=1.4,
         context_window="32K",
@@ -302,7 +299,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="qwen3-4b",
         preset="everyday",
         ollama_model="qwen3:4b",
-        litellm_model="ollama_chat/qwen3:4b",
         label="Qwen3 4B",
         download_size_gb=2.5,
         context_window="32K",
@@ -329,7 +325,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="qwen3-8b",
         preset="balanced",
         ollama_model="qwen3:8b",
-        litellm_model="ollama_chat/qwen3:8b",
         label="Qwen3 8B",
         download_size_gb=5.2,
         context_window="32K",
@@ -356,7 +351,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="ministral-3-8b",
         preset="long-docs",
         ollama_model="ministral-3:8b",
-        litellm_model="ollama_chat/ministral-3:8b",
         label="Ministral 3 8B",
         download_size_gb=6.0,
         context_window="256K",
@@ -384,7 +378,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="gemma4-e4b",
         preset="reasoning",
         ollama_model="gemma4:e4b",
-        litellm_model="ollama_chat/gemma4:e4b",
         label="Gemma 4 E4B",
         download_size_gb=9.6,
         context_window="128K",
@@ -412,7 +405,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="devstral-small-2-24b",
         preset="code",
         ollama_model="devstral-small-2:24b",
-        litellm_model="ollama_chat/devstral-small-2:24b",
         label="Devstral Small 2 24B",
         download_size_gb=15.0,
         context_window="256K",
@@ -449,7 +441,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="gemma4-26b-a4b",
         preset="best-local",
         ollama_model="gemma4:26b-a4b",
-        litellm_model="ollama_chat/gemma4:26b-a4b",
         label="Gemma 4 26B-A4B",
         download_size_gb=15.0,
         context_window="256K",
@@ -477,7 +468,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="qwen3-4b-instruct-2507",
         preset="long-docs",
         ollama_model="qwen3:4b-instruct-2507",
-        litellm_model="ollama_chat/qwen3:4b-instruct-2507",
         label="Qwen3 4B Instruct 2507",
         download_size_gb=2.6,
         context_window="256K",
@@ -508,7 +498,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="qwen3-14b",
         preset="balanced",
         ollama_model="qwen3:14b",
-        litellm_model="ollama_chat/qwen3:14b",
         label="Qwen3 14B",
         download_size_gb=9.0,
         context_window="32K",
@@ -547,7 +536,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="qwen3-30b-a3b-instruct-2507",
         preset="best-local",
         ollama_model="qwen3:30b-a3b-instruct-2507",
-        litellm_model="ollama_chat/qwen3:30b-a3b-instruct-2507",
         label="Qwen3 30B-A3B Instruct 2507 (unavailable on Ollama 0.18.0)",
         download_size_gb=18.0,
         context_window="256K",
@@ -580,7 +568,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="granite-4-h-micro",
         preset="plumbing",
         ollama_model="granite4:h-micro",
-        litellm_model="ollama_chat/granite4:h-micro",
         label="Granite 4.0 H-Micro",
         download_size_gb=2.0,
         context_window="32K",
@@ -608,7 +595,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="granite-4-h-tiny",
         preset="plumbing",
         ollama_model="granite4:h-tiny",
-        litellm_model="ollama_chat/granite4:h-tiny",
         label="Granite 4.0 H-Tiny",
         download_size_gb=4.0,
         context_window="128K",
@@ -635,7 +621,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="granite-4-h-small",
         preset="plumbing",
         ollama_model="granite4:h-small",
-        litellm_model="ollama_chat/granite4:h-small",
         label="Granite 4.0 H-Small",
         download_size_gb=18.0,
         context_window="128K",
@@ -671,7 +656,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="qwen3-30b-a3b-thinking-2507",
         preset="reasoning",
         ollama_model="qwen3:30b-a3b-thinking-2507",
-        litellm_model="ollama_chat/qwen3:30b-a3b-thinking-2507",
         label="Qwen3 30B-A3B Thinking 2507",
         download_size_gb=18.0,
         context_window="256K",
@@ -701,7 +685,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         id="gpt-oss-120b",
         preset="best-local",
         ollama_model="gpt-oss:120b",
-        litellm_model="ollama_chat/gpt-oss:120b",
         label="gpt-oss 120B",
         download_size_gb=63.0,
         context_window="128K",
@@ -761,12 +744,12 @@ def get_model_by_id(model_id: str) -> Optional[ModelCatalogEntry]:
     return _CATALOG_BY_ID.get(model_id)
 
 
-def get_model_by_litellm(litellm_model: str) -> Optional[ModelCatalogEntry]:
-    """Look up a catalog entry by its LiteLLM model string."""
-    if not litellm_model:
+def get_model_by_ollama_model(ollama_model: str) -> Optional[ModelCatalogEntry]:
+    """Look up a catalog entry by its raw Ollama model string (e.g. 'qwen3:8b')."""
+    if not ollama_model:
         return None
     for entry in MODEL_CATALOG:
-        if entry.litellm_model == litellm_model:
+        if entry.ollama_model == ollama_model:
             return entry
     return None
 
@@ -1204,7 +1187,6 @@ def score_model(
             preset=model.preset,
             label=model.label,
             ollama_model=model.ollama_model,
-            litellm_model=model.litellm_model,
             download_size_gb=model.download_size_gb,
             context_window=model.context_window,
             strengths=model.strengths,
@@ -1292,7 +1274,6 @@ def score_model(
         preset=model.preset,
         label=model.label,
         ollama_model=model.ollama_model,
-        litellm_model=model.litellm_model,
         download_size_gb=model.download_size_gb,
         context_window=model.context_window,
         strengths=model.strengths,
@@ -1429,12 +1410,16 @@ async def delete_model(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL) -> b
 # ── Model Warm-up ────────────────────────────────────────────────────────────
 
 
-# Single keep-alive value — keep loaded for half an hour after last use, then
-# evict. Matches today's single-active-model semantics. A future memory-pressure
-# auto-downgrade (consuming `probe_runtime_load()` + `effective_footprint_bytes()`)
-# may want a shorter keep-alive on overflow events, but that's a runtime
-# decision, not a static policy table.
-DEFAULT_KEEP_ALIVE = "30m"
+# Keep loaded for 24 h after last use. Ollama's default is 5 min; our prior
+# value was 30 min — both trigger a ~17 s cold-reload (mmap GGUF + KV-cache
+# rebuild) on the next message after any normal idle gap (coffee break,
+# meeting, lunch). Evicting after a day still bounds RAM growth on
+# multi-day-uptime workstations, while keeping the warm path warm for the
+# realistic single-active-model usage pattern. Memory-pressure auto-downgrade
+# (`probe_runtime_load()` + `effective_footprint_bytes()`) still evicts
+# explicitly when it needs to swap models — the keep-alive is a *floor*, not
+# a contract.
+DEFAULT_KEEP_ALIVE = "24h"
 
 
 async def warm_up_model(model: str, base_url: str = DEFAULT_OLLAMA_BASE_URL) -> bool:
@@ -1541,7 +1526,7 @@ def get_active_local_model() -> Optional[Dict[str, str]]:
 
 def set_active_local_model(
     model_id: str,
-    litellm_model: str,
+    ollama_model: str,
     base_url: str = DEFAULT_OLLAMA_BASE_URL,
 ) -> None:
     """Write the active local model to workspace config.json atomically.
@@ -1558,7 +1543,7 @@ def set_active_local_model(
         config["local_model"] = {
             "active": True,
             "model_id": model_id,
-            "litellm_model": litellm_model,
+            "ollama_model": ollama_model,
             "base_url": _normalize_and_validate_ollama_base_url(base_url),
         }
 

@@ -67,7 +67,7 @@ async def test_enrichment_schema_enforced(ws: Path):
 
     queue_item = type("Q", (), {"id": item[0], "subject_type": item[1], "subject_id": item[2], "content_hash": item[3]})
 
-    with patch("services.enrichment.worker.select_model_id", return_value="ollama_chat/qwen3:4b"), patch(
+    with patch("services.enrichment.worker.select_model_id", return_value="qwen3:4b"), patch(
         "services.enrichment.worker.call_local_model",
         new=AsyncMock(return_value=("{not-json", 10, 5, 100)),
     ):
@@ -88,7 +88,7 @@ async def test_cache_hit_no_model_call(ws: Path):
     db_path = ws / "app" / "jarvis.db"
     await init_database(db_path)
 
-    model_id = "ollama_chat/qwen3:4b"
+    model_id = "qwen3:4b"
 
     async with aiosqlite.connect(str(db_path)) as db:
         await _seed_issue(db, key="ONB-2", project="ONB", content_hash="h2")
@@ -117,7 +117,7 @@ async def test_prompt_version_invalidates(ws: Path):
     db_path = ws / "app" / "jarvis.db"
     await init_database(db_path)
 
-    model_id = "ollama_chat/qwen3:4b"
+    model_id = "qwen3:4b"
 
     async with aiosqlite.connect(str(db_path)) as db:
         await _seed_issue(db, key="ONB-3", project="ONB", content_hash="h3")
@@ -172,7 +172,7 @@ async def test_enum_mapping_and_hallucinated_keys_filtered(ws: Path):
     }
     """
 
-    with patch("services.enrichment.worker.select_model_id", return_value="ollama_chat/qwen3:4b"), patch(
+    with patch("services.enrichment.worker.select_model_id", return_value="qwen3:4b"), patch(
         "services.enrichment.worker.call_local_model",
         new=AsyncMock(return_value=(raw, 10, 5, 100)),
     ):

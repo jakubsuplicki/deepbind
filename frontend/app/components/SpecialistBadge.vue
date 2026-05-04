@@ -4,10 +4,7 @@
     <span class="spec-badge__icon">{{ specialist.icon }}</span>
     <span class="spec-badge__name">{{ specialist.name }}</span>
     <button class="spec-badge__close" @click.stop="$emit('deactivate')" title="Deactivate specialist">
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="18" y1="6" x2="6" y2="18"/>
-        <line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
+      <Icon name="ph:x-bold" class="spec-badge__close-icon" />
     </button>
   </div>
 </template>
@@ -84,6 +81,10 @@ defineEmits<{
   padding: 0;
   margin-left: 0.1rem;
   transition: all 0.15s;
+}
+
+.spec-badge__close-icon {
+  font-size: 10px;
 }
 
 .spec-badge__close:hover {

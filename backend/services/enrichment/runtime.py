@@ -81,26 +81,25 @@ def select_model_id(workspace_path: Optional[Path] = None) -> str:
             if isinstance(enrichment, dict):
                 configured = str(enrichment.get("model_id") or "").strip()
                 if configured:
-                    if configured.startswith("ollama_chat/"):
-                        return configured
-                    return f"ollama_chat/{configured}"
+                    # Strip a stale `ollama_chat/` prefix from older config writes.
+                    return configured.removeprefix("ollama_chat/")
         except (OSError, json.JSONDecodeError):
             pass
 
     active = get_active_local_model()
     if active and active.get("active"):
-        litellm_model = str(active.get("litellm_model") or "").strip()
-        if litellm_model:
-            return litellm_model
+        ollama_model = str(active.get("ollama_model") or "").strip()
+        if ollama_model:
+            return ollama_model
 
     try:
         hw = probe_hardware()
         if hw.total_ram_gb < 12:
-            return "ollama_chat/qwen3:1.7b"
+            return "qwen3:1.7b"
     except Exception:
         pass
 
-    return "ollama_chat/qwen3:4b"
+    return "qwen3:4b"
 
 
 def select_base_url(workspace_path: Optional[Path] = None) -> str:

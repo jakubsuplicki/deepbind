@@ -45,12 +45,12 @@ def test_create_workspace_creates_config(ws_path):
     assert (ws_path / "app" / "config.json").exists()
 
 
-def test_config_api_key_set_false_browser_storage(ws_path):
-    """Browser-only architecture: config always has api_key_set=False, key_storage=browser."""
+def test_config_has_no_api_key_fields(ws_path):
+    """ADR 015 — local-only stack writes no api_key_set / key_storage keys."""
     create_workspace(ws_path)
     config = json.loads((ws_path / "app" / "config.json").read_text())
-    assert config["api_key_set"] is False
-    assert config["key_storage"] == "browser"
+    assert "api_key_set" not in config
+    assert "key_storage" not in config
 
 
 def test_config_does_not_contain_raw_key(ws_path):

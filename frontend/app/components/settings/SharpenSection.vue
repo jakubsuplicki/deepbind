@@ -8,7 +8,7 @@
     <p class="sharpen-section__lead">
       One-click pass through your local LLM to enrich every note and Jira issue
       with summaries, tags and entities — improves retrieval quality and graph density.
-      Runs entirely on your machine via Ollama. No API calls to Anthropic.
+      Runs entirely on your machine via Ollama.
     </p>
     <div class="sharpen-section__meta">
       <div class="sharpen-section__model-select">
@@ -18,7 +18,7 @@
           :value="sharpen.enrichmentModelId.value"
           @change="onModelChange(($event.target as HTMLSelectElement).value)"
         >
-          <option v-for="m in installedLocalModels" :key="m.litellm_model" :value="m.litellm_model">
+          <option v-for="m in installedLocalModels" :key="m.ollama_model" :value="m.ollama_model">
             {{ m.label }} · {{ qualityDotsText(m.preset) }}
           </option>
         </select>
@@ -58,7 +58,8 @@
       />
       Allow processing on battery
       <span class="sharpen-section__battery-hint" v-if="sharpen.onBattery.value">
-        &nbsp;⚡ Currently on battery — {{ sharpen.allowOnBattery.value ? 'worker will run' : 'worker paused' }}
+        &nbsp;<Icon name="ph:battery-charging-vertical-fill" class="icon--sm icon--warning sharpen-section__battery-icon" />
+        Currently on battery — {{ sharpen.allowOnBattery.value ? 'worker will run' : 'worker paused' }}
       </span>
     </label>
 
@@ -145,7 +146,7 @@ async function onCancel() {
 async function onModelChange(model: string) {
   const ok = await sharpen.changeEnrichmentModel(model)
   status.set(ok
-    ? `Enrichment model set to ${model.replace('ollama_chat/', '')}`
+    ? `Enrichment model set to ${model}`
     : 'Failed to update enrichment model')
 }
 

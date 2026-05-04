@@ -12,7 +12,10 @@
         }"
         @click="goToStep(s.num)"
       >
-        <span class="wiz__step-num">{{ step > s.num ? '\u2713' : s.num }}</span>
+        <span class="wiz__step-num">
+          <Icon v-if="step > s.num" name="ph:check-bold" class="icon--sm" />
+          <template v-else>{{ s.num }}</template>
+        </span>
         <span class="wiz__step-label">{{ s.label }}</span>
       </button>
     </div>
@@ -107,11 +110,7 @@
               @drop.prevent="handleStageDrop"
             >
               <div class="wiz__drop-content">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
+                <Icon name="ph:upload-simple" class="icon--xl wiz__drop-icon" />
                 <span>Drop files to stage for upload</span>
                 <button class="wiz__browse-link" type="button" @click="stageFileInput?.click()">
                   or browse
@@ -132,7 +131,9 @@
               <div v-for="(f, i) in stagedFiles" :key="f.name + i" class="wiz__staged-file">
                 <span class="wiz__staged-name">{{ f.name }}</span>
                 <span class="wiz__staged-size">{{ formatSize(f.size) }}</span>
-                <button class="wiz__staged-remove" @click="stagedFiles.splice(i, 1)">&times;</button>
+                <button class="wiz__staged-remove" @click="stagedFiles.splice(i, 1)" aria-label="Remove staged file">
+                  <Icon name="ph:x" class="icon--sm" />
+                </button>
               </div>
             </div>
           </div>
@@ -762,11 +763,12 @@ defineExpose({ resetSubmitting })
   font-size: 0.8rem;
 }
 
-.wiz__drop-content svg {
+.wiz__drop-icon {
   opacity: 0.5;
+  transition: opacity 0.2s, color 0.2s;
 }
 
-.wiz__dropzone--dragover .wiz__drop-content svg {
+.wiz__dropzone--dragover .wiz__drop-icon {
   opacity: 1;
   color: var(--neon-cyan);
 }

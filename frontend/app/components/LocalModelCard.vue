@@ -31,9 +31,9 @@ const presetLabel = computed(() => {
 
 const toolBadge = computed(() => {
   const mode = props.model.tool_mode
-  if (mode === 'native_qwen3') return { label: 'Native tools', cssClass: 'tool-badge--native', icon: '✅' }
-  if (mode === 'adapted') return { label: 'Tools via prompt', cssClass: 'tool-badge--fallback', icon: '⚠️' }
-  return { label: 'Limited tool support', cssClass: 'tool-badge--limited', icon: '❌' }
+  if (mode === 'native_qwen3') return { label: 'Native tools', cssClass: 'tool-badge--native', icon: 'ph:check-circle-fill' }
+  if (mode === 'adapted') return { label: 'Tools via prompt', cssClass: 'tool-badge--fallback', icon: 'ph:warning-fill' }
+  return { label: 'Limited tool support', cssClass: 'tool-badge--limited', icon: 'ph:x-circle-fill' }
 })
 
 const buttonState = computed(() => {
@@ -66,7 +66,7 @@ const buttonState = computed(() => {
     </div>
 
     <div class="model-card__tool-badge" :class="toolBadge.cssClass" :title="toolBadge.label">
-      <span class="model-card__tool-icon">{{ toolBadge.icon }}</span>
+      <Icon :name="toolBadge.icon" class="model-card__tool-icon" />
       <span>{{ toolBadge.label }}</span>
     </div>
 
@@ -96,7 +96,7 @@ const buttonState = computed(() => {
       <template v-else-if="buttonState === 'active'">
         <button class="model-card__btn model-card__btn--active" disabled>
           Active
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          <Icon name="ph:check-bold" class="icon--sm" />
         </button>
       </template>
       <template v-else-if="buttonState === 'installed'">
@@ -223,7 +223,7 @@ const buttonState = computed(() => {
 }
 
 .model-card__tool-icon {
-  font-size: 0.65rem;
+  font-size: 11px;
 }
 
 .tool-badge--native {

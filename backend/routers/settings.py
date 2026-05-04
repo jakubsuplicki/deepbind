@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, HTTPException
 
 from config import get_settings
-from services import preference_service, privacy, token_tracking, workspace_service
+from services import preference_service, privacy, token_tracking
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -11,7 +11,6 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 @router.get("")
 async def get_settings_view():
     ws = get_settings().workspace_path
-    status = workspace_service.get_workspace_status()
     prefs = preference_service.load_preferences(workspace_path=ws)
     voice_prefs = {
         "auto_speak": prefs.get("voice_auto_speak", "false"),
@@ -19,18 +18,8 @@ async def get_settings_view():
     }
     return {
         "workspace_path": str(ws),
-        "api_key_set": status.get("api_key_set", False),
-        "key_storage": "browser",
         "voice": voice_prefs,
     }
-
-
-# NOTE — `PATCH /api/settings/api-key` historically lived here as a no-op
-# kept for API compatibility (keys are managed in the browser per ADR 002,
-# server never sees the raw key). It moved to the standalone
-# `routers/api_keys.py` so `main.py` can conditionally skip registering it
-# in the cloud-excluded desktop bundle (ADR 014 §C). When the bundle flag
-# is on, that route 404s — the audit signal a procurement reviewer expects.
 
 
 @router.patch("/voice")
@@ -153,7 +142,7 @@ async def get_privacy_settings():
 @router.patch("/privacy")
 async def update_privacy_settings(body: dict):
     """Patch privacy settings. Accepts any subset of:
-    offline_mode, web_search_enabled, url_ingest_enabled, cloud_providers_enabled.
+    offline_mode, web_search_enabled, url_ingest_enabled.
     """
     if not isinstance(body, dict) or not body:
         raise HTTPException(status_code=422, detail="Body must be a non-empty object")

@@ -220,7 +220,10 @@ const wizardStep = computed<1 | 2 | 3>(() => {
         'local-flow__step--active': wizardStep === 1,
         'local-flow__step--done': wizardStep > 1
       }">
-        <span class="local-flow__step-num">{{ wizardStep > 1 ? '✓' : '1' }}</span>
+        <span class="local-flow__step-num">
+          <Icon v-if="wizardStep > 1" name="ph:check-bold" class="icon--sm" />
+          <template v-else>1</template>
+        </span>
         <span class="local-flow__step-label">Detect hardware</span>
       </div>
       <div class="local-flow__step-line" :class="{ 'local-flow__step-line--done': wizardStep > 1 }" />
@@ -228,7 +231,10 @@ const wizardStep = computed<1 | 2 | 3>(() => {
         'local-flow__step--active': wizardStep === 2,
         'local-flow__step--done': wizardStep > 2
       }">
-        <span class="local-flow__step-num">{{ wizardStep > 2 ? '✓' : '2' }}</span>
+        <span class="local-flow__step-num">
+          <Icon v-if="wizardStep > 2" name="ph:check-bold" class="icon--sm" />
+          <template v-else>2</template>
+        </span>
         <span class="local-flow__step-label">Download model</span>
       </div>
       <div class="local-flow__step-line" :class="{ 'local-flow__step-line--done': wizardStep > 2 }" />
@@ -302,7 +308,9 @@ const wizardStep = computed<1 | 2 | 3>(() => {
       <!-- background indicator differs.                                    -->
       <template v-else-if="firstRun.chatReady.value">
         <div class="local-flow__ready">
-          <div class="local-flow__ready-check">✓</div>
+          <div class="local-flow__ready-check">
+            <Icon name="ph:check-bold" class="icon--lg" />
+          </div>
           <h3 class="local-flow__section-title">
             {{ firstRun.status.value.state === 'complete' ? 'Jarvis is ready' : 'Chat is ready' }}
           </h3>
@@ -417,7 +425,7 @@ const wizardStep = computed<1 | 2 | 3>(() => {
           <div class="local-flow__platform">
             <button class="local-flow__install-btn" @click="flow.openOllamaDownload()">
               Open official Ollama download
-              <svg class="local-flow__external-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              <Icon name="ph:arrow-square-out" class="icon--sm local-flow__external-icon" />
             </button>
           </div>
 
@@ -444,10 +452,10 @@ const wizardStep = computed<1 | 2 | 3>(() => {
               <div class="local-flow__cmd-block">
                 <code class="local-flow__cmd-text">{{ linuxCommand }}</code>
                 <button class="local-flow__cmd-copy" @click="copyLinuxCommand" :title="copiedCommand ? 'Copied!' : 'Copy command'">
-                  <template v-if="copiedCommand">✓</template>
-                  <template v-else>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                  </template>
+                  <Icon
+                    :name="copiedCommand ? 'ph:check-bold' : 'ph:copy'"
+                    class="icon--sm"
+                  />
                 </button>
               </div>
             </template>
@@ -576,7 +584,9 @@ const wizardStep = computed<1 | 2 | 3>(() => {
       <!-- model_ready / local_active -->
       <template v-else-if="flow.state.value === 'model_ready' || flow.state.value === 'local_active'">
         <div class="local-flow__ready">
-          <div class="local-flow__ready-check">✓</div>
+          <div class="local-flow__ready-check">
+            <Icon name="ph:check-bold" class="icon--lg" />
+          </div>
           <h3 class="local-flow__section-title">
             {{ probe.running.value ? 'Validating your setup…' : 'Jarvis is ready' }}
           </h3>

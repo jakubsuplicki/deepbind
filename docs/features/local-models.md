@@ -201,7 +201,7 @@ The frontend half of the first-run pipeline lives in two pieces:
 Two more helpers ride along:
 
 - `looks_like_oom(error_message)` — string match against seven OOM phrases (`out of memory`, `oom`, `memory exhausted`, `cannot allocate`, `metal: failed to allocate`, `cuda out of memory`, `ggml_metal_graph_compute`). Ollama returns OOM as plain-text strings via `/api/chat`'s error stream; structured codes don't exist, so matching the message is the only handle.
-- `find_entry_by_litellm_or_ollama(model)` — reverse-lookup that handles both `ollama_chat/qwen3:8b` (LiteLLM-prefixed, the form `_make_llm` receives) and `qwen3:8b` (raw Ollama tag).
+- `find_entry_by_ollama_model(model)` — reverse-lookup keyed on the raw Ollama tag (e.g. `qwen3:8b`). For safety against stale persisted state from older builds it still strips a leading `ollama_chat/` if present.
 
 **Chat router integration** ([`routers/chat.py`](../../backend/routers/chat.py)). Two private helpers (`_apply_memory_pressure_swap`, `_ladder_step_after_oom`) integrate at two points in `_handle_message`:
 
@@ -232,7 +232,11 @@ The "Lightweight mode" copy on the warning differentiates the explicit-user-pin 
 
 ### keep_alive
 
-Ollama keeps a model resident for `DEFAULT_KEEP_ALIVE = "30m"` after last use. `warm_up_model()` sends a tiny prompt with this keep_alive value to keep a freshly-selected model loaded. A future overflow-event handler may shorten this dynamically when the auto-downgrade fires; today's value is a single static default.
+Ollama keeps a model resident for `DEFAULT_KEEP_ALIVE = "24h"` after last use. Both [`services/ollama_dispatcher.py`](../../backend/services/ollama_dispatcher.py) (the chat path) and [`services/ollama_service.py::warm_up_model`](../../backend/services/ollama_service.py) (called when a chat model is freshly selected) read this value, so chat traffic and freshly-selected models share the same retention.
+
+The 24 h floor exists because Ollama's own 5 min default — and our previous 30 min default — both produced a ~17 s cold-reload (mmap of the GGUF weights + KV-cache rebuild) on the next message after any normal idle gap (coffee break, meeting, lunch). For a workstation that already chose to install a chat model, keeping it resident across a day of intermittent use is the right trade-off; bounded eviction at 24 h still prevents indefinite RAM growth on multi-day-uptime sessions.
+
+Background ETL paths ([`services/ingest.py`](../../backend/services/ingest.py), [`services/document_classifier.py`](../../backend/services/document_classifier.py)) keep their own `keep_alive="30m"` literal — those are one-shot operations that don't benefit from long retention. Memory-pressure auto-downgrade (`probe_runtime_load()` + `effective_footprint_bytes()`) still evicts explicitly when it needs to swap models; the keep-alive is a *floor*, not a contract.
 
 ### Latency baseline
 

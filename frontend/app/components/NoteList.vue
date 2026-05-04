@@ -27,7 +27,7 @@
         :aria-pressed="searchMode === mode.value"
         @click="onChangeMode(mode.value)"
       >
-        <span class="note-list__mode-icon">{{ mode.icon }}</span>
+        <Icon :name="mode.icon" class="note-list__mode-icon icon--sm" />
         {{ mode.label }}
       </button>
     </div>
@@ -72,11 +72,7 @@
               title="Delete note"
               @click.stop="confirmDelete(node.note)"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="3 6 5 6 21 6"/>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
-                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-              </svg>
+              <Icon name="ph:trash" class="icon--sm" />
             </button>
           </div>
           <span v-if="node.note.tags.length" class="note-list__item-tags">{{ node.note.tags.join(', ') }}</span>
@@ -91,11 +87,12 @@
             @click="toggleDoc(node.index.path)"
           >
             <div class="note-list__item-row">
-              <span
+              <Icon
+                name="ph:caret-right"
                 class="note-list__chevron"
                 :class="{ 'note-list__chevron--open': isExpanded(node.index.path) }"
                 aria-hidden="true"
-              >▸</span>
+              />
               <span class="note-list__item-title">{{ node.index.title || node.index.path }}</span>
               <span class="note-list__section-count">{{ node.sections.length }} {{ node.sections.length === 1 ? 'section' : 'sections' }}</span>
               <span
@@ -108,10 +105,7 @@
                 title="Open document index"
                 @click.stop="$emit('select', node.index.path)"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                </svg>
+                <Icon name="ph:file-text" class="icon--sm" />
               </button>
               <button
                 class="note-list__delete"
@@ -223,9 +217,9 @@ function toggleDoc(path: string) {
 }
 
 const searchModes: { value: SearchMode; label: string; icon: string; tooltip: string }[] = [
-  { value: 'keyword', label: 'Keyword', icon: '🔍', tooltip: 'Exact word match via BM25' },
-  { value: 'semantic', label: 'Semantic', icon: '🧠', tooltip: 'Meaning-based search via embeddings' },
-  { value: 'hybrid', label: 'Hybrid', icon: '⚡', tooltip: 'Combined BM25 + embeddings + graph' },
+  { value: 'keyword', label: 'Keyword', icon: 'ph:magnifying-glass', tooltip: 'Exact word match via BM25' },
+  { value: 'semantic', label: 'Semantic', icon: 'ph:brain', tooltip: 'Meaning-based search via embeddings' },
+  { value: 'hybrid', label: 'Hybrid', icon: 'ph:lightning', tooltip: 'Combined BM25 + embeddings + graph' },
 ]
 
 const searchPlaceholder = computed(() => {
@@ -507,13 +501,10 @@ function onClearSearch() {
 }
 
 .note-list__chevron {
-  display: inline-block;
   flex-shrink: 0;
-  width: 14px;
-  font-size: 0.7rem;
+  font-size: 12px;
   color: var(--text-muted);
   transition: transform 0.15s ease;
-  line-height: 1;
 }
 
 .note-list__chevron--open {

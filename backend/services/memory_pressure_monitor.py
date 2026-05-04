@@ -258,17 +258,21 @@ def looks_like_oom(error_message: str) -> bool:
 # ── Catalog reverse-lookup for chat-router integration ──────────────────────
 
 
-def find_entry_by_litellm_or_ollama(model: str) -> Optional[ModelCatalogEntry]:
-    """Map a chat-router-shaped model identifier back to its catalog entry.
+def find_entry_by_ollama_model(model: str) -> Optional[ModelCatalogEntry]:
+    """Map a raw Ollama model tag back to its catalog entry.
 
-    Handles both forms: `ollama_chat/qwen3:8b` (LiteLLM-prefixed, the form
-    `_make_llm` receives) and `qwen3:8b` (raw Ollama tag, what the catalog
-    stores). Returns None on no-match — caller treats that as "non-Ollama
-    model, skip the pressure check."
+    The chat-router protocol now passes the raw Ollama tag (`qwen3:8b`) end
+    to end — the legacy `ollama_chat/` LiteLLM prefix is gone (ADR 015). For
+    safety against stale persisted state we still strip a leading
+    `ollama_chat/` if present, so a workspace that was last written by an
+    older build doesn't crash the pressure check on the first turn.
+
+    Returns None on no-match — caller treats that as "non-Ollama model,
+    skip the pressure check."
     """
     if not model:
         return None
-    tag = model.replace("ollama_chat/", "") if model.startswith("ollama_chat/") else model
+    tag = model.replace("ollama_chat/", "", 1) if model.startswith("ollama_chat/") else model
     for entry in MODEL_CATALOG:
         if entry.ollama_model == tag:
             return entry

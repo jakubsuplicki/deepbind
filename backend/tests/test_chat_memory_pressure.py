@@ -129,7 +129,7 @@ def test_preflight_emits_warning_when_helper_swaps_model():
                 ws.send_json({
                     "content": "hi",
                     "provider": "ollama",
-                    "model": "ollama_chat/qwen3:8b",
+                    "model": "qwen3:8b",
                 })
                 events = []
                 while True:
@@ -148,7 +148,7 @@ async def _swap_with_warning_side_effect(*, ws, provider, model, base_url, ctx_l
     """Helper-side-effect: emit a warning over `ws` and return the swapped model."""
     if provider == "ollama":
         await ws.send_json({"type": "warning", "content": "Switched to qwen3:4b due to memory pressure"})
-        return "ollama_chat/qwen3:4b-instruct-2507", False
+        return "qwen3:4b-instruct-2507", False
     return model, False
 
 
@@ -172,8 +172,8 @@ def test_oom_pre_text_triggers_ladder_retry():
     )
     with patch("routers.chat.get_api_key", return_value="sk-ant-test-key"), \
          patch("routers.chat._make_llm", return_value=instance), \
-         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("ollama_chat/qwen3:8b", False))), \
-         patch("routers.chat._ladder_step_after_oom", new=AsyncMock(return_value=("ollama_chat/qwen3:4b-instruct-2507", "OOM — switched to Qwen3-4B"))):
+         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("qwen3:8b", False))), \
+         patch("routers.chat._ladder_step_after_oom", new=AsyncMock(return_value=("qwen3:4b-instruct-2507", "OOM — switched to Qwen3-4B"))):
 
         with TestClient(app) as client:
             with client.websocket_connect("/api/chat/ws") as ws:
@@ -181,7 +181,7 @@ def test_oom_pre_text_triggers_ladder_retry():
                 ws.send_json({
                     "content": "hi",
                     "provider": "ollama",
-                    "model": "ollama_chat/qwen3:8b",
+                    "model": "qwen3:8b",
                 })
                 events = []
                 while True:
@@ -209,7 +209,7 @@ def test_oom_with_no_fallback_emits_error():
     )
     with patch("routers.chat.get_api_key", return_value="sk-ant-test-key"), \
          patch("routers.chat._make_llm", return_value=instance), \
-         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("ollama_chat/qwen3:4b-instruct-2507", False))), \
+         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("qwen3:4b-instruct-2507", False))), \
          patch("routers.chat._ladder_step_after_oom", new=AsyncMock(return_value=(None, None))):
 
         with TestClient(app) as client:
@@ -218,7 +218,7 @@ def test_oom_with_no_fallback_emits_error():
                 ws.send_json({
                     "content": "hi",
                     "provider": "ollama",
-                    "model": "ollama_chat/qwen3:4b-instruct-2507",
+                    "model": "qwen3:4b-instruct-2507",
                 })
                 events = []
                 while True:
@@ -243,7 +243,7 @@ def test_oom_after_text_does_not_retry():
     )
     with patch("routers.chat.get_api_key", return_value="sk-ant-test-key"), \
          patch("routers.chat._make_llm", return_value=instance), \
-         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("ollama_chat/qwen3:8b", False))), \
+         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("qwen3:8b", False))), \
          patch("routers.chat._ladder_step_after_oom", new=AsyncMock()) as mock_ladder:
 
         with TestClient(app) as client:
@@ -252,7 +252,7 @@ def test_oom_after_text_does_not_retry():
                 ws.send_json({
                     "content": "hi",
                     "provider": "ollama",
-                    "model": "ollama_chat/qwen3:8b",
+                    "model": "qwen3:8b",
                 })
                 events = []
                 while True:
@@ -301,7 +301,7 @@ def test_lightweight_mode_short_circuits_to_floor():
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._is_lightweight_mode_on", return_value=True), \
          patch(
-             "services.memory_pressure_monitor.find_entry_by_litellm_or_ollama",
+             "services.memory_pressure_monitor.find_entry_by_ollama_model",
              return_value=requested_entry,
          ), \
          patch(
@@ -325,7 +325,7 @@ def test_lightweight_mode_short_circuits_to_floor():
                 ws.send_json({
                     "content": "hi",
                     "provider": "ollama",
-                    "model": "ollama_chat/qwen3:8b",
+                    "model": "qwen3:8b",
                 })
                 events = []
                 while True:
@@ -365,7 +365,7 @@ def test_lightweight_mode_no_warning_when_already_at_floor():
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._is_lightweight_mode_on", return_value=True), \
          patch(
-             "services.memory_pressure_monitor.find_entry_by_litellm_or_ollama",
+             "services.memory_pressure_monitor.find_entry_by_ollama_model",
              return_value=requested_entry,
          ), \
          patch(
@@ -390,7 +390,7 @@ def test_lightweight_mode_no_warning_when_already_at_floor():
                 ws.send_json({
                     "content": "hi",
                     "provider": "ollama",
-                    "model": "ollama_chat/qwen3:4b-instruct-2507",
+                    "model": "qwen3:4b-instruct-2507",
                 })
                 events = []
                 while True:
@@ -411,7 +411,7 @@ def test_non_oom_error_does_not_trigger_retry():
     )
     with patch("routers.chat.get_api_key", return_value="sk-ant-test-key"), \
          patch("routers.chat._make_llm", return_value=instance), \
-         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("ollama_chat/qwen3:8b", False))), \
+         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("qwen3:8b", False))), \
          patch("routers.chat._ladder_step_after_oom", new=AsyncMock()) as mock_ladder:
 
         with TestClient(app) as client:
@@ -420,7 +420,7 @@ def test_non_oom_error_does_not_trigger_retry():
                 ws.send_json({
                     "content": "hi",
                     "provider": "ollama",
-                    "model": "ollama_chat/qwen3:8b",
+                    "model": "qwen3:8b",
                 })
                 events = []
                 while True:

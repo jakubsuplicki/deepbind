@@ -158,9 +158,10 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
           <span class="probe-panel__live-model">{{ event.model }}</span>
         </template>
         <template v-else-if="event.event === 'candidate_evidence'">
-          <span :class="event.evidence.verdict === 'pass' ? 'probe-panel__live-pass' : 'probe-panel__live-fail'">
-            {{ event.evidence.verdict === 'pass' ? '✓' : '✗' }}
-          </span>
+          <Icon
+            :name="event.evidence.verdict === 'pass' ? 'ph:check-bold' : 'ph:x-bold'"
+            :class="event.evidence.verdict === 'pass' ? 'probe-panel__live-pass' : 'probe-panel__live-fail'"
+          />
           <span class="probe-panel__live-model">{{ event.evidence.model }}</span>
           <span class="probe-panel__live-sep">—</span>
           <span class="probe-panel__live-verdict">{{ verdictLabel[event.evidence.verdict] ?? event.evidence.verdict }}</span>
@@ -176,7 +177,7 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
       class="probe-panel__summary"
     >
       <summary class="probe-panel__summary-row">
-        <span class="probe-panel__summary-caret" aria-hidden="true">▸</span>
+        <Icon name="ph:caret-right" class="probe-panel__summary-caret" aria-hidden="true" />
         <span class="probe-panel__summary-label">Probe</span>
         <span class="probe-panel__summary-text">{{ onboardingSummaryText }}</span>
         <span v-if="onboardingSummaryMeta" class="probe-panel__summary-meta">{{ onboardingSummaryMeta }}</span>
@@ -190,9 +191,10 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
           :key="ev.model"
           class="probe-panel__evidence-line"
         >
-          <span :class="ev.verdict === 'pass' ? 'probe-panel__live-pass' : 'probe-panel__live-fail'">
-            {{ ev.verdict === 'pass' ? '✓' : '✗' }}
-          </span>
+          <Icon
+            :name="ev.verdict === 'pass' ? 'ph:check-bold' : 'ph:x-bold'"
+            :class="ev.verdict === 'pass' ? 'probe-panel__live-pass' : 'probe-panel__live-fail'"
+          />
           <span class="probe-panel__evidence-model">{{ ev.model }}</span>
           <span class="probe-panel__evidence-sep">·</span>
           <span class="probe-panel__evidence-verdict">{{ verdictLabel[ev.verdict] ?? ev.verdict }}</span>
@@ -236,7 +238,7 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
       </div>
 
       <div v-if="probe.needsRerun.value" class="probe-panel__rerun-banner">
-        <span class="probe-panel__rerun-icon">⚠️</span>
+        <Icon name="ph:warning-fill" class="icon--md icon--warning probe-panel__rerun-icon" />
         <div class="probe-panel__rerun-info">
           <p class="probe-panel__rerun-title">A re-test is recommended</p>
           <p class="probe-panel__rerun-reason">
@@ -615,16 +617,14 @@ function evidenceLine(e: ChatModelProbeEvidence): string {
 
 .probe-panel__live-pass {
   color: #34d399;
-  width: 0.85em;
-  display: inline-block;
-  text-align: center;
+  font-size: 0.85em;
+  flex-shrink: 0;
 }
 
 .probe-panel__live-fail {
   color: rgba(248, 113, 113, 0.85);
-  width: 0.85em;
-  display: inline-block;
-  text-align: center;
+  font-size: 0.85em;
+  flex-shrink: 0;
 }
 
 /* Onboarding post-run summary — single line under the CTA, expandable.

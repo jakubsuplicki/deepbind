@@ -105,7 +105,7 @@ async def test_g4b_cold_launch_end_to_end(tmp_path):
     # Pick the primary, ample free RAM → pressure walk returns the requested
     # model unchanged. This proves the ladder picker resolves cleanly
     # against the just-installed catalog the orchestrator populated.
-    requested = mpm.find_entry_by_litellm_or_ollama("ollama_chat/qwen3:8b")
+    requested = mpm.find_entry_by_ollama_model("qwen3:8b")
     assert requested is not None
     swap = mpm.pick_runnable_model(
         requested,
