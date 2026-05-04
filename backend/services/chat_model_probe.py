@@ -641,6 +641,11 @@ def persist_probe_result(
         "safe_fallback_used": result.safe_fallback_used,
         "candidates_evaluated": [asdict(e) for e in result.candidates_evaluated],
         "user_override": user_override,
+        # Without this, ``needs_rerun`` reads ``catalog_models=None`` on every
+        # subsequent load and returns ``(True, "no_prior_probe")`` forever —
+        # the banner can't dismiss because the snapshot it compares against
+        # never lands on disk.
+        "catalog_models": list(result.catalog_models),
     }
     with locked_config_update(config_path) as config:
         config[PROBE_CONFIG_KEY] = payload

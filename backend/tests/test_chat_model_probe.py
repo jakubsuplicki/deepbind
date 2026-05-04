@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Optional
 
@@ -343,6 +343,78 @@ def test_persist_and_read_probe_result_round_trip(tmp_path: Path):
     assert loaded is not None
     assert loaded["recommended_model"] == "qwen3:14b"
     assert loaded["schema_version"] == 1
+
+
+def test_persist_keys_match_proberesult_fields_exactly(tmp_path: Path):
+    """Strict parity: every ``ProbeResult`` field lands in the persisted JSON.
+
+    Two prior incidents shipped because a new field was added to the dataclass
+    and to most call sites — but ``persist_probe_result``'s payload dict was
+    hand-maintained and missed the field. Round-trip tests that check a
+    hand-picked subset of keys don't catch this. This test reflects on
+    ``fields(ProbeResult)`` and asserts the persisted key set equals the
+    dataclass field set exactly: no missing, no extras. Adding a field to
+    ``ProbeResult`` without wiring persistence fails this immediately.
+    """
+    config = tmp_path / "config.json"
+    result = ProbeResult(
+        schema_version=1,
+        timestamp_utc="2026-05-04T00:00:00Z",
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos26",
+        ram_gb=24,
+        recommended_model="qwen3:14b",
+        safe_fallback_used=False,
+        candidates_evaluated=(),
+        user_override=None,
+        catalog_models=("qwen3:14b", "qwen3:8b"),
+    )
+    persist_probe_result(result, config_path=config, user_override="qwen3:30b")
+
+    raw = json.loads(config.read_text(encoding="utf-8"))[PROBE_CONFIG_KEY]
+    expected = {f.name for f in fields(ProbeResult)}
+    assert set(raw.keys()) == expected, (
+        f"persisted keys diverged from ProbeResult fields. "
+        f"Missing: {expected - set(raw.keys())}. Extra: {set(raw.keys()) - expected}."
+    )
+    # Spot-check the values that previously got dropped or mishandled.
+    assert raw["catalog_models"] == ["qwen3:14b", "qwen3:8b"]
+    assert raw["user_override"] == "qwen3:30b"
+
+
+def test_persist_round_trip_preserves_catalog_models(tmp_path: Path):
+    """Regression: ``persist_probe_result`` must write ``catalog_models`` so
+    ``needs_rerun`` can compare against the snapshot. Dropping it caused the
+    re-run banner to be stuck on (every load returned ``no_prior_probe``,
+    re-running re-persisted without the field, banner never dismissed)."""
+    config = tmp_path / "config.json"
+    snapshot = ("qwen3:14b", "qwen3:30b", "qwen3:8b")
+    result = ProbeResult(
+        schema_version=1,
+        timestamp_utc="2026-04-28T12:34:56Z",
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos26",
+        ram_gb=24,
+        recommended_model="qwen3:14b",
+        safe_fallback_used=False,
+        candidates_evaluated=(),
+        user_override=None,
+        catalog_models=snapshot,
+    )
+    persist_probe_result(result, config_path=config)
+
+    loaded = read_probe_result(config)
+    assert loaded is not None
+    assert loaded["catalog_models"] == list(snapshot)
+
+    env = CurrentEnvironment(
+        ollama_version="0.18.0",
+        platform="darwin-arm64-macos26",
+        catalog_models=snapshot,
+    )
+    rerun, reason = needs_rerun(loaded, env)
+    assert rerun is False
+    assert reason == "fresh"
 
 
 def test_persist_does_not_clobber_other_config_keys(tmp_path: Path):

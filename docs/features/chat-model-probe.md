@@ -14,8 +14,8 @@ sources:
 	- frontend/app/pages/onboarding.vue
 	- frontend/app/pages/main.vue
 depends_on: [local-models, latency-benchmark, preferences-settings]
-last_reviewed: 2026-05-01
-last_updated: 2026-05-01
+last_reviewed: 2026-05-04
+last_updated: 2026-05-04
 ---
 
 # Chat Model Self-Test (Probe)
@@ -174,7 +174,7 @@ the run finishes.
 
 ## Testing
 
-42 unit tests in `test_chat_model_probe.py` cover:
+44 unit tests in `test_chat_model_probe.py` cover:
 
 - Thinking-prose pattern panel (8 leaked + 7 clean cases).
 - Hardware-fit at threshold edges + KV-architecture differences
@@ -183,7 +183,12 @@ the run finishes.
   safe-fallback when nothing passes, hardware-fit prefilter skips
   before any Ollama call).
 - Persistence round-trip + non-clobbering of other config keys +
-  override-vs-recommendation precedence.
+  `catalog_models` survives the round trip (regression: dropping it
+  caused `needs_rerun` to return `no_prior_probe` forever, leaving the
+  re-run banner stuck on) + strict key parity (the persisted JSON key
+  set equals `{f.name for f in fields(ProbeResult)}` exactly, so any
+  field added to the dataclass without a matching persistence write
+  fails CI immediately) + override-vs-recommendation precedence.
 - `set_user_override` on empty config / existing record / clear.
 - `needs_rerun` across all five reason codes; macOS-major version is
   baked into `platform`. Two regression tests cover the
