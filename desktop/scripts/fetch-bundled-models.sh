@@ -2,7 +2,7 @@
 #
 # Pre-populate the fastembed model cache that the desktop installer ships
 # inside the PyInstaller bundle (ADR 003 §A — "self-contained, offline-capable
-# from minute zero"). Without this step, fastembed downloads ~1 GB on first
+# from minute zero"). Without this step, fastembed downloads ~1.5 GB on first
 # run from HuggingFace, which regresses the offline-first guarantee.
 #
 # spaCy NER model is NOT fetched here — it installs as a regular Python
@@ -12,20 +12,29 @@
 #
 # Output (per ADR 018, v1 ships English-only):
 #   backend/_bundled_models/fastembed/
-#     └── models--snowflake--snowflake-arctic-embed-l/
-#         ├── files_metadata.json
+#     ├── models--snowflake--snowflake-arctic-embed-l/    (embedder, ~1 GB)
+#     │   └── snapshots/<hash>/
+#     │       ├── config.json
+#     │       ├── onnx/model.onnx
+#     │       ├── tokenizer.json
+#     │       └── tokenizer_config.json
+#     └── models--onnx-community--bge-reranker-v2-m3-ONNX/ (reranker, ~570 MB INT8)
 #         └── snapshots/<hash>/
 #             ├── config.json
-#             ├── onnx/
-#             │   └── model.onnx              (~1 GB FP32 — truncated by HF
-#             │                                 dedup pass below)
+#             ├── onnx/model_int8.onnx
 #             ├── tokenizer.json
 #             └── tokenizer_config.json
+#
+# The reranker is loaded via fastembed's `add_custom_model` API because
+# `onnx-community/bge-reranker-v2-m3-ONNX` is not in fastembed 0.8.0's built-
+# in registry (open issue qdrant/fastembed#494). The runtime path in
+# backend/services/reranker_service.py registers it the same way before
+# loading.
 #
 # We dereference HF's symlinks (snapshots/* → blobs/*) and delete blobs/, refs/,
 # and .locks/ so PyInstaller bundles the model once instead of doubled.
 #
-# Idempotent: if the cache already exists with the model dir, we skip the fetch.
+# Idempotent: if the cache already exists with both model dirs, we skip the fetch.
 
 set -euo pipefail
 
@@ -57,24 +66,68 @@ CACHE_DIR="$REPO_ROOT/backend/_bundled_models/fastembed"
 # directly from the upstream HF org (no qdrant ONNX-Q mirror), so the cache
 # dir is:
 EXPECTED_DIR="$CACHE_DIR/models--snowflake--snowflake-arctic-embed-l"
+# Reranker (per ADR 018, bundled alongside the embedder via add_custom_model)
+RERANKER_EXPECTED_DIR_PROBE="$CACHE_DIR/models--onnx-community--bge-reranker-v2-m3-ONNX"
 
+embedder_cached=0
+reranker_cached=0
 if [[ -d "$EXPECTED_DIR/snapshots" ]] && find "$EXPECTED_DIR/snapshots" -name 'model.onnx' -size +500M | grep -q .; then
-    echo "==> fastembed weights already cached at $EXPECTED_DIR — skipping fetch"
+    embedder_cached=1
+fi
+if [[ -d "$RERANKER_EXPECTED_DIR_PROBE/snapshots" ]] && find "$RERANKER_EXPECTED_DIR_PROBE/snapshots" -name 'model_int8.onnx' -size +400M | grep -q .; then
+    reranker_cached=1
+fi
+
+if (( embedder_cached == 1 && reranker_cached == 1 )); then
+    echo "==> fastembed weights already cached (embedder + reranker) — skipping fetch"
     exit 0
 fi
 
-echo "==> populating fastembed cache for $MODEL_NAME"
+echo "==> populating fastembed cache for $MODEL_NAME (embedder)"
 echo "    -> $CACHE_DIR"
 mkdir -p "$CACHE_DIR"
 
-# Trigger fastembed's own download into our cache_dir. Running embed() forces
-# it to actually fetch (instantiation alone is lazy in 0.8.x).
+# Reranker model — same cache_dir, but loaded via TextCrossEncoder. fastembed
+# 0.8.0 doesn't have onnx-community/bge-reranker-v2-m3-ONNX in its built-in
+# registry (issue qdrant/fastembed#494), so we register the model via
+# `add_custom_model` before triggering the download. Source of truth:
+# backend/services/reranker_service.py:DEFAULT_MODEL + DEFAULT_MODEL_FILE.
+RERANKER_MODEL="onnx-community/bge-reranker-v2-m3-ONNX"
+RERANKER_MODEL_FILE="onnx/model_int8.onnx"
+RERANKER_EXPECTED_DIR="$CACHE_DIR/models--onnx-community--bge-reranker-v2-m3-ONNX"
+
+# Trigger fastembed's own download into our cache_dir. Running embed() / rerank()
+# forces it to actually fetch (instantiation alone is lazy in 0.8.x).
 "$VENV_PY" - <<EOF
 from fastembed import TextEmbedding
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+from fastembed.common.model_description import ModelSource
+
+# Embedder
 m = TextEmbedding(model_name="$MODEL_NAME", cache_dir="$CACHE_DIR")
 list(m.embed(["warmup"]))  # force fetch
-print("fastembed: model cached")
+print(f"fastembed: embedder {m.model_name!r} cached")
+
+# Reranker — register the onnx-community port, then load
+TextCrossEncoder.add_custom_model(
+    model="$RERANKER_MODEL",
+    model_file="$RERANKER_MODEL_FILE",
+    sources=ModelSource(hf="$RERANKER_MODEL"),
+    description="BAAI/bge-reranker-v2-m3 INT8 ONNX (onnx-community port)",
+    license="apache-2.0",
+    size_in_gb=0.6,
+)
+r = TextCrossEncoder(model_name="$RERANKER_MODEL", cache_dir="$CACHE_DIR")
+list(r.rerank("warmup", ["warmup"]))  # force fetch
+print(f"fastembed: reranker {r.model_name!r} cached")
 EOF
+
+# Sanity-check both expected dirs are present before declaring success.
+if [[ ! -d "$RERANKER_EXPECTED_DIR/snapshots" ]] || \
+   ! find "$RERANKER_EXPECTED_DIR/snapshots" -name 'model_int8.onnx' -size +400M | grep -q .; then
+    echo "error: reranker INT8 ONNX did not land at $RERANKER_EXPECTED_DIR after fetch" >&2
+    exit 1
+fi
 
 # Dereference snapshots/ symlinks → real files, then drop blobs/, refs/, .locks/.
 # This keeps the bundle close to the model's true size (~1.0 GB for arctic-l)
