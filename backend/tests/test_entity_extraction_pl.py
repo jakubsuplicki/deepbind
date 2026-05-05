@@ -1,24 +1,33 @@
-"""Comprehensive Polish language entity extraction tests.
+"""Polish-language entity extraction tests — SKIPPED for v1.
 
-Tests entity extraction quality for Polish text — the primary language
-for Jarvis personal knowledge system. Tests cover:
+Per ADR 018 (v1 ships English-only), Polish is no longer a v1 target
+language. The backing NER model (`pl_core_news_sm`) was retired in the
+2026-05-05 NER consolidation — see commercial-licensing-audit.md
+findings #1 and #3 — and replaced with `xx_ent_wiki_sm`, a multilingual
+model selected on license-cleanliness grounds (not for Polish quality).
 
-1. Basic person name extraction (nominative forms)
-2. Polish declension handling (all 7 cases)
-3. Single first names
-4. False positive resistance (Polish-specific)
-5. Organization extraction
-6. Date extraction (Polish formats)
-7. Mixed PL/EN text
-8. Edge cases (diacritics, compound names, etc.)
-9. Lemmatization / normalization of declined names
+This file is preserved as audit trail / future v1.5+ multilingual
+re-introduction reference, NOT deleted. The whole module is marked
+skipped at the pytest level so CI doesn't run these tests but their
+documented expectations remain readable.
 
-Each test documents EXPECTED behavior for a killer NER feature.
+Original purpose: tests covered (1) basic person extraction in
+nominative forms, (2) Polish declension handling across all 7 cases,
+(3) single first names, (4) Polish-specific false-positive resistance,
+(5) organization extraction, (6) Polish date formats, (7) mixed PL/EN
+text, (8) edge cases (diacritics, compound names), (9) lemmatization
+of declined names. Anyone re-introducing Polish support in v1.5+ should
+re-enable these tests after picking a Polish-capable NER model.
 """
 
 import pytest
 
 from services.entity_extraction import ExtractedEntity, extract_entities
+
+pytestmark = pytest.mark.skip(
+    reason="Polish dropped from v1 scope per ADR 018 (2026-05-05). "
+    "Re-enable in v1.5+ when Polish support returns via an opt-in model pack."
+)
 
 # Tests marked xfail document desired NER behavior that the small spaCy
 # model (pl_core_news_sm) cannot reliably deliver yet.

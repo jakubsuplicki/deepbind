@@ -16,23 +16,24 @@ class ExtractedEntity:
 # ---------------------------------------------------------------------------
 # spaCy NER (primary) — loaded lazily
 # ---------------------------------------------------------------------------
-_nlp_pl = None
-_nlp_en = None
+# Per ADR 018 (v1 English-only), we use a single multilingual NER model
+# (xx_ent_wiki_sm) selected for license cleanliness, not for the breadth.
+# The model trains on WikiNER (CC-BY 3.0); model weights MIT-licensed.
+# Replaces the previous pl_core_news_sm (GPL-3.0) + en_core_web_sm
+# (MIT-but-OntoNotes-trained) pair in one swap. The 9-language coverage
+# is incidental, untested, and unmarketed.
+_nlp = None
 _spacy_available: Optional[bool] = None
 
 
 def _load_spacy():
-    """Lazily load spaCy models. Returns True if available."""
-    global _nlp_pl, _nlp_en, _spacy_available
+    """Lazily load the spaCy NER model. Returns True if available."""
+    global _nlp, _spacy_available
     if _spacy_available is not None:
         return _spacy_available
     try:
         import spacy
-        _nlp_pl = spacy.load("pl_core_news_sm")
-        try:
-            _nlp_en = spacy.load("en_core_web_sm")
-        except OSError:
-            logger.debug("en_core_web_sm not available, using Polish model only")
+        _nlp = spacy.load("xx_ent_wiki_sm")
         _spacy_available = True
     except (ImportError, OSError) as exc:
         logger.debug("spaCy not available, falling back to regex: %s", exc)
@@ -40,18 +41,16 @@ def _load_spacy():
     return _spacy_available
 
 
-# spaCy entity label → our entity type
+# spaCy entity label → our entity type. xx_ent_wiki_sm uses WikiNER labels
+# (PER / ORG / LOC / MISC). Date entities are handled separately by the
+# regex pass at the bottom of extract_entities() — language-agnostic and
+# more reliable than NER for ISO / weekday / relative-date forms.
 _SPACY_LABEL_MAP = {
-    # Polish model labels
-    "persName": "person",
-    "orgName": "organization",
-    "placeName": "place",
-    "date": "date",
-    # English model labels
-    "PERSON": "person",
+    "PER": "person",
     "ORG": "organization",
-    "GPE": "place",
-    "DATE": "date",
+    # LOC → "place" mapping omitted: _extract_with_spacy() filters
+    # to person + organization only (places aren't surfaced as entities
+    # downstream). MISC is intentionally unmapped — too generic.
 }
 
 # Known false positives from spaCy
@@ -60,6 +59,7 @@ _SPACY_SKIP = frozenset({
     "Backend", "Frontend", "Pythonie", "Vitest", "Claude", "Jarvis",
     "Llama", "FastAPI", "Nuxt", "SQLite", "Obsidian", "Whisper",
     "Docker", "Kubernetes", "React", "Vue", "TypeScript",
+    "Copilot", "GitHub Copilot",
     # Polish morphological false positives
     "skiej",
     # Conversation formatting artifacts
@@ -391,15 +391,25 @@ def _passes_structural_filters(name: str, etype: Optional[str] = None) -> bool:
 
 
 def _lemmatize_name(ent) -> str:
-    """Use spaCy lemmatizer to normalize a Polish name to base (nominative) form.
+    """Normalize a name to base form using spaCy's lemmatizer when available.
 
-    E.g. "Michałem Kowalskim" → "Michał Kowalski" (via token lemmas).
-    Falls back to original text when the lemmatizer produces garbage
-    (e.g. foreign names like "Will" → "willć").
+    Originally written for Polish declension ("Michałem Kowalskim" →
+    "Michał Kowalski"). After ADR 018 the bundled NER (xx_ent_wiki_sm) has
+    no lemmatizer pipeline component, so `tok.lemma_` returns the empty
+    string and this function effectively returns the original entity text
+    — which is correct for English (no declension to undo) and harmless
+    for any other language the model incidentally tags. The fallback
+    branches below are kept so a future swap to a model *with* a lemmatizer
+    pipeline (e.g. an English-only spaCy model with the OntoNotes lineage
+    accepted) doesn't need this code re-written.
     """
     parts = []
     for tok in ent:
         lemma = tok.lemma_
+        # No lemmatizer in pipeline → tok.lemma_ is empty. Use raw text.
+        if not lemma:
+            parts.append(tok.text)
+            continue
         # If lemma is lowercase but original is uppercase, title-case the lemma
         if lemma[0].islower() and tok.text[0].isupper():
             lemma = lemma.title()
@@ -408,8 +418,7 @@ def _lemmatize_name(ent) -> str:
         if lemma.lower() == tok.text.lower():
             parts.append(tok.text)
         # Guard: reject lemmas that add new characters not in the original.
-        # Polish declension only changes suffixes (Michał→Michałem),
-        # so a valid lemma should only use chars from the original.
+        # A valid lemma should only use chars from the original.
         # E.g. "Will" → "willć" adds 'ć' → reject and keep "Will".
         elif set(lemma.lower()) - set(tok.text.lower()):
             parts.append(tok.text)
@@ -527,8 +536,9 @@ def _extract_with_spacy(text: str, existing_people: List[str]) -> List[Extracted
     if len(text) > 20_000:
         text = text[:20_000]
 
-    # Use Polish model as primary (works well on both PL and mixed PL/EN text)
-    doc = _nlp_pl(text)
+    # Single-pass NER. Per ADR 018 we use one bundled spaCy model
+    # (xx_ent_wiki_sm) for all content; English is the primary target.
+    doc = _nlp(text)
     for ent in doc.ents:
         etype = _SPACY_LABEL_MAP.get(ent.label_)
         if etype not in ("person", "organization"):
@@ -536,8 +546,14 @@ def _extract_with_spacy(text: str, existing_people: List[str]) -> List[Extracted
         name = ent.text.strip()
 
         # --- Filters ---
-        # Reject entities with newlines/tabs (multi-line junk)
-        if "\n" in name or "\t" in name:
+        # Strip newline-bleed: xx_ent_wiki_sm sometimes extends entity spans
+        # across markdown bullet boundaries (e.g. "Sarah Williams\n- Call"
+        # for a name preceding a "\n- " bullet). The first line is the real
+        # entity; everything after is a downstream-bullet artifact.
+        if "\n" in name:
+            name = name.split("\n", 1)[0].strip()
+        # Reject entities with tabs (rarer junk that doesn't have a clean fix)
+        if "\t" in name:
             continue
         # Reject entities containing " - " (merged junk like "Adamem - fundraising")
         if " - " in name:
@@ -616,73 +632,6 @@ def _extract_with_spacy(text: str, existing_people: List[str]) -> List[Extracted
             confidence = 0.5
 
         entities.append(ExtractedEntity(text=name, type=etype, confidence=confidence))
-
-    # If English model is available, run it to catch English-specific entities missed by PL model
-    # EN model on Polish text is very noisy — only accept clear proper-name patterns
-    if _nlp_en is not None:
-        seen_texts = {e.text.lower() for e in entities}
-        doc_en = _nlp_en(text)
-        for ent in doc_en.ents:
-            etype = _SPACY_LABEL_MAP.get(ent.label_)
-            if etype not in ("person", "organization"):
-                continue
-            name = ent.text.strip()
-            # Apply same filters as Polish model
-            if "\n" in name or "\t" in name or " - " in name:
-                continue
-            if len(name) < 2 or name in _SPACY_SKIP:
-                continue
-            if name.lower() in _POLISH_NON_PERSON:
-                continue
-            if any(w.lower() in _NOT_NAME_WORDS for w in name.split()):
-                continue
-            if name.lower() in seen_texts:
-                continue
-            # Reject multi-word entities where ALL words are stop/non-person words
-            if len(name.split()) > 1 and all(
-                w.lower() in _POLISH_NON_PERSON or w.lower() in _NOT_NAME_WORDS
-                for w in name.split()
-            ):
-                continue
-            # Also skip if fuzzy-matches an entity already found by PL model
-            if _fuzzy_match_existing(name, seen_texts):
-                continue
-
-            # Strict proper-name filter for EN model results:
-            # Each word must start with uppercase (rejects Polish phrases
-            # that EN model misclassifies as entities)
-            words = name.split()
-            if not all(w[0].isupper() for w in words if len(w) > 0):
-                continue
-            # Reject entities with special characters (⭐, emoji, etc.)
-            if not all(c.isalpha() or c in " .'-" for c in name):
-                continue
-            # Same structural rejects as the PL path
-            if not _passes_structural_filters(name, etype):
-                continue
-
-            is_single_word = len(words) == 1
-
-            if etype == "person":
-                # Check if this matches a known person (fuzzy matching)
-                en_matched = (
-                    name.lower() if name.lower() in existing_set
-                    else _fuzzy_match_existing(name, existing_set)
-                )
-                if en_matched:
-                    confidence = 0.75
-                    # Use canonical form
-                    for ep in existing_people:
-                        if ep.lower() == en_matched:
-                            name = ep
-                            break
-                else:
-                    # EN model on Polish text is very noisy for unknown persons
-                    confidence = 0.3
-            else:
-                confidence = 0.4
-
-            entities.append(ExtractedEntity(text=name, type=etype, confidence=confidence))
 
     return entities
 

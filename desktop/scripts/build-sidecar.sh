@@ -52,6 +52,29 @@ if [[ ! -f "$SRC" ]]; then
     exit 1
 fi
 
+# ADR 015 audit gate: the bundle must contain no cloud-LLM SDKs. PyInstaller
+# pulls whatever is installed in the build venv via the spec's hidden_imports
+# + collect_data_files paths, so a dev venv with leftover `litellm` / `openai`
+# / `anthropic` / `tiktoken` transitives would silently leak them into the
+# `.app` even though they're absent from `requirements.txt`. The path
+# fragments below appear in a PyInstaller one-file binary's archive TOC if
+# (and only if) the corresponding package was bundled.
+echo "==> verifying no cloud SDKs leaked into bundle (ADR 015)"
+LEAKS=()
+for mod in litellm anthropic openai tiktoken_ext; do
+    if strings "$SRC" 2>/dev/null | LC_ALL=C grep -qF "${mod}/"; then
+        LEAKS+=("$mod")
+    fi
+done
+if (( ${#LEAKS[@]} > 0 )); then
+    echo "error: cloud SDKs leaked into bundle: ${LEAKS[*]}" >&2
+    echo "       Per ADR 015 the bundle must contain no cloud-LLM SDKs." >&2
+    echo "       The dev venv likely has these installed as transitive leftovers." >&2
+    echo "       Fix: \`uv pip sync backend/requirements.txt\` to clean the venv, then rebuild." >&2
+    exit 1
+fi
+echo "    no cloud SDKs in bundle ✓"
+
 DEST="$OUT_DIR/jarvis-sidecar-$TRIPLE"
 cp "$SRC" "$DEST"
 chmod +x "$DEST"

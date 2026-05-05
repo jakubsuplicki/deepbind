@@ -17,12 +17,20 @@ fastembed==0.8.0  # local embeddings for semantic search
 psutil==7.2.2  # hardware detection for local model recommendations
 cryptography==47.0.0  # Ed25519 sign/verify for ADR 006 offline license
 spacy==3.8.14  # NER for entity extraction (Polish + English)
-# spaCy NER model packages — pinned to direct wheel URLs so `pip install -r`
+# spaCy NER model package — pinned to a direct wheel URL so `pip install -r`
 # is reproducible without hitting spaCy's compatibility-table API. Required
 # at runtime by services/entity_extraction.py (spacy.load(...)) and bundled
 # inside the desktop installer per ADR 003 §A. Version must match spacy 3.8.x.
-https://github.com/explosion/spacy-models/releases/download/pl_core_news_sm-3.8.0/pl_core_news_sm-3.8.0-py3-none-any.whl
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+#
+# Per ADR 018 (v1 ships English-only), we use spaCy's multilingual NER model
+# (xx_ent_wiki_sm) selected for license + drop-in spaCy-compatibility, NOT for
+# its incidental 9-language coverage. Trained on WikiNER (CC-BY 3.0); model
+# weights MIT-licensed. Replaces the previous `pl_core_news_sm` (GPL-3.0 — see
+# commercial-licensing-audit.md finding #1) AND `en_core_web_sm` (MIT but
+# OntoNotes-trained — finding #3); the consolidation closes both findings in
+# one swap. The model's multilingual coverage is incidental, untested, and
+# unmarketed per ADR 018.
+https://github.com/explosion/spacy-models/releases/download/xx_ent_wiki_sm-3.8.0/xx_ent_wiki_sm-3.8.0-py3-none-any.whl
 mcp==1.27.0  # Model Context Protocol SDK (FastMCP server, stdio transport)
 
 # testing

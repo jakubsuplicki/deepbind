@@ -237,8 +237,19 @@ The work is sequenced so the test suite passes after each chunk and the bundle i
 - Update [`docs/overview.md`](../../overview.md) if it still mentions multi-provider.
 - Write [`docs/runbooks/release-build-macos.md`](../../runbooks/release-build-macos.md) (the runbook the user requested, now writable against the simpler single-target build).
 
+## Amendment 2026-05-05 — bundle leakage hardening
+
+The commercial-licensing audit at [`docs/research/commercial-licensing-audit.md`](../../research/commercial-licensing-audit.md) (finding 2) discovered that even after this ADR landed, `desktop/sidecar/jarvis-sidecar.spec` still listed `litellm`, `litellm.llms`, `tiktoken_ext`, `tiktoken_ext.openai_public` in `hidden` and `litellm`, `tiktoken`, `tiktoken_ext` in the `datas` `collect_data_files` loop. The dev venv at the time of audit also had `litellm-1.83.7` installed as leftover from the pre-ADR-015 era, so a build executed against that venv would silently re-bundle the cloud SDKs that this ADR's chunk 7 verification step (`find DeepFilesAI.app -name "*anthropic*" …`) was supposed to keep out.
+
+Fix:
+- **Spec hidden_imports + datas:** stale `litellm` / `tiktoken` / `tiktoken_ext` entries removed. Inline comments now explain *why* they're deliberately absent so a future PR doesn't re-add them by reflex.
+- **Spec excludes (defense in depth):** `litellm`, `anthropic`, `openai`, `tiktoken`, `tiktoken_ext`, `google.generativeai`, `google.generativelanguage` added to the `Analysis(excludes=...)` list. PyInstaller errors at build time if production code ever imports them, instead of silently bundling whatever is in the dev venv. This contradicts chunk 6's "delete excludes block" instruction — kept on purpose because the ADR's optimistic premise ("there is nothing to exclude") was empirically wrong; the audit found a real leak.
+- **Build-script assertion (`desktop/scripts/build-sidecar.sh`):** new audit gate runs after PyInstaller produces the binary, scanning the one-file bundle's archive TOC (via `strings | grep -F "<mod>/"`) for `litellm` / `anthropic` / `openai` / `tiktoken_ext` path fragments. Build aborts with a clear remediation message if any leak is detected. This is the runtime-enforced version of the §"Audit verification" table's row 2.
+
+The two layers (declarative excludes + post-build grep) catch different failure modes. Excludes catch regressions in source code (an `import openai` that PyInstaller's static analysis follows); the post-build grep catches regressions in the build environment (a polluted venv whose transitives leak in via mechanisms PyInstaller's excludes don't cover).
+
 ## Open questions
 
 - **Section classification quality.** Dropping `classify_section_llm`'s cloud branch may regress section-classification accuracy in the ingest pipeline. The rule-based fallback exists but has not been measured against the eval set with the cloud branch removed. If the regression is material, the local-Ollama-call replacement is a chunk-4 follow-up.
 - **Token-cost UI surface.** Any frontend surface showing per-call dollar costs needs to either disappear or change to "rough token count" — depends on what the UI currently shows. To be cataloged in chunk 5.
-- **`tiktoken` for non-OpenAI tokenizers.** `tiktoken` is OpenAI's BPE; it's a reasonable approximation for Qwen3's tokenizer but not exact. If exactness matters for prompt-budgeting accuracy, swap to a Qwen-family-aware tokenizer (which is itself bundleable). Probably acceptable approximation for v1.
+- **`tiktoken` for non-OpenAI tokenizers.** `tiktoken` is OpenAI's BPE; it's a reasonable approximation for Qwen3's tokenizer but not exact. If exactness matters for prompt-budgeting accuracy, swap to a Qwen-family-aware tokenizer (which is itself bundleable). Probably acceptable approximation for v1. **2026-05-05 update:** moot per the amendment above — `tiktoken` and `tiktoken_ext` are now in the spec's `excludes` list. Token counting goes through HuggingFace `tokenizers` (`backend/services/token_counting.py`) which handles Qwen / Granite / Mistral / Gemma exactly.

@@ -101,11 +101,15 @@ for pkg in backend_pkgs:
         pass
 
 hidden.extend([
-    # spaCy NER model packages — installed via requirements.txt direct wheel
-    # URLs. Each package registers itself with spacy's entry-point scanner so
-    # spacy.load("pl_core_news_sm") finds them at runtime inside the bundle.
-    "pl_core_news_sm",
-    "en_core_web_sm",
+    # spaCy NER model package — installed via requirements.txt direct wheel
+    # URL. The package registers itself with spacy's entry-point scanner so
+    # spacy.load("xx_ent_wiki_sm") finds it at runtime inside the bundle.
+    # Per ADR 018 (v1 English-only), we ship a single multilingual NER model
+    # selected for license cleanliness, not for its incidental 9-language
+    # coverage. Replaces the previous pl_core_news_sm (GPL-3.0) +
+    # en_core_web_sm (MIT-but-OntoNotes-trained) pair — see the
+    # commercial-licensing audit for the full reasoning.
+    "xx_ent_wiki_sm",
     # uvicorn loop / protocol / lifespan registries
     "uvicorn",
     "uvicorn.logging",
@@ -131,12 +135,12 @@ hidden.extend([
     "fastembed.text",
     "onnxruntime",
     "tokenizers",
-    # spaCy + the language models the backend explicitly loads
-    # (services/entity_extraction.py:31-33). These wheels register submodules
-    # that spacy.load() resolves by string name.
+    # spaCy + the multilingual base language module that xx_ent_wiki_sm uses.
+    # The model's wheel registers itself via spaCy's entry-point scanner so
+    # spacy.load("xx_ent_wiki_sm") resolves at runtime; PyInstaller doesn't
+    # find spacy.lang.xx via static analysis of the model wheel.
     "spacy",
-    "spacy.lang.en",
-    "spacy.lang.pl",
+    "spacy.lang.xx",
     # keyring per-OS backends — ADR 003 §J
     "keyring",
     "keyring.backends",
@@ -146,33 +150,35 @@ hidden.extend([
     "keyring.backends.fail",
     "keyrings.alt",
     "keyrings.alt.file",
-    # LiteLLM provider modules — these get imported on first call, not load
-    "litellm",
-    "litellm.llms",
-    # Misc transitives PyInstaller has historically missed for our deps
-    "tiktoken_ext",
-    "tiktoken_ext.openai_public",
+    # Misc transitives PyInstaller has historically missed for our deps.
+    # Note: `litellm`, `tiktoken`, and `tiktoken_ext` were removed per ADR 015
+    # (single-target local-only stack) — those are cloud-SDK transitives.
+    # Keeping them here would silently re-bundle anthropic/openai SDKs from a
+    # dev's polluted venv even though they're not in requirements.txt.
     "aiosqlite",
 ])
 
 # --- Datas ------------------------------------------------------------------
 #
-# fastembed/onnxruntime/litellm ship runtime data files (vocab, JSON configs,
-# version banners) that PyInstaller's bytecode-only analysis won't pick up.
+# fastembed / onnxruntime ship runtime data files (vocab, JSON configs, version
+# banners) that PyInstaller's bytecode-only analysis won't pick up.
 # `collect_data_files` walks the package on disk and includes them.
 #
-# spaCy model packages (pl_core_news_sm, en_core_web_sm) carry their actual
-# weights as data files inside the package directory (e.g. tagger/model,
-# ner/cfg, vocab/strings.json). collect_data_files picks them up.
+# spaCy model package (xx_ent_wiki_sm) carries its actual weights as data
+# files inside the package directory (e.g. ner/model, vocab/strings.json).
+# collect_data_files picks them up.
+#
+# Removed per ADR 015: `litellm`, `tiktoken`, `tiktoken_ext`. Those are cloud-
+# SDK transitives — listing them here would silently re-bundle anthropic /
+# openai SDKs from a dev's polluted venv even though they're not in
+# requirements.txt. Keep this list narrowly scoped to packages we actually
+# import in production code; if a build env happens to have litellm installed
+# it must NOT leak into the .app.
 
 datas = []
 for pkg in [
     "fastembed",
-    "litellm",
-    "tiktoken",
-    "tiktoken_ext",
-    "pl_core_news_sm",
-    "en_core_web_sm",
+    "xx_ent_wiki_sm",
 ]:
     try:
         datas.extend(collect_data_files(pkg))
@@ -231,6 +237,21 @@ a = Analysis(
         "test",
         "IPython",
         "jupyter",
+        # ADR 015 audit gate: cloud LLM SDKs must NEVER ship inside the bundle.
+        # No production code imports these (verified by the build-sidecar.sh
+        # post-build assertion), so the explicit exclude is belt-and-suspenders:
+        # if a future PR accidentally adds `import openai` somewhere, PyInstaller
+        # errors at build time instead of silently bundling the SDK from a
+        # polluted dev venv. tiktoken / tiktoken_ext are listed because they
+        # are litellm/openai transitives, not because we use them — see the
+        # comment in services/token_counting.py for why we don't.
+        "litellm",
+        "anthropic",
+        "openai",
+        "tiktoken",
+        "tiktoken_ext",
+        "google.generativeai",
+        "google.generativelanguage",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
