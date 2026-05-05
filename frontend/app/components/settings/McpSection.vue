@@ -92,7 +92,10 @@
       <div class="mcp-snippet">
         <pre class="mcp-snippet__code"><code>{{ activeText }}</code></pre>
         <button class="mcp-snippet__copy" @click="copy">
-          {{ copied ? 'Copied ✓' : 'Copy' }}
+          <template v-if="copied">
+            Copied <Icon name="ph:check-bold" class="icon--sm" />
+          </template>
+          <template v-else>Copy</template>
         </button>
       </div>
       <p class="mcp-section__paste-path">

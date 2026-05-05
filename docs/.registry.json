@@ -87,7 +87,7 @@
         "preferences-settings",
         "latency-benchmark"
       ],
-      "last_updated": "2026-05-04",
+      "last_updated": "2026-05-05",
       "status": "current",
       "_note_2026_05_04b": "ADR 016 landed end-to-end: chat sends now route through Tauri Rust IPC (`send_chat_message` command) \u2192 loopback HTTP `POST /api/chat/message` \u2192 existing `_handle_message`. Streaming response still flows back over the WebSocket; only the SEND direction is split off. Root cause that forced this: build #11 wire-time diagnostic (`js_block_ms` + `wire_time_ms` injected into every payload) proved that the second user message of every fresh app session sat for 27 s in the WKWebView's outbound WebSocket queue before reaching the backend. JS-side blocking was 0 ms, transport was 27 s. macOS WKWebView throttles in-page outbound WebSocket I/O after the view is idle (App Nap / power-management), and the throttle does not affect WebSocket receive (which is why streaming back was always clean) and does not affect network I/O initiated from the Rust shell (which has its own URLSession outside the WebView's). Backend gains: `_active_sessions: dict[str, {ws, get_llm, lock}]` registry; `_validate_message_dict` extracted from `_parse_message`; `_process_chat_payload` extracted from the WS receive loop and reused by both transports; `POST /api/chat/message` endpoint that looks up the session WS, validates, and dispatches as a background task (returns 200 immediately, errors surface as WS `error` events). Per-session `asyncio.Lock` serialises concurrent dispatches whether they arrive WS or HTTP. Tauri shell gains: `reqwest` dep (default-features off, just `json` + `http2` \u2014 no TLS for loopback), `BackendUrlHandle` + `HttpClient` state, `#[tauri::command] async fn send_chat_message(payload, backend, client)` registered via `invoke_handler`. Frontend gains: `_inTauri()` env-detector via `'__TAURI_INTERNALS__' in window`; `useWebSocket.send()` takes the IPC path for `{type:'message'}` frames in Tauri, falls back to `ws.send()` in browser dev. Heartbeat pings stay on the WS \u2014 they need to exercise THIS socket so the staleness detector keeps a real signal. The wire-time log line gains a `transport=http|ws` field so we can observe the fix in production logs and watch for regressions. `@tauri-apps/api` added to package deps. ADR 016 records the full architectural reasoning + rejected alternatives. Backend chat suite (chat_ws/chat_compaction/chat_metrics) green at 25 passed.",
       "_note_2026_05_04": "WebSocket transport now detects stale TCP sockets. Symptom diagnosed on M5 24 GB after a multi-hour idle gap: backend was completely silent for 23 s between user-bubble timestamp and `chat_step after_add_message`, even though `readyState === OPEN` and `ws.send()` returned synchronously. Root cause: macOS App Nap / OS sleep / NAT timeout silently kills the underlying TCP connection without transitioning the JS WebSocket out of OPEN; ws.send() succeeded into the OS buffer and the data sat in TCP retransmits for ~23 s before either rehydrating the path or finally arriving. The frontend's heartbeat was one-way (ping every 25 s, nothing listened for a reply) so there was no inbound liveness signal during idle. Fix is two-sided. Backend: `chat.py` now responds to `{type:'ping'}` with `{type:'pong'}` instead of silently dropping it (5-line change in the WS receive loop). Frontend: `useWebSocket.ts` tracks `_lastPongAt` (refreshed on every inbound frame, including pongs which are NOT broadcast to chat listeners), and `send()` checks `Date.now() - _lastPongAt > 30 s` before trusting `readyState === OPEN`. On a stale verdict it pushes the frame to a small outbound queue (cap 8), force-closes the socket with `_suppressNextDisconnect=true` so the close handler doesn't broadcast a 'disconnected' event to chat consumers (which would flash an error and reset isLoading), and immediately reconnects. The new `onopen` drains the queue so the message that triggered the reconnect rides the fresh connection \u2014 user just sees a brief delay (~200\u2013500 ms reconnect), not a 23 s stall. Force-reconnect is suppression-based but single-use: if the new connection also fails, that close fires `disconnected` normally and the user sees a real error. Also added: guard against double-scheduling reconnect timers, guard against starting a second connect when one is already in CONNECTING state. New event type `WsPong` added to types/index.ts WsEvent union for completeness \u2014 listeners never receive it because the inbound handler short-circuits on `data.type === 'pong'`. No unit test added \u2014 the existing `useWebSocket.test.ts` only exercises the MockWebSocket harness rather than the composable, and the new behavior is awkward to mock without auto-import scaffolding; manual M5 test pending after rebuild.",
@@ -196,7 +196,7 @@
         "local-models",
         "database"
       ],
-      "last_updated": "2026-04-17",
+      "last_updated": "2026-05-05",
       "status": "current"
     },
     "jira-graph": {
@@ -232,7 +232,7 @@
         "enrichment-pipeline",
         "jira-graph"
       ],
-      "last_updated": "2026-04-17",
+      "last_updated": "2026-05-05",
       "status": "current"
     },
     "knowledge-graph": {
@@ -295,7 +295,7 @@
       "depends_on": [
         "chat"
       ],
-      "last_updated": "2026-04-26",
+      "last_updated": "2026-05-05",
       "status": "current"
     },
     "specialists": {
@@ -347,7 +347,7 @@
         "specialists",
         "chat"
       ],
-      "last_updated": "2026-05-04",
+      "last_updated": "2026-05-05",
       "status": "current",
       "_note_2026_05_04c": "ADR 017 \u2014 frontend icons migrated to Phosphor + Simple Icons via @nuxt/icon (offline-bundled). Inline SVGs and functional emoji replaced with <Icon> components; design rules in docs/concepts/icon-system.md."
     },
@@ -519,7 +519,7 @@
         "backend/services/_db.py"
       ],
       "depends_on": [],
-      "last_updated": "2026-04-26",
+      "last_updated": "2026-05-05",
       "status": "current"
     },
     "smart-connect": {
@@ -588,7 +588,7 @@
         "sessions",
         "jira-ingest"
       ],
-      "last_updated": "2026-04-26",
+      "last_updated": "2026-05-05",
       "status": "current"
     },
     "retrieval-trace": {
@@ -606,7 +606,7 @@
         "chat",
         "knowledge-graph"
       ],
-      "last_updated": "2026-04-26",
+      "last_updated": "2026-05-05",
       "status": "current"
     },
     "section-classification": {
@@ -858,7 +858,7 @@
         "enrichment-pipeline",
         "memory"
       ],
-      "last_updated": "2026-04-17",
+      "last_updated": "2026-05-05",
       "status": "current"
     },
     "jira-strategist": {
@@ -879,7 +879,7 @@
         "knowledge-graph",
         "enrichment-pipeline"
       ],
-      "last_updated": "2025-07-27",
+      "last_updated": "2026-05-05",
       "status": "current"
     },
     "desktop-shell-spike": {
@@ -902,7 +902,7 @@
         "backend/scripts/run_frozen.py"
       ],
       "depends_on": [],
-      "last_updated": "2026-04-29",
+      "last_updated": "2026-05-05",
       "status": "spike"
     },
     "desktop-shell-graduation": {

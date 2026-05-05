@@ -2,10 +2,10 @@
 const { items, dismiss } = useSnackbar()
 
 const ICONS: Record<string, string> = {
-  error: '✕',
-  warning: '⚠',
-  info: 'ℹ',
-  success: '✓',
+  error: 'ph:x-circle-fill',
+  warning: 'ph:warning-fill',
+  info: 'ph:info-fill',
+  success: 'ph:check-circle-fill',
 }
 </script>
 
@@ -20,7 +20,7 @@ const ICONS: Record<string, string> = {
           :class="`snackbar--${item.type}`"
           role="alert"
         >
-          <span class="snackbar__icon">{{ ICONS[item.type] }}</span>
+          <Icon :name="ICONS[item.type]" class="snackbar__icon icon--sm" />
           <span class="snackbar__message">{{ item.message }}</span>
           <a
             v-if="item.action?.href"
@@ -35,7 +35,9 @@ const ICONS: Record<string, string> = {
             class="snackbar__action"
             @click="() => { item.action!.onClick!(); dismiss(item.id) }"
           >{{ item.action.label }}</button>
-          <button class="snackbar__close" :aria-label="'Dismiss'" @click="dismiss(item.id)">✕</button>
+          <button class="snackbar__close" :aria-label="'Dismiss'" @click="dismiss(item.id)">
+            <Icon name="ph:x-bold" class="icon--sm" />
+          </button>
         </div>
       </TransitionGroup>
     </div>

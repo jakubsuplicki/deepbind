@@ -60,7 +60,7 @@
           }"
         >
           <span class="warmup__stage-marker" aria-hidden="true">
-            <template v-if="stageStatus(i) === 'done'">✓</template>
+            <Icon v-if="stageStatus(i) === 'done'" name="ph:check-bold" class="icon--sm" />
             <template v-else-if="stageStatus(i) === 'active'">●</template>
             <template v-else>·</template>
           </span>

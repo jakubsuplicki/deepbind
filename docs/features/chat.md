@@ -22,8 +22,8 @@ sources:
   - frontend/app/components/ChatPanel.vue
   - frontend/app/components/TraceList.vue
 depends_on: [retrieval, sessions, specialists, preferences-settings, local-models]
-last_updated: 2026-05-01
-last_reviewed: 2026-05-01
+last_updated: 2026-05-05
+last_reviewed: 2026-05-05
 ---
 
 # Chat & LLM Integration
@@ -201,16 +201,21 @@ All frames are JSON. The client sends; the server sends back a stream of events 
   "type": "message",
   "content": string,
   "session_id"?: string,
-  "provider"?: "anthropic" | "openai" | "google",
-  "model"?: string,           // e.g. "gpt-4o", "gemini-2.5-flash"
-  "api_key"?: string          // per-request key from browser storage
+  "model"?: string,           // Ollama tag (e.g. "qwen3:8b") — the user-pinned
+                              // chat model. Omitting falls back to the server's
+                              // default catalog pick.
+  "base_url"?: string,        // Ollama endpoint override; defaults to the
+                              // bundled-runtime loopback.
+  "graph_scope"?: object      // optional retrieval-scoping payload
 }
 
 // Heartbeat — frontend sends this every 25s
 { "type": "ping" }
 ```
 
-`session_id` is optional on the first message. `provider`, `model`, and `api_key` are optional — if omitted the server uses the stored Anthropic key with `ClaudeService`. If `provider` is set to a non-Anthropic value, `api_key` must be provided (there is no server-stored key for OpenAI/Google).
+Per [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md), Ollama is the only dispatch target. There is no `provider` selection and no API key in the wire protocol — the bundle ships no cloud-provider SDK. `_process_chat_payload` reads `provider` and `api_key` keys if present, but `provider` is discarded (the dispatcher is always [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py)) and `api_key` is inert (`workspace_service.get_api_key()` returns `None` by design, see [workspace-onboarding.md](workspace-onboarding.md#gotchas)). Both are kept on the surface so older clients don't error; new clients should not send them.
+
+`session_id` is optional on the first message — the server creates one and returns it via `session_start`. In the bundled app these frames arrive over HTTP via the Tauri IPC path described in §"Send path" above; only `{type: "ping"}` and dev-mode WS sends actually traverse the WebSocket.
 
 **Server → Client**
 

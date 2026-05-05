@@ -71,8 +71,19 @@
             {{ Math.round(f.size / 1024) }}KB
             <span v-if="fileStatuses[idx]?.state === 'pending'" class="import-dialog__file-status">queued</span>
             <span v-else-if="fileStatuses[idx]?.state === 'uploading'" class="import-dialog__file-status">…</span>
-            <span v-else-if="fileStatuses[idx]?.state === 'ok'" class="import-dialog__file-status import-dialog__file-status--ok">✓</span>
-            <span v-else-if="fileStatuses[idx]?.state === 'error'" class="import-dialog__file-status import-dialog__file-status--error" :title="fileStatuses[idx]?.error">✗</span>
+            <span
+              v-else-if="fileStatuses[idx]?.state === 'ok'"
+              class="import-dialog__file-status import-dialog__file-status--ok"
+            >
+              <Icon name="ph:check-bold" class="icon--sm" />
+            </span>
+            <span
+              v-else-if="fileStatuses[idx]?.state === 'error'"
+              class="import-dialog__file-status import-dialog__file-status--error"
+              :title="fileStatuses[idx]?.error"
+            >
+              <Icon name="ph:x-bold" class="icon--sm" />
+            </span>
             <button
               v-if="!uploading"
               type="button"

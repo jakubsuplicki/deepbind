@@ -16,7 +16,9 @@
     </button>
     <span v-if="popoverOpen && coverage" class="sc-status__tip" role="tooltip">
       <strong class="sc-status__title">
-        <span v-if="justFinished">✓ Smart Connect finished</span>
+        <span v-if="justFinished">
+          <Icon name="ph:check-bold" class="icon--sm" /> Smart Connect finished
+        </span>
         <span v-else>Smart Connect</span>
       </strong>
       <span class="sc-status__line">{{ summaryFull }}</span>
@@ -220,8 +222,11 @@ const summaryShort = computed(() => {
     return progressLabel.value ? `Processing ${progressLabel.value}` : 'Processing…'
   }
   if (unprocessedCount.value > 0) return `${unprocessedCount.value} pending`
-  if (justFinished.value) return '✓ Just finished'
-  return '✓ Up to date'
+  // Status colour is already conveyed by `sc-status__dot.sc-status--ok` (green)
+  // adjacent to this label, so no inline glyph is needed here. Per ADR 017 +
+  // docs/concepts/icon-system.md, ✓-as-glyph is banned in functional UI.
+  if (justFinished.value) return 'Just finished'
+  return 'Up to date'
 })
 
 const summaryFull = computed(() => {

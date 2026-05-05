@@ -5,70 +5,87 @@ type: feature
 sources:
   - backend/routers/workspace.py
   - backend/services/workspace_service.py
+  - backend/models/schemas.py
   - frontend/app/pages/onboarding.vue
-depends_on: [database, settings-config]
-last_reviewed: 2026-04-14
-last_updated: 2026-04-14
+  - frontend/app/components/OnboardingLocalFlow.vue
+depends_on: [database, preferences-settings]
+last_reviewed: 2026-05-05
+last_updated: 2026-05-05
 ---
 
 ## Summary
 
-Workspace & Onboarding handles the one-time setup required before Jarvis can be used: collecting the Anthropic API key, creating the local directory structure, and recording that setup is complete. It runs exactly once — on subsequent starts, the app detects an existing workspace and skips straight to the main view.
+Workspace & Onboarding handles the one-time setup required before Jarvis can be used: running the bundled-Ollama first-run pipeline (hardware probe + primary-model pull + chat-model self-test), creating the local directory tree, seeding built-in specialists, and recording that setup is complete. It runs exactly once — on subsequent starts the app detects an existing workspace and routes straight to the main view.
 
-## How It Works
+Per [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md) the v1 product is local-only: there is no API key to collect, no provider choice to make, and no cloud branch to opt into. The whole onboarding surface is a single screen that drives a local-model pipeline and then creates the workspace.
 
-The onboarding flow is a single-page form (`onboarding.vue`) that collects the API key and calls `POST /api/workspace/init`. On success it sets the shared `isInitialized` flag and navigates to `/main`.
+## How it works
 
-On the backend, `create_workspace` in `workspace_service.py` does all the work in a fixed sequence:
+### Frontend
 
-1. Validates the API key is non-empty after stripping whitespace.
-2. Checks that `{workspace}/app/config.json` does not already exist. If it does, a `WorkspaceExistsError` is raised immediately — no partial writes happen.
-3. Creates the full directory tree (16 subdirectories under `app/`, `memory/`, `graph/`, and `agents/`) using `mkdir(parents=True, exist_ok=True)`.
-4. Stores the API key via `_store_api_key`, which tries OS keychain first (`keyring`) and falls back to a plaintext `app/api_key.json` file if no keyring is available.
-5. Writes `app/config.json` with version, creation timestamp, and `api_key_set: true`. The raw key is never written to `config.json`.
+[`onboarding.vue`](../../frontend/app/pages/onboarding.vue) renders one component, [`OnboardingLocalFlow.vue`](../../frontend/app/components/OnboardingLocalFlow.vue), and listens for its `model-ready` event. When the event fires, the page calls `useApi().initWorkspace()` and navigates to `/main`.
 
-`GET /api/workspace/status` is the check used at startup. It reads `app/config.json` and returns whether the workspace is initialized, the path, and whether `api_key_set` is true. The app shell calls this on mount to decide whether to route the user to onboarding or directly to the main view.
+`OnboardingLocalFlow` orchestrates two layered paths:
 
-The API key retrieval priority (used by the rest of the backend when making Claude API calls) is: environment variable `ANTHROPIC_API_KEY` → OS keyring → `app/api_key.json` file.
+- **Layer 1 — orchestrator-driven** (default in the bundled build, [ADR 005](../architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md) §B). Drives [`useFirstRun`](../../frontend/app/composables/useFirstRun.ts) against `/api/local/first-run/*`. Auto-kicks the pipeline on mount when there is no marker file. Releases the user into chat the moment the foreground primary pull lands; the background fallback pull and the chat-model probe continue silently.
+- **Layer 2 — manual model picker.** Engaged when the user clicks "Pick my own model later" (the §B opt-out path) or when Ollama is not reachable (dev mode without bundled sidecar). Drives [`useLocalSetupFlow`](../../frontend/app/composables/useLocalSetupFlow.ts), the legacy state machine still used by `LocalModelsSection.vue` in Settings.
 
-## Key Files
+The `wizardStep` indicator (1 → 2 → 3 = "Detect hardware" → "Download model" → "Start using Jarvis") maps both orchestrator state and manual flow.state onto the same 1..3 progress so the indicator stays stable across mode flips.
 
-- `backend/routers/workspace.py` — Exposes the two HTTP endpoints (`/status`, `/init`) and maps service errors to appropriate HTTP status codes.
-- `backend/services/workspace_service.py` — All workspace logic: directory creation, API key storage with keyring/file fallback, config read/write, and the key retrieval chain used across the rest of the backend.
-- `frontend/app/pages/onboarding.vue` — Single-screen form, password-type input for the API key, calls `useApi().initWorkspace()`, and redirects to `/main` on success.
+### Backend
 
-## API / Interface
+[`create_workspace`](../../backend/services/workspace_service.py) does the work in a fixed sequence:
+
+1. Checks that `{workspace}/app/config.json` does not already exist. If it does, raises `WorkspaceExistsError` immediately — no partial writes.
+2. Creates the full directory tree (16 subdirectories under `app/`, `memory/`, `graph/`, and `agents/`) using `mkdir(parents=True, exist_ok=True)`.
+3. Writes `app/config.json` with version, creation timestamp, and workspace path.
+4. Seeds built-in specialists (e.g. Jira Strategist) via `seed_builtin_specialists`. Failures here are logged but non-fatal — the workspace is still considered created.
+5. On any failure during steps 3–4, the directory tree is removed (`shutil.rmtree`) so the next run starts clean.
+
+`get_workspace_status` reads `app/config.json` and returns `{ initialized, workspace_path? }`. The app shell calls this on mount to decide whether to route to onboarding or to `/main`.
+
+`get_api_key()` is preserved as an inert shim that always returns `None`. It exists only so that legacy chat-router signatures (`api_key: str = ""`) keep working without a router-wide refactor; the chat dispatcher does not consume it.
+
+## Key files
+
+- [`backend/routers/workspace.py`](../../backend/routers/workspace.py) — Two HTTP endpoints (`/status`, `/init`) and `WorkspaceExistsError` → 409 mapping.
+- [`backend/services/workspace_service.py`](../../backend/services/workspace_service.py) — Directory creation, config read/write, specialist seeding, inert `get_api_key` shim.
+- [`backend/models/schemas.py`](../../backend/models/schemas.py) — `WorkspaceInitRequest` (empty body), `WorkspaceInitResponse`, `WorkspaceStatusResponse`.
+- [`frontend/app/pages/onboarding.vue`](../../frontend/app/pages/onboarding.vue) — Single-screen host; emits no API-key UI.
+- [`frontend/app/components/OnboardingLocalFlow.vue`](../../frontend/app/components/OnboardingLocalFlow.vue) — Orchestrator + manual-picker first-run pipeline.
+
+## API / interface
 
 ```
 GET /api/workspace/status
 → WorkspaceStatusResponse
   {
     initialized: boolean
-    workspace_path?: string   // only when initialized
-    api_key_set?: boolean     // only when initialized
+    workspace_path?: string   // present only when initialized
   }
 
 POST /api/workspace/init
-Body: WorkspaceInitRequest { api_key: string }
+Body: WorkspaceInitRequest {}     // empty by design (ADR 015)
 → 201 WorkspaceInitResponse { status: "ok", workspace_path: string }
 → 409 if workspace already exists
-→ 422 if api_key is empty
 ```
 
 Helper functions available to the rest of the backend (imported directly from `workspace_service`):
 
 ```python
-get_api_key(workspace_path?) -> Optional[str]
-get_key_storage_method(workspace_path?) -> Literal["environment", "keyring", "file", "none"]
+get_api_key(workspace_path?) -> Optional[str]   # always None per ADR 015
 workspace_exists(workspace_path?) -> bool
+get_workspace_status(workspace_path?) -> dict
 ```
 
 ## Gotchas
 
-- **Workspace existence is determined solely by `app/config.json`** — not by checking directories or the database. If that file is manually deleted, the system treats the workspace as uninitialized and will try to re-create it, but the old directories will already exist. `mkdir(exist_ok=True)` means this is safe, but a previously stored keyring entry will be overwritten with whatever key is submitted in the new onboarding run.
+- **Workspace existence is determined solely by `app/config.json`.** Not by checking directories or the database. If the file is manually deleted, the system treats the workspace as uninitialized and re-creates it; `mkdir(exist_ok=True)` is safe but the existing memory/graph/agents trees survive untouched.
 
-- **Keyring fallback writes the API key in plaintext.** On Unix the file is restricted to `0o600`, but on Windows no permission restriction is applied. Users on headless Linux systems or Docker containers without a keyring daemon will silently fall back to the file. `get_key_storage_method()` can be called to surface which method is active — the settings page uses this to show key storage transparency.
+- **`WorkspaceInitRequest` is intentionally empty.** Per ADR 015 the body carries no API key or provider selection. The schema is preserved as a typed marker so router signatures keep their `body: WorkspaceInitRequest` parameter and OpenAPI introspection still describes the endpoint.
 
-- **The frontend error message for any non-network failure** is whatever the backend sends in the `detail` field. A 409 surfaces as "Workspace already exists" and a 422 as the ValueError message. Any true network/connection failure (backend not running) falls through to the generic "Connection error. Is the backend running?" string in the catch block.
+- **`get_api_key()` always returns `None`.** Removing it would force a router-wide refactor of `_handle_message` and friends. The shim is documented in code as removable when those callsites drop the `api_key` parameter; its presence is not a sign that v1 supports keys.
 
-- **No SQLite initialization happens here.** The workspace directories are created by this service, but the database is initialized at backend startup via `main.py`'s lifespan handler. Onboarding guarantees the file structure and config exist; the DB is ready as soon as the backend process finishes starting.
+- **Onboarding does not initialize SQLite.** The workspace directories are created here, but the database is initialized at backend startup via `main.py`'s lifespan handler. `create_workspace` only guarantees the file structure and config exist; the DB is ready as soon as the backend finishes starting.
+
+- **Specialist seed failures are non-fatal.** If `seed_builtin_specialists` raises, the error is logged and onboarding continues. A user can hit the main view with zero specialists and recover from Settings → Specialists.
