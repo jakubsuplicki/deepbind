@@ -192,29 +192,6 @@ CORE_TOOLS = [
             "required": ["url"],
         },
     },
-    {
-        "name": "web_search",
-        "description": (
-            "Search the internet using DuckDuckGo. Use this when the user's notes "
-            "do not contain enough information to answer the question. "
-            "Always search notes first (search_notes) before using web_search."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query in the language most likely to give good results",
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Maximum number of results (1-10)",
-                    "default": 5,
-                },
-            },
-            "required": ["query"],
-        },
-    },
 ]
 
 # ── Jira tools ────────────────────────────────────────────────────────────────

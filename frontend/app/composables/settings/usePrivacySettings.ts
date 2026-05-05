@@ -3,7 +3,6 @@ import { ref } from 'vue'
 export type PrivacyState = {
   offline_mode: boolean
   offline_mode_locked: boolean
-  web_search_enabled: boolean
   url_ingest_enabled: boolean
 }
 

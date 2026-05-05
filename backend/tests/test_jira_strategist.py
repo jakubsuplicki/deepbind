@@ -193,7 +193,10 @@ class TestToolDefinitions:
 
     def test_total_tool_count(self):
         from services.tools import TOOLS
-        assert len(TOOLS) >= 17  # 11 core + 6 jira
+        # 10 core + 6 jira. Was 11 core before ADR 020 (2026-05-05) removed
+        # the `web_search` tool. Lower-bound check guards against accidental
+        # tool removals; adding new tools doesn't break this test.
+        assert len(TOOLS) >= 16
 
 
 # ── Test: jira_list_issues ────────────────────────────────────────────────────

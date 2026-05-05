@@ -142,7 +142,7 @@ async def get_privacy_settings():
 @router.patch("/privacy")
 async def update_privacy_settings(body: dict):
     """Patch privacy settings. Accepts any subset of:
-    offline_mode, web_search_enabled, url_ingest_enabled.
+    offline_mode, url_ingest_enabled.
     """
     if not isinstance(body, dict) or not body:
         raise HTTPException(status_code=422, detail="Body must be a non-empty object")

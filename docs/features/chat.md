@@ -14,7 +14,6 @@ sources:
   - backend/services/tools/__init__.py
   - backend/services/tools/definitions.py
   - backend/services/tools/executor.py
-  - backend/services/web_search.py
   - backend/services/token_tracking.py
   - frontend/app/composables/useChat.ts
   - frontend/app/composables/useChatHealth.ts
@@ -179,9 +178,8 @@ The "single hard-coded canonical model" choice is the wrong shape long-term — 
 - `backend/services/ollama_dispatcher.py` — Streaming adapter from `ollama.AsyncClient.chat(stream=True)` events to the existing `StreamEvent` shape; tool-call id synthesis; Anthropic ↔ Ollama message converter; error mapping. ADR 015 §B.
 - `backend/services/system_prompt.py` — `StreamEvent` dataclass; `build_system_prompt` / `build_system_prompt_with_stats` for context injection; `_SYSTEM_PROMPT_BUDGET_FRACTION` and `_enforce_system_prompt_budget` for budget-aware truncation. Rescued from the deleted `services/claude.py` per ADR 015 chunk 4.
 - `backend/services/tools/definitions.py` — Tool input schemas (Anthropic-style; the dispatcher remaps them to Ollama's `function`-shaped tool spec at the boundary).
-- `backend/services/tools/executor.py` — `execute_tool` dispatcher: maps tool names to underlying service calls (memory CRUD, graph queries, web search, Jira). All tool errors are converted to user-readable strings here.
+- `backend/services/tools/executor.py` — `execute_tool` dispatcher: maps tool names to underlying service calls (memory CRUD, graph queries, Jira). All tool errors are converted to user-readable strings here.
 - `backend/services/tools/__init__.py` — Re-exports `TOOLS` and `execute_tool` so callers can keep using `from services.tools import …` after the package split.
-- `backend/services/web_search.py` — Thin DuckDuckGo wrapper. The offline-mode entitlement check ([`services/privacy.py`](../../backend/services/privacy.py)) gates outbound network use; when blocked, returns `[{"error": "<reason>"}]`.
 - `backend/services/token_tracking.py` — Append-only JSONL usage log with per-day and all-time aggregation helpers; records `provider="ollama"` and `model` per entry. `cost_estimate` is invariantly `0.0` — there is no inference cost on local models.
 - `frontend/app/composables/useWebSocket.ts` — Persistent WebSocket with bidirectional ping/pong heartbeat, stale-socket detection on send (force-reconnect with frame queueing), exponential-backoff reconnect for involuntary closes, and multi-listener message dispatch
 - `frontend/app/composables/useChat.ts` — Conversation state manager; maps raw WebSocket events to UI state; handles retry logic
@@ -283,13 +281,12 @@ Tools are defined in the `tools/` package: schemas in `definitions.py` (the expo
 | `save_preference` | `rule` | Persists a user behavior rule to `memory/preferences/` |
 | `query_graph` | `entity` | Traverses the knowledge graph from an entity up to `depth` hops |
 | `ingest_url` | `url` | Fetches a YouTube transcript or web article and saves it to memory |
-| `web_search` | `query` | DuckDuckGo HTML search; returns up to 5 `{title, url, snippet}` hits |
+
+Per [ADR 020](../architecture/decisions/020-web-search-dropped-v1.md) v1 has no `web_search` tool — when local notes don't cover a question, the model answers from training data alone or says it doesn't know. The `ingest_url` tool remains for user-pasted URLs (a different surface — user-initiated, content-specific) and is gated by the `url_ingest_enabled` privacy toggle.
 
 The Jira-aware tools (`jira_list_issues`, `jira_describe_issue`, `jira_blockers_of`, `jira_depends_on`, `jira_sprint_risk`, `jira_cluster_by_topic`) are also dispatched from `executor.py` but live in `tools/jira_tools.py` — they are documented under [jira-strategist.md](jira-strategist.md).
 
 All `path` values are relative to `memory/`. Tool errors are caught and returned as strings rather than exceptions, so Claude receives the error text and can decide how to respond.
-
-`web_search` is gated by the privacy kill-switch in `services/privacy.py`: when offline mode is on or the per-feature toggle is off, the tool returns a single `{"error": "..."}` entry instead of calling DuckDuckGo, so Claude sees the block reason and can fall back to local search. See [preferences-settings.md](preferences-settings.md) for the privacy layer.
 
 ### `useChat` composable interface
 

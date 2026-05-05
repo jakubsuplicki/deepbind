@@ -142,14 +142,6 @@ async def execute_tool(
             session_service.record_note_access(session_id, result["path"])
         return json.dumps(result)
 
-    if name == "web_search":
-        from services.web_search import web_search
-        results = await web_search(
-            tool_input["query"],
-            max_results=tool_input.get("max_results", 5),
-        )
-        return json.dumps(results)
-
     # ── Jira tools ────────────────────────────────────────────────────
     if name == "jira_list_issues":
         return json.dumps(await jira_list_issues(tool_input, workspace_path))

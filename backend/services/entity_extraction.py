@@ -70,7 +70,7 @@ _SPACY_SKIP = frozenset({
 # Patterns that look like person names but are actually markdown/tool artifacts
 _JUNK_NAME_RE = re.compile(
     r'^(search_notes|read_note|write_note|append_note|create_plan|update_plan|'
-    r'query_graph|web_search|save_preference|create_specialist|'
+    r'query_graph|save_preference|create_specialist|'
     r'have connections?|mind for|Related Notes|Conversation)$',
     re.I,
 )

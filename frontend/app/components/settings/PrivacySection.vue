@@ -26,7 +26,7 @@
     <p class="settings-page__hint">
       Control which outbound network calls Jarvis is allowed to make.
       All AI runs locally via Ollama and is <strong>never</strong> blocked —
-      these toggles only gate optional network features (web search, URL ingest).
+      these toggles only gate optional network features (URL ingest).
     </p>
 
     <!-- Master switch -->
@@ -41,7 +41,7 @@
         <span class="privacy-toggle__main">
           <strong>Offline mode</strong>
           <span class="privacy-toggle__sub">
-            Hard-block every outbound integration: web search, URL ingest.
+            Hard-block every outbound integration: URL ingest.
             Local Ollama is unaffected.
           </span>
         </span>
@@ -50,24 +50,6 @@
         <Icon name="ph:lock-key-fill" class="icon--sm icon--muted privacy-locked-note__icon" />
         Locked by <code>JARVIS_OFFLINE_MODE</code> environment variable.
       </p>
-    </div>
-
-    <div class="privacy-row" :class="{ 'privacy-row--disabled': privacy?.offline_mode }">
-      <label class="privacy-toggle">
-        <input
-          type="checkbox"
-          :checked="!!privacy?.web_search_enabled"
-          :disabled="privacy?.offline_mode || saving"
-          @change="onSet('web_search_enabled', ($event.target as HTMLInputElement).checked)"
-        />
-        <span class="privacy-toggle__main">
-          <strong>Allow web search</strong>
-          <span class="privacy-toggle__sub">
-            DuckDuckGo. Sends the search query (not your notes) when the assistant uses
-            the web_search tool.
-          </span>
-        </span>
-      </label>
     </div>
 
     <div class="privacy-row" :class="{ 'privacy-row--disabled': privacy?.offline_mode }">

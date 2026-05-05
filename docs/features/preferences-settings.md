@@ -52,17 +52,17 @@ Voice toggles (`auto_speak`, `tts_voice`) are stored as regular preference entri
 
 ### Privacy kill-switches
 
-[`services/privacy.py`](../../backend/services/privacy.py) is the single source of truth for "is this outbound network call allowed?" — every feature that touches the public internet (web search, URL ingest) consults this module. The model has three layers, in priority order:
+[`services/privacy.py`](../../backend/services/privacy.py) is the single source of truth for "is this outbound network call allowed?" — every feature that touches the public internet (URL ingest) consults this module. The model has three layers, in priority order:
 
 1. **`JARVIS_OFFLINE_MODE` environment variable.** Hard lock. When set to `1`/`true`/`yes`/`on`, every outbound integration is blocked and the UI cannot override it. The settings page receives `offline_mode_locked: true` and disables the master toggle.
-2. **`privacy_offline_mode` preference.** User-controlled master toggle. When on, all per-feature toggles are forced off regardless of their stored value — flipping one switch is one click rather than two.
-3. **Per-feature preferences:** `privacy_web_search_enabled`, `privacy_url_ingest_enabled`. Default `true` so existing users see no behavioural change; the kill-switches are opt-in protections.
+2. **`privacy_offline_mode` preference.** User-controlled master toggle. When on, the per-feature toggle is forced off regardless of its stored value — flipping one switch is one click rather than two.
+3. **Per-feature preferences:** `privacy_url_ingest_enabled`. Default `true`; the kill-switch is an opt-in protection. (Per [ADR 020](../architecture/decisions/020-web-search-dropped-v1.md), v1 has no web-search tool, so the previous `privacy_web_search_enabled` toggle was removed.)
 
 Local Ollama, embeddings, and the cross-encoder reranker are **never gated** — they run on this machine. There is no `cloud_providers_enabled` toggle: the bundle structurally cannot make cloud LLM calls (ADR 015 §F audit signal).
 
 `get_privacy_settings()` returns the *effective* state (offline-mode-aware), not the raw preferences. Callers should always go through this helper rather than reading `privacy_*` preferences directly. `update_privacy_settings()` is the only sanctioned write path: it rejects unknown keys and refuses to disable offline mode while the env-var lock is engaged (raises `PrivacyBlockedError`).
 
-When a feature is blocked, callers must surface the reason rather than silently failing — `web_search.py` returns `[{"error": "Web search is blocked because Offline Mode is enabled."}]` so the model sees the message and can fall back to local search.
+When a feature is blocked, callers must surface the reason rather than silently failing — `services/url_ingest.py` returns a structured error so the model sees the block reason and can explain it to the user.
 
 ### Token usage tracking (telemetry only)
 
@@ -128,7 +128,7 @@ The section now defaults open (`:default-open="true"`) since it is the primary c
 - [`backend/routers/preferences.py`](../../backend/routers/preferences.py) — CRUD endpoints for arbitrary key/value preferences; used by composables and internal services.
 - [`backend/routers/settings.py`](../../backend/routers/settings.py) — Aggregated settings view, voice update, privacy CRUD, retrieval graph-expansion CRUD, lightweight-mode CRUD, token-usage read-only endpoints.
 - [`backend/services/preference_service.py`](../../backend/services/preference_service.py) — Reads, writes, and deletes entries in `preferences.json`; provides `format_for_prompt()` for system-prompt injection.
-- [`backend/services/privacy.py`](../../backend/services/privacy.py) — Central privacy / network kill-switches. `get_privacy_settings()` resolves env lock + master toggle + per-feature flags into an effective state; `web_search_enabled()` / `url_ingest_enabled()` gate every outbound integration.
+- [`backend/services/privacy.py`](../../backend/services/privacy.py) — Central privacy / network kill-switches. `get_privacy_settings()` resolves env lock + master toggle + per-feature flag into an effective state; `url_ingest_enabled()` gates the only remaining outbound integration (web search was removed per ADR 020).
 - [`backend/services/token_tracking.py`](../../backend/services/token_tracking.py) — JSONL-based token-usage logging plus daily / all-time aggregation. Cost field is structurally zero; budget gate is unwired.
 - [`backend/config.py`](../../backend/config.py) — Pydantic-settings `Settings` model with `JARVIS_`-prefixed env-var support and `.env` file bootstrap; singleton via `lru_cache`.
 - [`frontend/app/pages/settings.vue`](../../frontend/app/pages/settings.vue) — Thin shell composing one section per concern.
@@ -172,12 +172,11 @@ Returns 422 if any key in the body is not in the allowed set (`{auto_speak, tts_
 {
   offline_mode: boolean
   offline_mode_locked: boolean       // true when JARVIS_OFFLINE_MODE env var is set
-  web_search_enabled: boolean
   url_ingest_enabled: boolean
 }
 
 // PATCH body — any subset of:
-{ offline_mode?: boolean, web_search_enabled?: boolean, url_ingest_enabled?: boolean }
+{ offline_mode?: boolean, url_ingest_enabled?: boolean }
 ```
 
 PATCH returns 409 with a `PrivacyBlockedError` message if the user attempts to disable offline mode while the env-var lock is engaged. Returns 422 for unknown keys or non-boolean values.

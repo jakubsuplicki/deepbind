@@ -736,8 +736,9 @@ async def _handle_message(
 ) -> None:
     # ADR 015 — `api_key` is unused by the dispatcher (single target, no
     # auth). Resolved here only because tool execution still threads it
-    # through (some tools may want the cloud key when present, e.g. for
-    # the legacy `web_search` shape); blank when absent.
+    # through; blank when absent. (Per ADR 020 the v1 tool surface has
+    # no outbound-key consumers; the parameter remains for forward-compat
+    # with future tools that may need credentials.)
     api_key = client_api_key or get_api_key() or ""
 
     # Per-step latency probe (TEMPORARY) — investigation of build #5 turn 2
