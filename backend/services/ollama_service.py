@@ -155,14 +155,16 @@ class ModelCatalogEntry(BaseModel):
     # explicit id is the difference between accurate budgets in Polish/Chinese
     # vs ~30% drift on non-English content (ADR 009 driver §3).
     tokenizer_id: Optional[str] = None
-    # ADR 005 §A — license metadata. Apache-2.0 / MIT entries pass the
-    # catalog discipline rule; "non-permissive" (Gemma TOU, Mistral Research
-    # License, Llama community license, etc.) entries are flagged here for
-    # the eventual picker-side filter. Today the field is metadata-only:
-    # filtering is enforced by `internal=True` on non-permissive entries.
-    # The license-driven filter graduates in a follow-up cleanup chunk that
-    # rewrites the catalog tests against ADR 005 §A's permissive-only set.
-    license: Literal["Apache-2.0", "MIT", "non-permissive"] = "Apache-2.0"
+    # ADR 005 §A — license metadata. The catalog is permissive-only by type:
+    # only Apache-2.0 / MIT entries are constructible. Non-permissive families
+    # (Gemma Terms of Use, Mistral Research License, Llama community license,
+    # DeepSeek custom, etc.) are not part of the v1 catalog and adding one
+    # here is a type-check error — the cleanup chunk that landed 2026-05-05
+    # removed the four non-permissive entries (gemma4-e4b, gemma4-26b-a4b,
+    # ministral-3-8b, devstral-small-2-24b) and narrowed this Literal so a
+    # future PR can't reintroduce them by reflex. See audit finding #6 in
+    # docs/research/commercial-licensing-audit.md.
+    license: Literal["Apache-2.0", "MIT"] = "Apache-2.0"
     # ADR 005 §C — per-tier downgrade ladder slot. Maps tier letter ("A"/"B"/"C")
     # → integer position where smaller = closer to the floor (e.g. position 1 is
     # the smallest already-installed model, position 4 is the opt-in ceiling).
@@ -347,84 +349,18 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         first_run_default_tiers=["A"],
         ladder_positions={"A": 2, "B": 2, "C": 2},
     ),
-    ModelCatalogEntry(
-        id="ministral-3-8b",
-        preset="long-docs",
-        ollama_model="ministral-3:8b",
-        label="Ministral 3 8B",
-        download_size_gb=6.0,
-        context_window="256K",
-        context_tokens=262144,
-        recommended_ram_min_gb=16,
-        recommended_ram_max_gb=32,
-        min_disk_gb=11,
-        cpu_friendly=True,
-        gpu_preferred=True,
-        strengths=["long context", "documents", "edge deployment"],
-        best_for=["long documents", "big context windows", "research"],
-        native_tools=False,
-        bytes_per_kv_token=3072,
-        attention_arch="transformer",
-        # Ministral-3 advertises 256K native; conservative RULER-safe ceiling.
-        effective_context_tokens=65536,
-        tokenizer_id="mistralai/Ministral-3-8B",
-        # ADR 005 §A — Mistral Research License is non-permissive (research +
-        # eval only; commercial use requires a paid Mistral license). Today
-        # this is metadata only; the picker-side license filter and entry
-        # removal land in a follow-up ADR-aligned cleanup chunk.
-        license="non-permissive",
-    ),
-    ModelCatalogEntry(
-        id="gemma4-e4b",
-        preset="reasoning",
-        ollama_model="gemma4:e4b",
-        label="Gemma 4 E4B",
-        download_size_gb=9.6,
-        context_window="128K",
-        context_tokens=131072,
-        recommended_ram_min_gb=24,
-        recommended_ram_max_gb=40,
-        min_disk_gb=16,
-        cpu_friendly=False,
-        gpu_preferred=True,
-        strengths=["reasoning", "agentic", "multimodal"],
-        best_for=["reasoning tasks", "agentic workflows", "analysis"],
-        native_tools=True,
-        bytes_per_kv_token=1024,
-        attention_arch="swa",
-        # SWA degrades faster on long context (research-1 §SWA) — half the
-        # advertised 128K, not the full window.
-        effective_context_tokens=65536,
-        tokenizer_id="google/gemma-4-e4b",
-        # ADR 005 §A — Gemma Terms of Use are non-permissive (flow-down
-        # restrictions on derivative deployment). Metadata-only today; picker
-        # filter + removal in a follow-up ADR-aligned cleanup.
-        license="non-permissive",
-    ),
-    ModelCatalogEntry(
-        id="devstral-small-2-24b",
-        preset="code",
-        ollama_model="devstral-small-2:24b",
-        label="Devstral Small 2 24B",
-        download_size_gb=15.0,
-        context_window="256K",
-        context_tokens=262144,
-        recommended_ram_min_gb=32,
-        recommended_ram_max_gb=64,
-        min_disk_gb=22,
-        cpu_friendly=False,
-        gpu_preferred=True,
-        strengths=["coding", "repo exploration", "multi-file edits", "384K via RoPE extension"],
-        best_for=["code generation", "software engineering", "repo work"],
-        native_tools=True,
-        bytes_per_kv_token=5120,
-        attention_arch="transformer",
-        # 256K advertised; RULER-safe at the dense-transformer scale ~64K.
-        effective_context_tokens=65536,
-        tokenizer_id="mistralai/Devstral-Small-2-24B-2507",
-        # ADR 005 §A — Mistral Research License (same caveat as ministral-3-8b).
-        license="non-permissive",
-    ),
+    # ──────────────────────────────────────────────────────────────────────
+    # Catalog cleanup 2026-05-05 — four entries removed under audit finding #6:
+    #   - ministral-3-8b (Mistral Research License — research/eval only)
+    #   - gemma4-e4b (Gemma Terms of Use — flow-down restrictions)
+    #   - devstral-small-2-24b (Mistral Research License)
+    #   - gemma4-26b-a4b (Gemma Terms of Use)
+    # All four were "non-permissive" license entries that ADR 005 §A's catalog-
+    # discipline rule prohibits in a commercial bundle. The narrowed
+    # `license: Literal["Apache-2.0", "MIT"]` type on ModelCatalogEntry now
+    # rejects re-introduction at construction time. See ADR 005 §A "License
+    # purity" and docs/research/commercial-licensing-audit.md finding #6.
+    # ──────────────────────────────────────────────────────────────────────
     # ──────────────────────────────────────────────────────────────────────
     # Entries below carry `internal=True` because their Ollama registry tags
     # have NOT been verified against `ollama.com/library/<name>`. The user-
@@ -433,35 +369,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
     # requires verifying the tag via `ollama pull <tag>` against the live registry,
     # then flipping `internal=False`.
     # ──────────────────────────────────────────────────────────────────────
-    ModelCatalogEntry(
-        # TODO: verify Ollama tag — was previously `gemma4:26b` with the wrong
-        # "Gemma 4 27B" label (which doesn't exist). The actual variant is
-        # 26B-A4B MoE per SELF-CONTAINED-APP-REVIEW.md §3; tag form on Ollama
-        # is unverified.
-        id="gemma4-26b-a4b",
-        preset="best-local",
-        ollama_model="gemma4:26b-a4b",
-        label="Gemma 4 26B-A4B",
-        download_size_gb=15.0,
-        context_window="256K",
-        context_tokens=262144,
-        recommended_ram_min_gb=24,
-        recommended_ram_max_gb=48,
-        min_disk_gb=22,
-        cpu_friendly=False,
-        gpu_preferred=True,
-        strengths=["MoE", "reasoning", "generalist", "multimodal", "fast for size"],
-        best_for=["best quality", "complex tasks", "premium local"],
-        native_tools=True,
-        internal=True,
-        bytes_per_kv_token=1536,
-        attention_arch="swa",
-        # SWA at MoE 26B/4B-active scale; conservative half-window ceiling.
-        effective_context_tokens=65536,
-        tokenizer_id="google/gemma-4-26b-a4b",
-        # ADR 005 §A — Gemma Terms of Use are non-permissive.
-        license="non-permissive",
-    ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — Qwen3 -2507 split fine-tunes use various
         # naming conventions across registries.

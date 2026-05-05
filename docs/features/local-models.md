@@ -45,9 +45,9 @@ Run Jarvis with on-device AI via Ollama — no API key required.
 
 Per [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md), Ollama is the **only** chat-dispatch target — there is no multi-provider abstraction, no LiteLLM, and no cloud SDKs in the codebase. This feature owns the full local stack: hardware detection, a curated catalog of model presets with hardware-based recommendations, the [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py) that streams `ollama.AsyncClient` events into the router's `StreamEvent` shape, model download with streaming progress, tool-calling mode detection per model, runtime health monitoring with reconnection flow, and slow response indicators.
 
-The catalog is split into two layers: **user-pickable chat models** (6 entries with verified Ollama tags) and **internal entries** (9 entries — Qwen3-2507 split fine-tunes, Qwen3-14B, Qwen3-30B-A3B-Thinking-2507, gpt-oss-120b, Gemma 4 26B-A4B, Granite 4.0 H-Micro/H-Tiny/H-Small — all carry `internal=True` because their Ollama registry tags are unverified). The user-facing endpoint filters internal entries out so a stale-tag pull never 404s the customer; callers that need the full universe (e.g. footprint planning, ADR 005 first-run policy, downgrade ladder lookup) pass `build_catalog(include_internal=True)`. Each internal entry carries a `TODO: verify Ollama tag` comment marking the verification gap; promotion to user-pickable requires `ollama pull <tag>` against the live registry, then flipping `internal=False`.
+The catalog is split into two layers: **user-pickable chat models** (3 entries with verified Ollama tags — `qwen3-1.7b`, `qwen3-4b`, `qwen3-8b`) and **internal entries** (8 entries — Qwen3-2507 split fine-tunes, Qwen3-14B, Qwen3-30B-A3B-Instruct-2507, Qwen3-30B-A3B-Thinking-2507, gpt-oss-120b, Granite 4.0 H-Micro/H-Tiny/H-Small — all carry `internal=True` because their Ollama registry tags are unverified). The user-facing endpoint filters internal entries out so a stale-tag pull never 404s the customer; callers that need the full universe (e.g. footprint planning, ADR 005 first-run policy, downgrade ladder lookup) pass `build_catalog(include_internal=True)`. Each internal entry carries a `TODO: verify Ollama tag` comment marking the verification gap; promotion to user-pickable requires `ollama pull <tag>` against the live registry, then flipping `internal=False`.
 
-[ADR 005](../architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md) layers a license filter on top: every entry carries a `license: Literal["Apache-2.0", "MIT", "non-permissive"]` field. Apache-2.0 / MIT entries pass the catalog-discipline rule; the four non-permissive entries (Gemma 4 e4b/26b — Gemma TOU; ministral-3-8b + devstral-small-2-24b — Mistral Research License) are flagged for an upcoming ADR-aligned cleanup. The license field is metadata only today; picker-side filtering and entry removal land in a follow-up cleanup chunk.
+[ADR 005](../architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md) §A's catalog-discipline rule says only Apache-2.0 / MIT entries belong in the v1 bundle. The `license` field on each entry is typed `Literal["Apache-2.0", "MIT"]` so non-permissive licenses are rejected at construction time — adding a Mistral Research License or Gemma Terms-of-Use entry is a Pydantic validation error, not a runtime metadata flag. The 2026-05-05 cleanup (audit finding #6) deleted the four entries that had been carrying `license="non-permissive"` as placeholder metadata: `ministral-3-8b` + `devstral-small-2-24b` (Mistral Research License — research/eval only, paid commercial license required) and `gemma4-e4b` + `gemma4-26b-a4b` (Gemma Terms of Use — flow-down restrictions on derivative deployment). Coding workloads that previously routed to the `code` preset (devstral) now route through `balanced` / `best-local` against `qwen3-30b-a3b-instruct-2507` or `granite-4-h-small`.
 
 ## How It Works
 
@@ -81,30 +81,28 @@ This protects local-model routes against partial SSRF patterns reported by stati
 
 The catalog covers the spectrum from weak laptops to workstations across eight presets (`fast`, `everyday`, `balanced`, `long-docs`, `reasoning`, `code`, `best-local`, `plumbing`). Context windows below are the model's *native* context — RoPE / YaRN-extended ranges are listed in `strengths`, not in `context_window`.
 
-**User-pickable chat models** (6 — all with verified Ollama tags):
+**User-pickable chat models** (3 — all with verified Ollama tags, all Apache-2.0):
 
 | Preset | Model | Size | Native Context | Best RAM | Notes |
 |--------|-------|------|---------------|----------|-------|
 | Fast | qwen3:1.7b | 1.4 GB | 32K | 8–16 GB | 128K via YaRN |
 | Everyday | qwen3:4b | 2.5 GB | 32K | 12–24 GB | 128K via YaRN |
 | Balanced | qwen3:8b | 5.2 GB | 32K | 16–32 GB | 128K via YaRN |
-| Long Docs | ministral-3:8b | 6.0 GB | 256K | 16–32 GB | |
-| Reasoning | gemma4:e4b | 9.6 GB | 128K | 24–40 GB | |
-| Code | devstral-small-2:24b | 15 GB | 256K | 32–64 GB | 384K via RoPE extension |
 
-**Internal entries** (9 — present in catalog, filtered from user picker until Ollama tag verified):
+**Internal entries** (8 — present in catalog, filtered from user picker until Ollama tag verified, all Apache-2.0):
 
-| Preset | Model | Size | Native Context | Best RAM | License | Role / Status |
-|--------|-------|------|---------------|----------|---------|---------------|
-| Best Local | gemma4:26b-a4b | 15 GB | 256K | 24–48 GB | non-permissive | 26B-A4B MoE (Gemma TOU — slated for removal in license cleanup) |
-| Long Docs | qwen3:4b-instruct-2507 | 2.6 GB | 256K | 12–24 GB | Apache-2.0 | ADR 005 Tier A downgrade-ladder target — tag unverified |
-| Balanced | qwen3:14b | 9.0 GB | 32K | 24–32 GB | Apache-2.0 | best dense Qwen3 for 24 GB unified memory — tag unverified |
-| Best Local | qwen3:30b-a3b-instruct-2507 | 18 GB | 256K | 24–48 GB | Apache-2.0 | ADR 005 Tier B first-run primary — tag unverified |
-| Reasoning | qwen3:30b-a3b-thinking-2507 | 18 GB | 256K | 24–48 GB | Apache-2.0 | ADR 005 Tier B reasoning primary (duel-mode opt-in) — tag unverified |
-| Best Local | gpt-oss:120b | 63 GB | 128K | 80–128 GB | Apache-2.0 | ADR 005 Tier C first-run primary (single H100 / 96+ GB unified) — tag unverified |
-| Plumbing | granite4:h-micro | 2.0 GB | 32K | 8–16 GB | Apache-2.0 | always-on classifier (ISO-42001 certified) — tag unverified |
-| Plumbing | granite4:h-tiny | 4.0 GB | 128K | 12–24 GB | Apache-2.0 | ADR 005 Tier B opt-in plumbing upgrade — tag unverified |
-| Plumbing | granite4:h-small | 18 GB | 128K | 32–48 GB | Apache-2.0 | dispatcher top-tier (tool-capable) — tag unverified |
+| Preset | Model | Size | Native Context | Best RAM | Role / Status |
+|--------|-------|------|---------------|----------|---------------|
+| Long Docs | qwen3:4b-instruct-2507 | 2.6 GB | 256K | 12–24 GB | ADR 005 Tier A downgrade-ladder target — tag unverified |
+| Balanced | qwen3:14b | 9.0 GB | 32K | 24–32 GB | best dense Qwen3 for 24 GB unified memory — tag unverified |
+| Best Local | qwen3:30b-a3b-instruct-2507 | 18 GB | 256K | 24–48 GB | ADR 005 Tier B first-run primary — tag unverified |
+| Reasoning | qwen3:30b-a3b-thinking-2507 | 18 GB | 256K | 24–48 GB | ADR 005 Tier B reasoning primary (duel-mode opt-in) — tag unverified |
+| Best Local | gpt-oss:120b | 63 GB | 128K | 80–128 GB | ADR 005 Tier C first-run primary (single H100 / 96+ GB unified) — tag unverified |
+| Plumbing | granite4:h-micro | 2.0 GB | 32K | 8–16 GB | always-on classifier (ISO-42001 certified) — tag unverified |
+| Plumbing | granite4:h-tiny | 4.0 GB | 128K | 12–24 GB | ADR 005 Tier B opt-in plumbing upgrade — tag unverified |
+| Plumbing | granite4:h-small | 18 GB | 128K | 32–48 GB | dispatcher top-tier (tool-capable) — tag unverified |
+
+**Removed 2026-05-05** (audit finding #6, ADR 005 §A): `ministral-3:8b` and `devstral-small-2:24b` (Mistral Research License — research/eval only) and `gemma4:e4b` and `gemma4:26b-a4b` (Gemma Terms of Use — flow-down derivative restrictions). The narrowed `license: Literal["Apache-2.0", "MIT"]` type on `ModelCatalogEntry` rejects re-introduction at construction time.
 
 Each internal entry carries a `TODO: verify Ollama tag` comment in [`ollama_service.py`](../../backend/services/ollama_service.py). Promotion to user-pickable requires verifying the tag against `https://ollama.com/library/<name>`, then flipping `internal=False`.
 
@@ -123,7 +121,7 @@ Two catalog fields feed the future memory-pressure auto-downgrade — when free 
 
 [ADR 005](../architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md) layers a tier model onto the catalog. Each entry has up to three new tier-related fields:
 
-- `license: Literal["Apache-2.0", "MIT", "non-permissive"]` — catalog discipline gate per ADR §A.
+- `license: Literal["Apache-2.0", "MIT"]` — catalog discipline gate per ADR §A. Non-permissive families (Gemma TOU, Mistral Research, Llama community, etc.) are rejected at construction time. The 2026-05-05 cleanup narrowed this from a three-value `Literal` (which had carried `"non-permissive"` as transitional metadata) to the permissive-only pair.
 - `first_run_default_tiers: List[str]` — the tiers (subset of `{"A", "B", "C"}`) where this entry is the first-run primary the orchestrator pulls in the foreground on first launch.
 - `ladder_positions: Dict[str, int]` — per-tier downgrade-ladder slot. Smaller integer = closer to the floor (refuse-with-error, position 0). An entry not present in `ladder_positions` for a tier is not on that tier's ladder.
 
@@ -266,8 +264,8 @@ Pick the largest passing model. Persist the choice. Re-run on Ollama / OS / hard
 ### Tool Calling Mode
 
 Each model gets a `tool_mode` classification consumed by the [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py):
-- **`native_qwen3`** — model exposes native function-calling in the Qwen3 family format (e.g. qwen3:8b, qwen3:14b, qwen3:30b-a3b-instruct-2507, gemma4 variants, devstral). The dispatcher passes the tool spec straight to `ollama.AsyncClient.chat(tools=…)` and consumes `tool_calls` chunks from the stream.
-- **`adapted`** — small models (e.g. qwen3:4b, ministral-3:8b) that handle tool calls via JSON-mode prompting; the dispatcher wraps the tool spec into the system prompt and parses the model's JSON output back into a synthetic `tool_use` block.
+- **`native_qwen3`** — model exposes native function-calling in the Qwen3 family format (e.g. qwen3:8b, qwen3:14b, qwen3:30b-a3b-instruct-2507, qwen3:30b-a3b-thinking-2507, gpt-oss:120b, granite4:h-small). The dispatcher passes the tool spec straight to `ollama.AsyncClient.chat(tools=…)` and consumes `tool_calls` chunks from the stream.
+- **`adapted`** — small/mid-size models (e.g. qwen3:4b, granite4:h-micro, granite4:h-tiny) that handle tool calls via JSON-mode prompting; the dispatcher wraps the tool spec into the system prompt and parses the model's JSON output back into a synthetic `tool_use` block.
 - **`excluded_from_tools`** — very small models (< 2 GB) that don't reliably tool-call (e.g. qwen3:1.7b). The dispatcher refuses to attach tools at all.
 
 `_tool_mode_for()` derives tool_mode from the catalog entry's `native_tools` flag and `download_size_gb`. Ollama's wire format does not carry tool-call ids (only `function.name` + `function.arguments`); the dispatcher synthesizes a stable id per tool call at emit time so downstream `tool_use` ↔ `tool_result` correlation stays intact.

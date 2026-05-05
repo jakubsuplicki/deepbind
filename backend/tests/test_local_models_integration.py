@@ -49,7 +49,10 @@ class TestToolMode:
             os="macos", arch="arm64", total_ram_gb=32.0, free_disk_gb=100.0,
             cpu_cores=10, gpu_vendor="apple", is_apple_silicon=True, tier="strong",
         )
-        model = get_model_by_id("ministral-3-8b")
+        # qwen3-4b is the surviving "adapted" tool-mode entry (native_tools=False
+        # + download_size_gb >= 2.0). Was ministral-3-8b before the 2026-05-05
+        # catalog cleanup removed Mistral Research License entries.
+        model = get_model_by_id("qwen3-4b")
         rec = score_model(model, hw, [])
         assert rec.tool_mode == "adapted"
 

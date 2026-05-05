@@ -65,15 +65,19 @@ class TestScoreModel:
         from services.ollama_service import score_model, get_model_by_id
 
         hw = self._make_hw(ram=16.0, gpu=None, apple_silicon=False)
-        model = get_model_by_id("gemma4-26b-a4b")
+        # 18 GB / 24–48 GB RAM model on a 16 GB CPU box is the canonical
+        # "won't fit comfortably" case — was gemma4-26b-a4b before the
+        # 2026-05-05 catalog cleanup; qwen3-30b-a3b-instruct-2507 has the
+        # same compatibility shape and is the surviving Tier B primary.
+        model = get_model_by_id("qwen3-30b-a3b-instruct-2507")
         rec = score_model(model, hw, [])
         assert rec.compatibility in ("warning", "unsupported")
 
     def test_unsupported_not_enough_disk(self):
         from services.ollama_service import score_model, get_model_by_id
 
-        hw = self._make_hw(ram=64.0, disk=5.0)  # 5 GB disk, model needs 18 GB
-        model = get_model_by_id("gemma4-26b-a4b")
+        hw = self._make_hw(ram=64.0, disk=5.0)  # 5 GB disk, model needs 26 GB
+        model = get_model_by_id("qwen3-30b-a3b-instruct-2507")
         rec = score_model(model, hw, [])
         assert rec.compatibility == "unsupported"
         assert rec.score == 0
@@ -148,7 +152,6 @@ class TestRecommendTop3:
 
         ids = {m.model_id for m in catalog}
         for internal_id in (
-            "gemma4-26b-a4b",
             "qwen3-4b-instruct-2507",
             "qwen3-14b",
             "qwen3-30b-a3b-instruct-2507",
@@ -175,7 +178,7 @@ class TestRecommendTop3:
         # test_internal_models_marked at the catalog layer)
         assert "granite-4-h-micro" in ids
         assert "qwen3-30b-a3b-instruct-2507" in ids
-        assert "gemma4-26b-a4b" in ids
+        assert "qwen3-30b-a3b-thinking-2507" in ids
 
 
 # ── ADR 005 — Tier-for-hardware mapping ─────────────────────────────────────
@@ -339,16 +342,29 @@ class TestCatalogLicenseAnnotation:
         # gpt-oss is OpenAI's Apache 2.0 release; license filter must pass it.
         assert get_model_by_id("gpt-oss-120b").license == "Apache-2.0"
 
-    def test_gemma_and_mistral_entries_marked_non_permissive(self):
+    def test_no_non_permissive_entries(self):
+        # ADR 005 §A — catalog-discipline rule: only Apache-2.0 / MIT entries
+        # are allowed in the v1 bundle. The Literal type on
+        # ModelCatalogEntry.license already rejects "non-permissive" at
+        # construction time; this runtime assertion is the redundant guard
+        # that catches metadata drift in case a future PR widens the type.
         from services.ollama_service import MODEL_CATALOG
-        non_permissive_expected = {
-            "gemma4-e4b", "gemma4-26b-a4b",  # Gemma TOU
-            "ministral-3-8b", "devstral-small-2-24b",  # Mistral Research License
-        }
         for entry in MODEL_CATALOG:
-            if entry.id in non_permissive_expected:
-                assert entry.license == "non-permissive", \
-                    f"{entry.id} should be non-permissive per ADR 005 §A"
+            assert entry.license in ("Apache-2.0", "MIT"), \
+                f"{entry.id} has non-permissive license {entry.license!r} — " \
+                f"violates ADR 005 §A catalog-discipline rule"
+
+    def test_removed_non_permissive_ids_stay_removed(self):
+        # Catalog cleanup 2026-05-05 (audit finding #6) deleted these four
+        # entries (Mistral Research License + Gemma Terms of Use). Re-adding
+        # any of them is a regression — guard it explicitly so a future PR
+        # that "just adds the model back" trips this test, not a buyer's
+        # legal review.
+        from services.ollama_service import get_model_by_id
+        for stale_id in ("ministral-3-8b", "gemma4-e4b",
+                         "devstral-small-2-24b", "gemma4-26b-a4b"):
+            assert get_model_by_id(stale_id) is None, \
+                f"{stale_id} reintroduced — see audit finding #6 / ADR 005 §A"
 
 
 # ── Hardware Probe ───────────────────────────────────────────────────────────
@@ -538,15 +554,22 @@ class TestModelCatalog:
 
         # Lower bound — checks for accidental removal. Adding entries is fine
         # without breaking this test; per-id presence checks below cover the
-        # specific entries that must be present.
+        # specific entries that must be present. Bound dropped from 13 → 11
+        # on 2026-05-05 when the four non-permissive entries were removed
+        # under audit finding #6.
         catalog = get_catalog()
-        assert len(catalog) >= 13
+        assert len(catalog) >= 11
 
     def test_all_presets_present(self):
         from services.ollama_service import get_catalog
 
         presets = {m.preset for m in get_catalog()}
-        expected_subset = {"fast", "everyday", "balanced", "long-docs", "reasoning", "code", "best-local", "plumbing"}
+        # "code" was the devstral-small-2-24b slot; the entry was removed
+        # under the 2026-05-05 catalog cleanup (Mistral Research License) and
+        # no Apache-2.0 / MIT replacement exists in the v1 catalog. Coding
+        # workloads route to qwen3-30b-a3b-instruct-2507 / granite-4-h-small
+        # via the balanced / best-local presets instead.
+        expected_subset = {"fast", "everyday", "balanced", "long-docs", "reasoning", "best-local", "plumbing"}
         assert expected_subset.issubset(presets)
 
     def test_internal_models_marked(self):
@@ -557,13 +580,14 @@ class TestModelCatalog:
         # tag verification per the catalog correctness pass.
         internal_ids = {m.id for m in get_catalog() if m.internal}
         expected_internal = {
-            "gemma4-26b-a4b",
             "qwen3-4b-instruct-2507",
             "qwen3-14b",
             "qwen3-30b-a3b-instruct-2507",
+            "qwen3-30b-a3b-thinking-2507",
             "granite-4-h-micro",
             "granite-4-h-tiny",
             "granite-4-h-small",
+            "gpt-oss-120b",
         }
         assert expected_internal.issubset(internal_ids)
 
@@ -575,11 +599,11 @@ class TestModelCatalog:
         assert get_model_by_id("qwen3-4b").context_tokens == 32768
         assert get_model_by_id("qwen3-8b").context_tokens == 32768
 
-    def test_devstral_native_context_corrected(self):
-        from services.ollama_service import get_model_by_id
-
-        # Pre-correction was 384K (RoPE-extended). Native is 256K.
-        assert get_model_by_id("devstral-small-2-24b").context_tokens == 262144
+    # `test_devstral_native_context_corrected` removed 2026-05-05 — devstral-small-2-24b
+    # was deleted from the catalog under audit finding #6 (Mistral Research License is
+    # non-permissive). Native-context regression coverage for the surviving long-context
+    # entries lives in `test_qwen3_30b_a3b_instruct_2507_present` (256K) and
+    # `test_qwen3_4b_instruct_2507_distinct_from_qwen3_4b` below.
 
     def test_qwen3_30b_a3b_instruct_2507_present(self):
         from services.ollama_service import get_model_by_id
@@ -752,7 +776,10 @@ class TestLocalModelsAPI:
         assert resp.status_code == 200
         data = resp.json()
         # Lower bound — internal entries (unverified Ollama tags) filtered out.
-        assert len(data) >= 6
+        # Was 6 before the 2026-05-05 catalog cleanup removed the three
+        # non-permissive non-internal entries (ministral-3-8b, gemma4-e4b,
+        # devstral-small-2-24b). Surviving user-pickable: qwen3-1.7b/4b/8b.
+        assert len(data) >= 3
         # Check that recommendations are scored
         for item in data:
             assert "compatibility" in item
@@ -762,7 +789,6 @@ class TestLocalModelsAPI:
         # No internal models leaked through to the user picker
         ids = {item["model_id"] for item in data}
         for internal_id in (
-            "gemma4-26b-a4b",
             "qwen3-4b-instruct-2507",
             "qwen3-14b",
             "qwen3-30b-a3b-instruct-2507",
