@@ -3,6 +3,8 @@
     id="sharpen"
     title="Sharpen with Local AI"
     section-class="sharpen-section"
+    icon="ph:sparkle"
+    icon-active="ph:sparkle-fill"
     :default-open="false"
   >
     <p class="sharpen-section__lead">

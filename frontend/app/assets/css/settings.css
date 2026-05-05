@@ -14,8 +14,16 @@
   width: 640px;
 }
 .settings-page__title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   font-size: 1.5rem;
   margin-bottom: 1.5rem;
+}
+.settings-page__title-icon {
+  font-size: 1.4rem;
+  color: var(--neon-cyan);
+  filter: drop-shadow(0 0 8px var(--neon-cyan-30));
 }
 .settings-page__section {
   margin-bottom: 1.5rem;
@@ -192,18 +200,25 @@
 }
 .settings-section__chevron {
   flex-shrink: 0;
-  width: 0.7rem;
-  height: 0.7rem;
-  border-right: 2px solid var(--text-secondary);
-  border-bottom: 2px solid var(--text-secondary);
-  transform: rotate(-45deg);
+  font-size: 14px;
+  color: var(--text-secondary);
   transition: transform 0.2s ease;
 }
 .settings-section--open > .settings-section__header .settings-section__chevron {
-  transform: rotate(45deg);
+  transform: rotate(90deg);
 }
 .settings-section--static > .settings-section__header {
   cursor: default;
+}
+.settings-section__icon {
+  flex-shrink: 0;
+  font-size: 18px;
+  color: var(--neon-cyan-60);
+  transition: color 0.2s ease, filter 0.2s ease;
+}
+.settings-section--open > .settings-section__header .settings-section__icon {
+  color: var(--neon-cyan);
+  filter: drop-shadow(0 0 6px var(--neon-cyan-30));
 }
 .settings-section__title {
   margin: 0;

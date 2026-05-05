@@ -1,6 +1,9 @@
 <template>
   <div class="settings-page">
-    <h1 class="settings-page__title">Settings</h1>
+    <h1 class="settings-page__title">
+      <Icon name="ph:gear-six-fill" class="settings-page__title-icon" aria-hidden="true" />
+      Settings
+    </h1>
 
     <!-- ADR 015 — single-target local-only stack: cloud-providers UI is gone. -->
 

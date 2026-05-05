@@ -3,6 +3,8 @@
     id="mcp"
     title="MCP Server"
     section-class="mcp-section"
+    icon="ph:plugs"
+    icon-active="ph:plugs-fill"
     :default-open="false"
   >
     <template #suffix>

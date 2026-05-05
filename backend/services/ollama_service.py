@@ -665,8 +665,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         min_disk_gb=26,
         cpu_friendly=False,
         gpu_preferred=True,
-        strengths=["MoE 30B/3B-active", "reasoning", "256K native", "duel-mode opt-in"],
-        best_for=["reasoning tasks", "duel mode", "complex analysis"],
+        strengths=["MoE 30B/3B-active", "reasoning", "256K native"],
+        best_for=["reasoning tasks", "complex analysis", "long-form planning"],
         native_tools=True,
         internal=True,
         bytes_per_kv_token=4096,
@@ -675,8 +675,8 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         effective_context_tokens=65536,
         tokenizer_id="Qwen/Qwen3-30B-A3B-Thinking-2507",
         license="Apache-2.0",
-        # ADR 005 §A — Tier B reasoning primary (duel-mode opt-in). Not on
-        # the conversational downgrade ladder; reasoning is a separate axis.
+        # ADR 005 §A — Tier B reasoning primary. Not on the conversational
+        # downgrade ladder; reasoning is a separate axis.
     ),
     ModelCatalogEntry(
         # TODO: verify Ollama tag — gpt-oss-120b is published on Ollama under

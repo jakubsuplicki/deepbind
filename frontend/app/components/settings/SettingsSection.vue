@@ -13,7 +13,18 @@
       @click="collapsible && toggle()"
     >
       <span class="settings-section__title-row">
-        <span v-if="collapsible" class="settings-section__chevron" aria-hidden="true" />
+        <Icon
+          v-if="collapsible"
+          name="ph:caret-right"
+          class="settings-section__chevron"
+          aria-hidden="true"
+        />
+        <Icon
+          v-if="icon"
+          :name="isOpen ? (iconActive ?? icon) : icon"
+          class="settings-section__icon"
+          aria-hidden="true"
+        />
         <h2 class="settings-page__section-title settings-section__title">{{ title }}</h2>
       </span>
       <span v-if="$slots.suffix" class="settings-section__suffix" @click.stop>
@@ -38,6 +49,10 @@ const props = withDefaults(defineProps<{
   sectionClass?: string
   /** When false, the section is always open and has no toggle UI. */
   collapsible?: boolean
+  /** Phosphor name for the section glyph (e.g. "ph:hard-drives"). */
+  icon?: string
+  /** Optional fill-weight name shown when the section is open. */
+  iconActive?: string
 }>(), {
   defaultOpen: true,
   sectionClass: '',

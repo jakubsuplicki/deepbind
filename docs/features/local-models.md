@@ -34,7 +34,7 @@ sources:
 	- frontend/app/types/index.ts
 depends_on: [chat, workspace-onboarding]
 last_reviewed: 2026-04-30
-last_updated: 2026-04-30
+last_updated: 2026-05-04
 ---
 
 # Local Models

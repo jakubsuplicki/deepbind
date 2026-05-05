@@ -3,6 +3,8 @@
     id="graph-expansion"
     title="Graph Expansion in Chat"
     section-class="graph-expansion-section"
+    icon="ph:share-network"
+    icon-active="ph:share-network-fill"
     :default-open="false"
   >
     <p class="settings-page__hint">

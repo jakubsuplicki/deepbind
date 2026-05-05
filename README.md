@@ -129,9 +129,6 @@ Run fully local with Ollama and downloadable models, or connect Anthropic, OpenA
 ### Specialists from the UI
 Create reusable roles — Weekly Planner, Health Guide, Study Coach, Research Assistant — directly from the interface. No prompt engineering required.
 
-### Duel Mode
-Pick a topic, pick two specialists. They debate. Jarvis judges. The outcome is saved back into memory. Structured argumentation that produces reusable outputs.
-
 ### Web search
 When local memory isn't enough, Jarvis searches the web via DuckDuckGo — no extra API keys needed.
 
@@ -193,7 +190,6 @@ The file is open — use it as-is or adapt it to your workflow.
 
 **Power features**
 - Specialist system with full UI wizard
-- Duel Mode — round-based debate with scored verdict
 - Web search via DuckDuckGo (no extra API key)
 - **Smart Connect quality loop** — vault-wide backfill, score breakdown per suggestion, event log, and dismissal stats
 - **Controlled graph expansion** in chat — one-hop expansion via confirmed `related` / `part_of` edges with token-budget cap (toggles in Settings → Retrieval)
@@ -240,10 +236,6 @@ People, projects, topics, and sources linked visually. Click any node to explore
 ### Specialists — custom roles, no code required
 Create focused advisors with their own knowledge, rules, and style. A Growth Strategist thinks differently than an Operations Advisor — and that's the point.
 ![Specialists](./docs/assets/specialists.png)
-
-### Duel Mode — structured debate that produces decisions
-Two specialists argue. Jarvis judges. The verdict, scores, and action items are saved to memory. Turn hard decisions into documented reasoning.
-![Duel](./docs/assets/duel.png)
 
 ### Settings — your setup, your control
 API keys, model selection, token budgets, workspace path. Everything stays local.
@@ -553,7 +545,7 @@ jarvis/
 ├── frontend/           # Nuxt 4 + Vue 3 + TypeScript
 │   ├── app/
 │   │   ├── components/ # UI components
-│   │   ├── composables/# State & logic (chat, duel, graph, voice…)
+│   │   ├── composables/# State & logic (chat, graph, voice…)
 │   │   └── pages/      # main, memory, graph, specialists, settings…
 │   └── tests/          # vitest suite
 ├── bootstrap/          # Zero-prereq installers (local runtime download)

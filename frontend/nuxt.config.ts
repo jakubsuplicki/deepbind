@@ -12,6 +12,9 @@ export default defineNuxtConfig({
   icon: {
     provider: 'iconify',
     serverBundle: false,
+    // Offline-first per ADR 014: every referenced icon is baked into the SPA
+    // bundle at build time; no runtime fetch to api.iconify.design.
+    fallbackToApi: false,
     clientBundle: {
       scan: true,
       includeCustomCollections: true,

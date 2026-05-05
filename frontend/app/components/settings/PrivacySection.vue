@@ -3,6 +3,8 @@
     id="privacy"
     title="Privacy & Network"
     section-class="privacy-section"
+    icon="ph:shield-check"
+    icon-active="ph:shield-check-fill"
     :default-open="false"
   >
     <template #suffix>

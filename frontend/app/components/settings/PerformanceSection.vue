@@ -3,11 +3,18 @@
     id="performance"
     title="Performance"
     section-class="performance-section"
+    icon="ph:gauge"
+    icon-active="ph:gauge-fill"
     :default-open="false"
   >
     <template #suffix>
       <span class="performance-badge" :class="{ 'performance-badge--active': enabled }">
-        {{ enabled ? '🪶 Lightweight mode active' : 'Auto' }}
+        <Icon
+          v-if="enabled"
+          name="ph:feather"
+          class="icon--sm icon--accent performance-badge__icon"
+        />
+        {{ enabled ? 'Lightweight mode active' : 'Auto' }}
       </span>
     </template>
 
@@ -70,6 +77,7 @@ onMounted(lightweight.load)
 .performance-badge {
   display: inline-flex;
   align-items: center;
+  gap: 0.3rem;
   padding: 0.18rem 0.55rem;
   border-radius: 999px;
   font-size: 0.7rem;
@@ -77,6 +85,9 @@ onMounted(lightweight.load)
   background: var(--bg-base);
   border: 1px solid var(--border-default);
   color: var(--text-muted);
+}
+.performance-badge__icon {
+  font-size: 0.85rem;
 }
 
 .performance-badge--active {

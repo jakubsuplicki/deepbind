@@ -152,12 +152,6 @@ async function handleSaveUrl() {
 function handleSend(): void {
   const text = input.value.trim()
   if (!text || props.isLoading) return
-  if (text.toLowerCase() === '/duel') {
-    // ADR 015 — duel feature was removed; absorb the slash command silently
-    // to avoid confusing the model with leftover muscle memory.
-    input.value = ''
-    return
-  }
   emit('send', text)
   input.value = ''
 }
@@ -1121,22 +1115,6 @@ watch(
 
 .chat-panel__url-result--error {
   color: var(--neon-red);
-}
-
-/* Duel button */
-.chat-panel__icon-btn--duel {
-  font-size: 1rem;
-  line-height: 1;
-}
-
-.chat-panel__icon-btn--duel:hover {
-  border-color: var(--neon-yellow);
-  box-shadow: 0 0 10px rgba(234, 179, 8, 0.1);
-}
-
-.chat-panel__icon-btn--duel:disabled {
-  opacity: 0.25;
-  cursor: not-allowed;
 }
 
 /* Setup slide transition */

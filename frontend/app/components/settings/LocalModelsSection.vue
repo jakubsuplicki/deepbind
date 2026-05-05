@@ -1,5 +1,11 @@
 <template>
-  <SettingsSection id="local-models" title="Local Models" :default-open="true">
+  <SettingsSection
+    id="local-models"
+    title="Local Models"
+    icon="ph:hard-drives"
+    icon-active="ph:hard-drives-fill"
+    :default-open="true"
+  >
     <p class="settings-page__hint">
       Jarvis runs entirely on your machine via Ollama. Pick the active chat model
       and see how much headroom your hardware has for bigger ones.

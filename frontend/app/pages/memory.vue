@@ -3,6 +3,7 @@
     <aside class="memory-page__sidebar">
       <div class="memory-page__toolbar">
         <h2 class="memory-page__title">
+          <Icon name="ph:books-fill" class="memory-page__title-icon" aria-hidden="true" />
           Memory
           <SmartConnectStatus aria-label="Smart Connect coverage for this workspace" />
         </h2>
@@ -343,11 +344,18 @@ onUnmounted(() => {
 }
 
 .memory-page__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   margin: 0;
   font-size: 0.85rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--text-secondary);
+}
+.memory-page__title-icon {
+  font-size: 1rem;
+  color: var(--neon-cyan);
 }
 
 /* Import dropdown trigger */

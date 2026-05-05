@@ -319,10 +319,6 @@ export class ApiError extends Error {
   }
 }
 
-// ADR 015 — multi-provider (`ProviderConfig`, `StoredKeyMeta`) and duel
-// (`DuelConfig`, `DuelEvent`, `DuelVerdict`, `DuelPhase`) types deleted
-// alongside the cloud + duel frontend surface.
-
 // --- Local Models (Ollama) ---
 
 export type HardwareTier = 'light' | 'balanced' | 'strong' | 'workstation'

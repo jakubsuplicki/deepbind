@@ -5,7 +5,10 @@
     <header class="spec-page__header">
       <div class="spec-page__header-top">
         <div class="spec-page__title-group">
-          <h1 class="spec-page__title">Specialists</h1>
+          <h1 class="spec-page__title">
+            <Icon name="ph:users-three-fill" class="spec-page__title-icon" aria-hidden="true" />
+            Specialists
+          </h1>
           <span v-if="userSpecialists.length" class="spec-page__count">{{ userSpecialists.length }}</span>
         </div>
         <button
@@ -249,16 +252,25 @@ async function handleSave(data: Record<string, unknown>, stagedFiles: File[]) {
 
 .spec-page__title-group {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.6rem;
 }
 
 .spec-page__title {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
   font-size: 1.5rem;
   font-weight: 700;
   margin: 0;
   color: var(--text-primary);
   letter-spacing: -0.025em;
+}
+
+.spec-page__title-icon {
+  font-size: 1.4rem;
+  color: var(--neon-cyan);
+  filter: drop-shadow(0 0 8px var(--neon-cyan-30));
 }
 
 .spec-page__count {

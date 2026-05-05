@@ -1,5 +1,11 @@
 <template>
-  <SettingsSection id="maintenance" title="Maintenance" :default-open="false">
+  <SettingsSection
+    id="maintenance"
+    title="Maintenance"
+    icon="ph:wrench"
+    icon-active="ph:wrench-fill"
+    :default-open="false"
+  >
     <div class="settings-page__actions">
       <button class="settings-page__btn" @click="onReindex">Reindex Memory</button>
       <button class="settings-page__btn" @click="onRebuild">Rebuild Graph</button>

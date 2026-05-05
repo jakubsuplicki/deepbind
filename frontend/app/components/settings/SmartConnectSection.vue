@@ -3,6 +3,8 @@
     id="smart-connect"
     title="Smart Connect"
     section-class="smart-connect-section"
+    icon="ph:link"
+    icon-active="ph:link-bold"
     :default-open="false"
   >
     <p class="smart-connect-section__lead">

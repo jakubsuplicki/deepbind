@@ -1,5 +1,11 @@
 <template>
-  <SettingsSection id="workspace" title="Workspace" :default-open="true">
+  <SettingsSection
+    id="workspace"
+    title="Workspace"
+    icon="ph:folder-open"
+    icon-active="ph:folder-open-fill"
+    :default-open="true"
+  >
     <p class="settings-page__path">{{ path }}</p>
   </SettingsSection>
 </template>

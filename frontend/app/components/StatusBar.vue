@@ -3,11 +3,26 @@
     <span class="status-bar__label" :class="{ 'status-bar__label--hidden': chatActive }">Jarvis</span>
 
     <nav class="status-bar__nav" :class="{ 'status-bar__nav--open': menuOpen }">
-      <NuxtLink to="/main" class="status-bar__link" @click="menuOpen = false">Chat</NuxtLink>
-      <NuxtLink to="/memory" class="status-bar__link" @click="menuOpen = false">Memory</NuxtLink>
-      <NuxtLink to="/graph" class="status-bar__link" @click="menuOpen = false">Graph</NuxtLink>
-      <NuxtLink to="/specialists" class="status-bar__link" @click="menuOpen = false">Specialists</NuxtLink>
-      <NuxtLink to="/settings" class="status-bar__link" @click="menuOpen = false">Settings</NuxtLink>
+      <NuxtLink
+        v-for="link in navLinks"
+        :key="link.to"
+        :to="link.to"
+        custom
+        v-slot="{ href, navigate, isActive }"
+      >
+        <a
+          :href="href"
+          class="status-bar__link"
+          :class="{ 'router-link-active': isActive }"
+          @click="(e) => { menuOpen = false; navigate(e) }"
+        >
+          <Icon
+            :name="isActive ? link.iconActive : link.icon"
+            class="status-bar__link-icon icon--sm"
+          />
+          {{ link.label }}
+        </a>
+      </NuxtLink>
     </nav>
 
     <!-- Backdrop to close menu when tapping outside -->
@@ -81,7 +96,7 @@
         <span class="status-bar__indicator-sep">·</span>
         <span class="status-bar__indicator-model">{{ localModels.activeModel.value.label }} (local)</span>
         <Icon
-          :name="ollamaReachable ? 'ph:circle-fill' : 'ph:circle-fill'"
+          name="ph:circle-fill"
           :class="['icon--xs', ollamaReachable ? 'icon--success' : 'icon--danger', 'status-bar__indicator-dot']"
         />
       </template>
@@ -107,6 +122,16 @@ import { useReindexStatus } from '~/composables/useReindexStatus'
 
 const { backendStatus, chatActive } = useAppState()
 const menuOpen = ref(false)
+
+// Top-nav links — regular Phosphor weight by default, fill weight when the
+// current route matches. Order here drives display order in the bar.
+const navLinks: ReadonlyArray<{ to: string; label: string; icon: string; iconActive: string }> = [
+  { to: '/main', label: 'Chat', icon: 'ph:chats-circle', iconActive: 'ph:chats-circle-fill' },
+  { to: '/memory', label: 'Memory', icon: 'ph:books', iconActive: 'ph:books-fill' },
+  { to: '/graph', label: 'Graph', icon: 'ph:share-network', iconActive: 'ph:share-network-fill' },
+  { to: '/specialists', label: 'Specialists', icon: 'ph:users-three', iconActive: 'ph:users-three-fill' },
+  { to: '/settings', label: 'Settings', icon: 'ph:gear-six', iconActive: 'ph:gear-six-fill' },
+]
 const localModels = useLocalModels()
 const ingest = useIngestStatus()
 const reindex = useReindexStatus()
@@ -271,6 +296,9 @@ const ingestTooltip = computed(() => {
 }
 
 .status-bar__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   color: var(--text-secondary);
   text-decoration: none;
   font-size: 0.85rem;
@@ -278,6 +306,17 @@ const ingestTooltip = computed(() => {
   border-radius: 6px;
   transition: all 0.2s;
   border: 1px solid transparent;
+}
+
+.status-bar__link-icon {
+  font-size: 14px;
+  opacity: 0.8;
+  transition: opacity 0.2s, filter 0.2s;
+}
+
+.status-bar__link.router-link-active .status-bar__link-icon {
+  opacity: 1;
+  filter: drop-shadow(0 0 4px var(--neon-cyan-30));
 }
 
 .status-bar__link:hover {

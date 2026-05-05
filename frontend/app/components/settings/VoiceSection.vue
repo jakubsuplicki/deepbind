@@ -1,5 +1,11 @@
 <template>
-  <SettingsSection id="voice" title="Voice Settings" :default-open="false">
+  <SettingsSection
+    id="voice"
+    title="Voice Settings"
+    icon="ph:microphone"
+    icon-active="ph:microphone-fill"
+    :default-open="false"
+  >
     <label class="settings-page__toggle">
       <input
         type="checkbox"
