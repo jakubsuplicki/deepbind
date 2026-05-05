@@ -1,9 +1,24 @@
 """Local embedding service for semantic search.
 
-Uses fastembed (ONNX Runtime) to run a multilingual embedding model on CPU.
-No API calls, no external services, all data stays local.
+Uses fastembed (ONNX Runtime) to run an English-specialized embedding model on
+CPU. No API calls, no external services, all data stays local.
 
-The model is lazy-loaded on first use (~3-4s cold start, ~400MB RAM).
+Per ADR 018 (v1 ships English-only), the bundled model is
+`Snowflake/snowflake-arctic-embed-l` — Apache-2.0, 1024-dim, ~1 GB ONNX,
+top of the MTEB English Retrieval leaderboard among permissively-licensed
+candidates that ship in fastembed's built-in registry. Replaces the previous
+`paraphrase-multilingual-MiniLM-L12-v2` (multilingual, 384-dim, ~252 MB) which
+traded English quality for breadth that v1 doesn't market — the swap nets
+roughly +20 nDCG@10 on English MTEB Retrieval. See
+`docs/research/models/embedding-english-first.md` for the full reasoning.
+
+Arctic-Embed-L distinguishes between *queries* and *documents*: queries are
+prefixed with a fixed instruction, documents are embedded raw. Use
+`embed_query(...)` / `aembed_query(...)` for question/search-string inputs and
+`embed_text(...)` / `embed_texts(...)` / `aembed_text(...)` / `aembed_texts(...)`
+for document inputs. Mixing them up degrades retrieval quality silently.
+
+The model is lazy-loaded on first use (~3-4s cold start, ~1 GB RAM).
 Embeddings are stored in SQLite as BLOB (float32 packed).
 Content hash ensures we skip re-embedding unchanged notes.
 """
@@ -20,8 +35,12 @@ logger = logging.getLogger(__name__)
 
 # Lazy-loaded model singleton
 _model = None
-_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-_DIMENSIONS = 384
+_MODEL_NAME = "snowflake/snowflake-arctic-embed-l"
+_DIMENSIONS = 1024
+# Arctic-Embed-L's query prefix (per the model card). Documents are NOT
+# prefixed. Mismatched query/document embedding quality silently if the
+# prefix is wrong, so this is the single source of truth.
+_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 def _bundled_cache_dir() -> Optional[str]:
@@ -56,28 +75,48 @@ def _get_model():
 
 
 def embed_text(text: str) -> List[float]:
-    """Embed a single text string -> float vector."""
+    """Embed a single document text -> float vector. NO query prefix.
+
+    For question / search-string inputs, use `embed_query(...)` instead so
+    the Arctic-Embed-L query prefix is applied; otherwise retrieval quality
+    silently degrades.
+    """
     model = _get_model()
     embeddings = list(model.embed([text]))
     return embeddings[0].tolist()
 
 
 def embed_query(text: str) -> List[float]:
-    """Embed a query string -> float vector."""
-    return embed_text(text)
+    """Embed a query / search string -> float vector.
+
+    Prepends Arctic-Embed-L's query prefix per the model card; the prefix
+    is required for the published BEIR/MTEB numbers to materialize.
+    Documents (note bodies, chunks, graph-node labels) must NOT use this
+    path — they call `embed_text` / `embed_texts` directly.
+    """
+    return embed_text(_QUERY_PREFIX + text)
 
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
-    """Embed multiple texts in a batch (more efficient)."""
+    """Embed multiple document texts in a batch (more efficient). NO query prefix."""
     model = _get_model()
     return [e.tolist() for e in model.embed(texts)]
 
 
 async def aembed_text(text: str) -> List[float]:
     """Async wrapper: run sync ONNX inference in a threadpool so the
-    FastAPI event loop stays responsive (status endpoints, websockets)."""
+    FastAPI event loop stays responsive (status endpoints, websockets).
+
+    Document-side. For queries use `aembed_query(...)`.
+    """
     import asyncio
     return await asyncio.to_thread(embed_text, text)
+
+
+async def aembed_query(text: str) -> List[float]:
+    """Async query embedding. Applies the Arctic-Embed-L query prefix."""
+    import asyncio
+    return await asyncio.to_thread(embed_query, text)
 
 
 async def aembed_texts(texts: List[str]) -> List[List[float]]:
@@ -181,7 +220,7 @@ async def search_similar(
     if not db_path.exists():
         return []
 
-    query_vec = await aembed_text(query)
+    query_vec = await aembed_query(query)
 
     async with aiosqlite.connect(str(db_path)) as db:
         cursor = await db.execute(
@@ -370,7 +409,7 @@ async def search_similar_chunks(
     if not db_path.exists():
         return []
 
-    query_vec = await aembed_text(query)
+    query_vec = await aembed_query(query)
 
     async with aiosqlite.connect(str(db_path)) as db:
         try:
@@ -506,7 +545,7 @@ async def find_similar_nodes(
     if not db_path.exists():
         return []
 
-    query_vec = await aembed_text(query)
+    query_vec = await aembed_query(query)
 
     async with aiosqlite.connect(str(db_path)) as db:
         try:

@@ -31,12 +31,14 @@
 #        desktop/scripts/fetch-bundled-models.sh — call it from CI/build
 #        before invoking PyInstaller).
 #
-#     2. spaCy NER model packages (pl_core_news_sm, en_core_web_sm) — these
-#        install as regular Python packages from requirements.txt, so we just
-#        collect_submodules + collect_data_files like any other backend dep.
-#        Their entrypoint __init__.py registers `<lang>_<size>` with spaCy's
-#        pkg-resources scanner, so spacy.load("pl_core_news_sm") resolves
-#        inside the bundle without any path gymnastics.
+#     2. spaCy NER model package (xx_ent_wiki_sm, per ADR 018) — installs as
+#        a regular Python package via the wheel URL pinned in
+#        backend/requirements.txt. Its entrypoint __init__.py registers with
+#        spaCy's pkg-resources scanner, so spacy.load("xx_ent_wiki_sm")
+#        resolves inside the bundle without any path gymnastics. Picked up
+#        below via collect_data_files plus an explicit hidden import
+#        alongside spacy.lang.xx (which the wheel does not pull in via
+#        static analysis).
 
 # ruff: noqa
 # type: ignore
@@ -86,10 +88,6 @@ backend_pkgs = [
     # Until that's untangled, the eval harness ships in the bundle. Including
     # only the latency subtree — not the whole tests/ — keeps weight down.
     "tests.eval.latency",
-    # spaCy NER model packages — walk every submodule so the lang-specific
-    # tagger/ner/lemmatizer pipelines come along.
-    "pl_core_news_sm",
-    "en_core_web_sm",
 ]
 hidden = []
 for pkg in backend_pkgs:

@@ -10,14 +10,13 @@
         "frontend/app/pages/onboarding.vue",
         "frontend/app/components/OnboardingLocalFlow.vue",
         "backend/tests/test_workspace_api.py",
-        "backend/tests/test_workspace_service.py",
-        "frontend/tests/pages/onboarding.test.ts"
+        "backend/tests/test_workspace_service.py"
       ],
       "depends_on": [
         "database",
         "preferences-settings"
       ],
-      "last_updated": "2026-05-04",
+      "last_updated": "2026-05-05",
       "status": "current",
       "_note_2026_05_04": "ADR 015 cleanup: dropped api_key_set + key_storage from the workspace status response, schema, and frontend type. workspace_service.get_workspace_status() no longer probes ANTHROPIC_API_KEY; create_workspace() no longer writes api_key_set/key_storage into config.json; WorkspaceStatusResponse and frontend WorkspaceStatusResponse type both lose the optional fields; get_api_key() returns inert None (kept on the surface so chat-router signatures don't need a router-wide refactor). Tests updated: test_workspace_api.py + test_workspace_service.py + test_settings_api.py + test_full_regression.py drop the env-var-key fixtures and assert the fields are absent from both the response and the persisted config. The os import in workspace_service.py is gone.",
       "_note_2026_05_01": "Onboarding flow polish: removed the dead 'Back to choices' footer button (ADR 015 collapsed the cloud branch \u2014 there are no choices to go back to and onboarding.vue never bound the emit). The chat-model-probe panel is now mounted in two states \u2014 running spinner above the CTA, post-run summary below \u2014 so the post-run terminal log no longer renders alongside 'Jarvis is ready' contradicting it. Pure UI; no backend or composable changes.",
@@ -54,7 +53,6 @@
         "frontend/app/composables/useChat.ts",
         "frontend/app/composables/useChatHealth.ts",
         "frontend/app/composables/useWebSocket.ts",
-        "frontend/app/composables/useApiKeys.ts",
         "frontend/app/components/ChatPanel.vue",
         "frontend/app/components/ChatFirstTurnWarmup.vue",
         "frontend/app/components/ModelSelector.vue",
@@ -64,21 +62,16 @@
         "backend/tests/test_chat_compaction_wiring.py",
         "backend/tests/test_chat_memory_pressure.py",
         "backend/tests/test_chat_metrics.py",
-        "backend/tests/test_chat_provider.py",
         "backend/tests/test_chat_security.py",
         "backend/tests/test_chat_ws.py",
-        "backend/tests/test_claude_service.py",
         "backend/tests/test_compaction_service.py",
         "backend/tests/test_context_strategy.py",
         "backend/tests/test_retrieval_sessions.py",
         "backend/tests/test_system_prompt_budget.py",
         "backend/tests/test_system_prompt_stable_prefix.py",
         "backend/tests/test_token_counting.py",
-        "backend/tests/test_llm_service.py",
-        "backend/tests/test_error_handling.py",
         "backend/tests/test_security_validations.py",
         "frontend/tests/components/ChatPanel.test.ts",
-        "frontend/tests/components/ModelSelector.test.ts",
         "frontend/tests/composables/useChat.test.ts",
         "frontend/tests/composables/useWebSocket.test.ts",
         "backend/services/ollama_dispatcher.py",
@@ -342,7 +335,6 @@
       "sources": [
         "backend/routers/specialists.py",
         "backend/services/specialist_service.py",
-        "backend/services/claude.py",
         "backend/models/schemas.py",
         "backend/tests/test_jarvis_self.py",
         "frontend/app/components/JarvisSelfCard.vue",
@@ -389,8 +381,11 @@
         "backend/services/retrieval/pipeline.py",
         "backend/services/context_builder.py",
         "backend/services/chunking.py",
+        "backend/services/embedding_service.py",
         "backend/services/reranker_service.py",
+        "desktop/scripts/fetch-bundled-models.sh",
         "backend/tests/test_bm25_ranking.py",
+        "backend/tests/test_embedding_service.py",
         "backend/tests/test_hybrid_retrieval.py",
         "backend/tests/test_retrieval_graph_expansion.py",
         "backend/tests/test_retrieval_settings_toggle.py"
@@ -400,8 +395,9 @@
         "knowledge-graph",
         "preferences-settings"
       ],
-      "last_updated": "2026-04-26",
-      "status": "current"
+      "last_updated": "2026-05-05",
+      "status": "current",
+      "_note_2026_05_05": "Embedding-model swap per ADR 018 (v1 English-only). `paraphrase-multilingual-MiniLM-L12-v2` (multilingual, 384-dim, ~252 MB) → `snowflake/snowflake-arctic-embed-l` (Apache-2.0, English-only, 1024-dim, ~1 GB). Highest English MTEB Retrieval avg (55.98 nDCG@10) of any candidate clearing the audit's hard constraints — a ~20-point category jump over the multilingual incumbent (~36 retrieval). Arctic-Embed-L requires a query prefix (`Represent this sentence for searching relevant passages: `); documents are embedded raw. backend/services/embedding_service.py now exposes `embed_query` / `aembed_query` (with prefix) separately from `embed_text` / `aembed_text` / `embed_texts` / `aembed_texts` (document-side, no prefix). Three internal query callers (`search_similar`, `search_similar_chunks`, `find_similar_nodes`) updated. Vector dimension changed 384 → 1024; the SQLite `embeddings` BLOB format is dimension-coupled but v1 has no users so no migration needed. desktop/scripts/fetch-bundled-models.sh updated to pull arctic-embed-l (~1 GB) into `_bundled_models/fastembed/`; PyInstaller spec already wildcards `_bundled_models/fastembed/` so the new model is bundled automatically. ADR 003 §A bundled-ML-weights table updated. Tests: 21 embedding service tests pass; 61 retrieval/graph dependents pass."
     },
     "jira-retrieval": {
       "doc": "docs/features/jira-retrieval.md",
@@ -873,9 +869,7 @@
         "backend/services/tools/definitions.py",
         "backend/services/tools/executor.py",
         "backend/services/tools/jira_tools.py",
-        "backend/services/duel_presets.py",
         "backend/services/specialist_service.py",
-        "backend/services/council.py",
         "backend/routers/chat.py",
         "backend/tests/test_jira_strategist.py"
       ],
@@ -938,7 +932,6 @@
         "frontend/app/components/SmartConnectStatus.vue",
         "frontend/app/components/StatusBar.vue",
         "frontend/app/components/settings/SmartConnectSection.vue",
-        "frontend/app/composables/settings/useBudgetSettings.ts",
         "frontend/app/composables/settings/useGeneralSettings.ts",
         "frontend/app/composables/settings/useGraphExpansionSettings.ts",
         "frontend/app/composables/settings/usePrivacySettings.ts",

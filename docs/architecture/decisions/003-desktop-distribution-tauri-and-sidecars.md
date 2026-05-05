@@ -122,9 +122,21 @@ For true air-gap customers (ITAR seats, classified programs), an offline install
 This section locks the implementation-level decisions surfaced when validating ADR 003 against the actual codebase. Each item resolves an assumption in the original decision body that was either underspecified or contradicted by current code.
 
 ### A. Plumbing-model weights ship inside the installer
-`fastembed` (embedding model, ONNX) and spaCy (`pl_core_news_sm`, `en_core_web_sm` for NER) both default to first-use download from upstream caches — a structural contradiction with the "no outbound except pinned manifest URLs" driver. **Decision:** these weights are bundled inside the PyInstaller archive as data files. The signed manifest covers chat-model blobs only; plumbing-model weights are part of the installer surface and audited at signing time.
+`fastembed` (embedding model + reranker, ONNX) and spaCy (NER) both default to first-use download from upstream caches — a structural contradiction with the "no outbound except pinned manifest URLs" driver. **Decision:** these weights are bundled inside the PyInstaller archive as data files. The signed manifest covers chat-model blobs only; plumbing-model weights are part of the installer surface and audited at signing time.
 
 The PyInstaller spec sets `FASTEMBED_CACHE_PATH` and the spaCy data path to the bundled-resource location at runtime via `sys._MEIPASS` resolution, so the installed app never reads from `~/.cache/fastembed` or the venv's `site-packages`. Cross-machine portability is preserved.
+
+#### Bundled ML weights — current set (per ADR 018, v1 English-only)
+
+Updated 2026-05-05 as part of the commercial-licensing audit and ADR 018 English-only scope decision:
+
+| Slot | Model | License | Size | How bundled |
+|---|---|---|---|---|
+| Embedding (`embedding_service.py`) | `snowflake/snowflake-arctic-embed-l` | Apache-2.0 | ~1 GB ONNX | fastembed registry, fetched into `backend/_bundled_models/fastembed/` by `desktop/scripts/fetch-bundled-models.sh` at build time |
+| NER (`entity_extraction.py`) | `xx_ent_wiki_sm` | MIT (model) + CC-BY 3.0 (WikiNER training data) | 11 MB | spaCy wheel pinned in `backend/requirements.txt`, picked up by PyInstaller via `collect_data_files` |
+| Reranker (`reranker_service.py`) | `BAAI/bge-reranker-v2-m3` (pending implementation) | Apache-2.0 | ~600 MB INT8 ONNX | fastembed `add_custom_model` — bundle script extension required (see [`docs/research/models/reranker-english-first.md`](../../research/models/reranker-english-first.md)) |
+
+**Retired in this audit:** `paraphrase-multilingual-MiniLM-L12-v2` (multilingual embedding, replaced by Arctic-Embed-L for the English-quality lift), `pl_core_news_sm` (GPL-3.0 — closed audit finding #1), `en_core_web_sm` (OntoNotes commercial-corpus lineage — closed audit finding #3), `jinaai/jina-reranker-v2-base-multilingual` (CC-BY-NC-4.0 — pending swap to bge-reranker-v2-m3).
 
 ### B. Ollama bundling shape per OS
 - **macOS (arm64, x86_64):** Extract the `ollama` CLI binary from upstream `Ollama-darwin.zip` (`Ollama.app/Contents/Resources/ollama`) **plus its sibling runtime payload** — the binary dlopens `libggml-base*`, `libggml-cpu-*.so`, and the `mlx_metal_v3/` + `mlx_metal_v4/` runner directories at startup. ~~The CLI is self-contained — Metal kernels are linked into the binary~~ — that was true at older Ollama versions but **stopped being true by 0.22.0** (see [Amendment 2026-04-30 §L](#l-macos-ollama-bundling--full-runtime-payload-not-just-the-cli)). The Swift menu-bar wrapper (`Contents/MacOS/Ollama`) and the `Contents/Library/LaunchAgents/com.ollama.ollama.plist` LaunchAgent are *not* shipped; we own process lifecycle from the Tauri shell. The bundled binary + every dylib in the runtime payload is re-signed under our Developer ID with hardened runtime + the entitlements at [`desktop/src-tauri/macos/Entitlements.plist`](../../../desktop/src-tauri/macos/Entitlements.plist) before notarization.
