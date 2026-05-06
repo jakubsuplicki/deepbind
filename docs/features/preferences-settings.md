@@ -106,6 +106,7 @@ Surfaced as `GraphExpansionSection`. Wired via `GET/PATCH /api/settings/retrieva
 | `GraphExpansionSection.vue` | preferences-settings (graph-expansion knobs) |
 | `PrivacySection.vue` | preferences-settings (offline mode + per-feature toggles) |
 | `SharpenSection.vue` | preferences-settings (local-AI enrichment runner) |
+| `AcknowledgementsSection.vue` | preferences-settings (third-party attribution panel — see below) |
 | `SettingsSection.vue` | preferences-settings (base wrapper — collapsible card) |
 
 Each non-trivial section pairs with a composable under [`frontend/app/composables/settings/`](../../frontend/app/composables/settings/) (`useGeneralSettings.ts`, `useSharpen.ts`, `usePrivacySettings.ts`, `useGraphExpansionSettings.ts`, `useSettingsStatus.ts`, `useLightweightMode.ts`). Composables read/write through `/api/preferences` and `/api/settings/*` — no per-section backend.
@@ -122,6 +123,18 @@ The Local Models section now leads with a hero card for the **active chat model*
 - **Advanced** — Ollama URL override + test connection.
 
 The section now defaults open (`:default-open="true"`) since it is the primary control surface for local AI.
+
+### AcknowledgementsSection — third-party attribution (added 2026-05-05)
+
+The Acknowledgements section surfaces the bundled-OSS attribution document at runtime so end users can read it without external network access. Closes [`docs/research/commercial-licensing-audit.md`](../research/commercial-licensing-audit.md) finding #5 (PDFium and other Apache/BSD/MPL-licensed bundled components require attribution to be shipped with binary distributions).
+
+- **Source of truth:** [`docs/THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) — developer-readable in-repo file listing every bundled native binary, ML model weight, Python package, frontend npm package, and Rust crate with its license, upstream URL, and required attribution. Includes full reproductions of Apache-2.0, MIT, and BSD-3 license texts.
+- **Runtime fetch path:** [`frontend/public/THIRD-PARTY-NOTICES.md`](../../frontend/public/THIRD-PARTY-NOTICES.md) — a copy of the source-of-truth file shipped as a Nuxt static asset. The Vue panel fetches `/THIRD-PARTY-NOTICES.md` on mount, parses the markdown via `marked`, sanitises via `DOMPurify` (mirroring the existing chat-rendering pattern in `ChatPanel.vue`), and renders inside a scrollable card.
+- **Defense-in-depth bundle:** [`desktop/src-tauri/tauri.conf.json`](../../desktop/src-tauri/tauri.conf.json) `bundle.resources` also bundles the file at `Contents/Resources/THIRD-PARTY-NOTICES.md` for direct filesystem access (not used by the panel today; reserved for an "open in Finder" affordance and CI assertions that the file is shipped).
+- **Maintenance contract:** when adding or removing a bundled dependency, update [`docs/THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) and run `cp docs/THIRD-PARTY-NOTICES.md frontend/public/THIRD-PARTY-NOTICES.md` so the runtime panel picks up the change. Section "Document Maintenance" inside the file documents the procedure end-to-end.
+- **Component:** [`frontend/app/components/settings/AcknowledgementsSection.vue`](../../frontend/app/components/settings/AcknowledgementsSection.vue). Defaults closed (`:default-open="false"`) because it's reference content, not configuration. ~140 lines of Vue + scoped CSS.
+
+The section sits last in the Settings page (after Sharpen) so the panel is the natural "About" target — keeps day-one configuration controls (Local Models, Performance, Workspace, Voice, etc.) above the fold.
 
 ## Key Files
 

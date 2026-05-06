@@ -25,7 +25,8 @@
     ],
     "externalBin": ["binaries/jarvis-sidecar"],
     "resources": {
-      "binaries/ollama-runtime": "ollama-runtime"
+      "binaries/ollama-runtime": "ollama-runtime",
+      "../../docs/THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md"
     },
     "macOS": {
       "minimumSystemVersion": "12.0",

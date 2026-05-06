@@ -7,6 +7,8 @@
 
     <!-- ADR 015 — single-target local-only stack: cloud-providers UI is gone. -->
 
+    <LicenseSection />
+
     <LocalModelsSection />
 
     <PerformanceSection />
@@ -30,6 +32,8 @@
 
     <SharpenSection />
 
+    <AcknowledgementsSection />
+
     <p v-if="status.message.value" class="settings-page__status">
       {{ status.message.value }}
     </p>
@@ -38,6 +42,7 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import LicenseSection from '~/components/settings/LicenseSection.vue'
 import LocalModelsSection from '~/components/settings/LocalModelsSection.vue'
 import PerformanceSection from '~/components/settings/PerformanceSection.vue'
 import WorkspaceSection from '~/components/settings/WorkspaceSection.vue'
@@ -48,6 +53,7 @@ import SmartConnectSection from '~/components/settings/SmartConnectSection.vue'
 import GraphExpansionSection from '~/components/settings/GraphExpansionSection.vue'
 import PrivacySection from '~/components/settings/PrivacySection.vue'
 import SharpenSection from '~/components/settings/SharpenSection.vue'
+import AcknowledgementsSection from '~/components/settings/AcknowledgementsSection.vue'
 import { useGeneralSettings } from '~/composables/settings/useGeneralSettings'
 import { useSettingsStatus } from '~/composables/settings/useSettingsStatus'
 
