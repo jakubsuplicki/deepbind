@@ -170,19 +170,28 @@ import os, shutil
 from pathlib import Path
 
 cache = Path("$CACHE_DIR")
+
+def _dereference_recursive(root: Path) -> None:
+    # Walk every entry under root (any depth) and replace each symlink
+    # with a real copy of its target. The HF cache puts the big weights
+    # under snapshots/<hash>/onnx/<file>.onnx (one level deeper than
+    # the small config/tokenizer files at snapshots/<hash>/<file>), so
+    # a non-recursive walk that only inspects the top of the snapshot
+    # silently leaves the big symlinks pointing at blobs/, which the
+    # blobs/ rmtree below then turns into dangling pointers.
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            target = path.resolve()
+            if target.is_file():
+                path.unlink()
+                shutil.copy2(target, path)
+
 for model_dir in cache.iterdir():
     if not model_dir.is_dir() or not model_dir.name.startswith("models--"):
         continue
     snapshots = model_dir / "snapshots"
     if snapshots.is_dir():
-        for snap in snapshots.iterdir():
-            if not snap.is_dir():
-                continue
-            for entry in snap.iterdir():
-                if entry.is_symlink():
-                    target = entry.resolve()
-                    entry.unlink()
-                    shutil.copy2(target, entry)
+        _dereference_recursive(snapshots)
     # Keep refs/main — HF resolves "main" → snapshot hash via this 40-byte file.
     # Drop blobs/ (snapshots/ now hold real files, no symlinks left to follow)
     # and .locks/ (runtime mutexes; HF recreates as needed).
