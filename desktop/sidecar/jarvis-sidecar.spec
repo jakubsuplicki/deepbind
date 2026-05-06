@@ -197,6 +197,24 @@ else:
         "sidecar so the installer is offline-capable on first run (ADR 003 §A)."
     )
 
+# Bundled HuggingFace tokenizer cache (populated by
+# desktop/scripts/fetch-bundled-tokenizers.sh per audit finding #7). Shipped
+# at <_MEIPASS>/_bundled_tokenizers/<sanitized_id>/tokenizer.json and resolved
+# at runtime by services/token_counting.py:_bundled_tokenizers_root().
+# Without this, token_counting silently falls back to the char/4 estimator,
+# which drifts ~30% on non-English content and breaks the ADR 009 70%-budget
+# compaction trigger.
+BUNDLED_TOKENIZERS_DIR = REPO_ROOT / "backend" / "_bundled_tokenizers"
+if BUNDLED_TOKENIZERS_DIR.exists() and any(BUNDLED_TOKENIZERS_DIR.iterdir()):
+    datas.append((str(BUNDLED_TOKENIZERS_DIR), "_bundled_tokenizers"))
+else:
+    raise SystemExit(
+        "error: backend/_bundled_tokenizers/ is missing or empty. Run "
+        "`bash desktop/scripts/fetch-bundled-tokenizers.sh` before building "
+        "the sidecar so token counting works accurately at runtime "
+        "(commercial-licensing-audit.md finding #7)."
+    )
+
 # --- Analysis ---------------------------------------------------------------
 
 a = Analysis(

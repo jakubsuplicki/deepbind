@@ -4,35 +4,52 @@ Why this exists:
 
 ADR 009 §"Token-aware budget tracking" makes the compaction budget a
 **token** number, not a character number. Character approximation is off
-by 20–40% on Polish/Chinese/Japanese/Arabic — the very languages real EU
-customers exercise — and that drift would push compaction to fire too
-early or too late on non-English content. Concretely, a Polish question
-that the user could ask in 80 chars tokenizes to ~40 tokens with the
-Qwen3 tokenizer but to ~60 with the naive ``chars // 4`` rule. Cumulative
-across long conversations the estimate drift breaks the 70%-budget
-trigger entirely.
+by 20–40% on Polish/Chinese/Japanese/Arabic — and even on English the
+drift across long conversations breaks the 70%-budget compaction trigger.
+A real Qwen3 tokenizer for the active model gives accurate counts.
+
+How tokenizers are loaded (offline-only, post-2026-05-06):
+
+Tokenizers are loaded **strictly from the bundled offline cache** at
+``backend/_bundled_tokenizers/<sanitized_id>/tokenizer.json``. The runtime
+never calls ``tokenizers.Tokenizer.from_pretrained(id)`` — that path
+would hit huggingface.co at first use, which contradicts ADR 002's
+offline-first stance, leaks per-tokenizer license terms onto our build
+host, and would silently fail in air-gapped customer environments. The
+bundle is populated at build time by
+``desktop/scripts/fetch-bundled-tokenizers.sh``.
+
+A positive allowlist (``_BUNDLED_TOKENIZER_IDS``) gates which ids are
+ever attempted — even if a stray tokenizer.json file landed inside the
+bundle, an off-allowlist id resolves to None and falls through to the
+char/4 estimator. The allowlist is the source of truth for "what
+tokenizers does v1 ship?" and must match the catalog's set of
+``tokenizer_id`` values; ``test_token_counting.py`` enforces that
+invariant. See commercial-licensing-audit.md finding #7 for the
+defense-in-depth motivation.
 
 What this module does:
 
 - Lazily loads HuggingFace tokenizers (the `tokenizers` package, not the
   full `transformers` stack) by ``tokenizer_id`` and caches the
-  ``Tokenizer`` instance per process. First call may hit the HF cache /
-  download; subsequent calls are ~microseconds per message.
+  ``Tokenizer`` instance per process. First call hits the bundled
+  ``tokenizer.json`` on disk; subsequent calls are ~microseconds per
+  message.
 - Counts tokens for a single string and for an Anthropic-style messages
   list (handling string content, tool-use blocks, tool-result blocks).
 - Falls back to a deterministic ``chars // 4`` approximation when the
-  tokenizer can't be loaded — offline, gated repo, transient network
-  failure, or a model entry without a ``tokenizer_id``. The fallback is
-  imprecise but keeps the system functional and is what the rest of the
-  codebase has been doing for the entire pre-ADR-009 era.
+  tokenizer can't be loaded — id not in the allowlist, bundled file
+  missing (dev environment without ``fetch-bundled-tokenizers.sh``
+  having been run), or the tokenizers package itself is missing. The
+  fallback is imprecise but keeps the system functional.
 
 Why not transformers / tiktoken:
 
 - ``transformers`` pulls torch + huggingface_hub and is several hundred MB.
   ``tokenizers`` is a single Rust-backed Python package, ~2 MB on disk.
 - ``tiktoken`` is for OpenAI tokenizers only (cl100k / o200k). Catalog
-  models are Qwen / Granite / Mistral / Gemma; tiktoken would not match
-  any of them, so its counts would still be approximations.
+  models are Qwen / Granite / gpt-oss; tiktoken would not match any of
+  them, so its counts would still be approximations.
 - For Anthropic chat the local catalog isn't relevant — the chat router
   short-circuits compaction when no local model entry is in play, and the
   Anthropic SDK manages its own context window server-side.
@@ -41,8 +58,9 @@ Why not transformers / tiktoken:
 from __future__ import annotations
 
 import logging
-import os
+import sys
 import threading
+from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 logger = logging.getLogger(__name__)
@@ -52,8 +70,8 @@ logger = logging.getLogger(__name__)
 # so reads of the cache after population don't need the lock.
 _TOKENIZER_CACHE: Dict[str, Any] = {}
 # Failed loads are sticky — we don't re-attempt every turn after a failure
-# (network down, gated repo, missing CDN). The value is the truthy
-# exception type name; absence means "never attempted."
+# (id not in allowlist, bundled file missing). The value is a short
+# reason string for debugging; absence means "never attempted."
 _TOKENIZER_FAILURES: Dict[str, str] = {}
 _CACHE_LOCK = threading.Lock()
 
@@ -62,31 +80,95 @@ _CACHE_LOCK = threading.Lock()
 # this requires re-baselining ADR 011 latency budgets.
 _FALLBACK_CHARS_PER_TOKEN = 4.0
 
+# ── Bundled-tokenizer allowlist + path resolution ────────────────────
+#
+# The catalog ships tokenizer files under
+# ``backend/_bundled_tokenizers/<sanitized_id>/tokenizer.json``.
+# Sanitization rule: replace '/' with '__' so the HF org/name pair maps
+# to a single directory level (e.g. ``Qwen/Qwen3-8B`` →
+# ``Qwen__Qwen3-8B``).
+#
+# This allowlist is the single source of truth for "which tokenizers
+# does v1 ship?" — it must equal the set of ``tokenizer_id`` values
+# present in services.ollama_service.MODEL_CATALOG. Drift is a
+# regression: a new catalog entry without a matching bundled tokenizer
+# silently downgrades to char/4 in production. The
+# ``test_allowlist_matches_catalog`` test pins the invariant.
+_BUNDLED_TOKENIZER_IDS: frozenset[str] = frozenset({
+    # Qwen3 family (Apache-2.0)
+    "Qwen/Qwen3-1.7B",
+    "Qwen/Qwen3-4B",
+    "Qwen/Qwen3-8B",
+    "Qwen/Qwen3-4B-Instruct-2507",
+    "Qwen/Qwen3-14B",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "Qwen/Qwen3-30B-A3B-Thinking-2507",
+    # IBM Granite 4 family (Apache-2.0)
+    "ibm-granite/granite-4.0-h-micro",
+    "ibm-granite/granite-4.0-h-tiny",
+    "ibm-granite/granite-4.0-h-small",
+    # OpenAI gpt-oss (Apache-2.0)
+    "openai/gpt-oss-120b",
+})
 
-def _is_offline() -> bool:
-    """Honor the standard HF offline env vars.
 
-    Tests set these to keep CI deterministic and to avoid the daemon
-    thread that the tokenizers package spins up for telemetry.
+def _sanitized_id(tokenizer_id: str) -> str:
+    """Map a HF tokenizer id to its bundled-cache directory name.
+
+    ``Qwen/Qwen3-8B`` → ``Qwen__Qwen3-8B``. The single-level layout
+    avoids needing per-org directories and matches the simple-string
+    allowlist above.
     """
-    return (
-        os.environ.get("HF_HUB_OFFLINE") == "1"
-        or os.environ.get("TRANSFORMERS_OFFLINE") == "1"
-        or os.environ.get("JARVIS_DISABLE_TOKENIZER_DOWNLOAD") == "1"
-    )
+    return tokenizer_id.replace("/", "__")
+
+
+def _bundled_tokenizers_root() -> Path:
+    """Resolve the on-disk root of the bundled tokenizer cache.
+
+    PyInstaller's onefile bundle unpacks data files under
+    ``sys._MEIPASS``; ``desktop/sidecar/jarvis-sidecar.spec`` ships the
+    cache as ``_bundled_tokenizers/...``. When not frozen (dev / pytest),
+    use the in-repo path so dev runs hit the same on-disk layout the
+    bundled build will see at runtime.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / "_bundled_tokenizers"
+    # Dev path — relative to this file: backend/services/token_counting.py
+    return Path(__file__).resolve().parent.parent / "_bundled_tokenizers"
+
+
+def _bundled_tokenizer_path(tokenizer_id: str) -> Optional[Path]:
+    """Path to the bundled ``tokenizer.json`` for ``tokenizer_id``, or None.
+
+    Returns None when ``tokenizer_id`` is not in the allowlist (caller
+    should fall back to char/4 cleanly) or when the bundled file is
+    missing on disk (dev environment without
+    ``fetch-bundled-tokenizers.sh`` having been run).
+    """
+    if tokenizer_id not in _BUNDLED_TOKENIZER_IDS:
+        return None
+    candidate = _bundled_tokenizers_root() / _sanitized_id(tokenizer_id) / "tokenizer.json"
+    return candidate if candidate.is_file() else None
 
 
 def _load_tokenizer(tokenizer_id: str):
-    """Load a HuggingFace tokenizer by id. Returns None on any failure.
+    """Load a HuggingFace tokenizer by id from the bundled offline cache.
 
-    First call may download from the HF Hub. Subsequent calls are served
-    from the on-disk cache (~/.cache/huggingface/hub/). We don't touch
-    network when ``_is_offline()`` returns True — the test suite forces
-    that via ``HF_HUB_OFFLINE=1`` so the unit tests stay deterministic.
+    Returns the loaded ``Tokenizer`` or None on any failure. Failures are
+    silent (caller falls back to char/4) and sticky in the cache so we
+    don't re-stat the missing file on every turn. Network access is
+    structurally impossible — we only ever call ``Tokenizer.from_file``
+    against an in-bundle path.
+
+    Failure modes that all return None:
+      - ``tokenizer_id`` not in ``_BUNDLED_TOKENIZER_IDS`` allowlist
+      - Bundled ``tokenizer.json`` missing on disk
+      - ``tokenizers`` package not installed (stripped install)
+      - HF tokenizer file is corrupt / unparseable
     """
-    if _is_offline():
-        # Offline mode short-circuits before we even import the package,
-        # so a stripped install (no `tokenizers` extras) doesn't blow up.
+    path = _bundled_tokenizer_path(tokenizer_id)
+    if path is None:
         return None
     try:
         from tokenizers import Tokenizer  # local import — keep import surface optional
@@ -94,11 +176,11 @@ def _load_tokenizer(tokenizer_id: str):
         logger.info("tokenizers package not installed; falling back to char/4 estimator")
         return None
     try:
-        return Tokenizer.from_pretrained(tokenizer_id)
-    except Exception as exc:  # noqa: BLE001 — broad: HF raises many distinct types
+        return Tokenizer.from_file(str(path))
+    except Exception as exc:  # noqa: BLE001 — HF raises many distinct types
         logger.warning(
-            "Failed to load tokenizer %s (%s); using char/4 fallback",
-            tokenizer_id, type(exc).__name__,
+            "Failed to load bundled tokenizer %s from %s (%s); using char/4 fallback",
+            tokenizer_id, path, type(exc).__name__,
         )
         return None
 
