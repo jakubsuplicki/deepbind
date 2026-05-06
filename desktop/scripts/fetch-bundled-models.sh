@@ -151,8 +151,12 @@ print(f"fastembed: reranker {r.model_name!r} cached")
 EOF
 
 # Sanity-check both expected dirs are present before declaring success.
+# `-L` follows the HF cache's symlinks (snapshots/<hash>/onnx/model_int8.onnx
+# → blobs/<hash>) which are still in place at this point — the dedup pass
+# below is what later replaces them with real files. Without -L, BSD find
+# measures the 79-byte symlink and the size check spuriously fails.
 if [[ ! -d "$RERANKER_EXPECTED_DIR/snapshots" ]] || \
-   ! find "$RERANKER_EXPECTED_DIR/snapshots" -name 'model_int8.onnx' -size +400M | grep -q .; then
+   ! find -L "$RERANKER_EXPECTED_DIR/snapshots" -name 'model_int8.onnx' -size +400M | grep -q .; then
     echo "error: reranker INT8 ONNX did not land at $RERANKER_EXPECTED_DIR after fetch" >&2
     exit 1
 fi
