@@ -9,6 +9,13 @@ from httpx import ASGITransport, AsyncClient
 # clear this env var in their own fixture.
 os.environ.setdefault("JARVIS_DISABLE_EMBEDDINGS", "1")
 
+# Bypass the entitlement gate (ADR 019, chunk 4) by default in tests —
+# the gate is per-endpoint defence-in-depth on top of the frontend wall,
+# and most existing tests don't set up a license context. Tests that
+# specifically verify the gate (test_entitlement_gate.py) clear this
+# env var locally via monkeypatch.
+os.environ.setdefault("JARVIS_LICENSE_GATE_BYPASS", "1")
+
 from main import app
 
 

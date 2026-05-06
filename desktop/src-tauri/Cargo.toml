@@ -26,3 +26,9 @@ tokio = { version = "1", features = ["sync", "time", "io-util", "rt-multi-thread
 # so we don't pull in TLS — the sidecar lives on loopback HTTP. `json` enables
 # .json() body helpers; `http2` is fine for localhost too.
 reqwest = { version = "0.12", default-features = false, features = ["json", "http2"] }
+# OS-keychain access for the trial-start timestamp per ADR 019 §"Trial: 30
+# days, auto-starting, keychain-tracked". Wraps macOS Keychain / Windows
+# Credential Manager / Secret Service (Linux). Native backends only — no
+# in-memory fallback (the in-memory backend would defeat reinstall-survival
+# which is the point of using the keychain in the first place).
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native-sync-persistent"] }

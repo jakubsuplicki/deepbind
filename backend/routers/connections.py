@@ -16,12 +16,13 @@ import logging
 from pathlib import Path
 from typing import AsyncGenerator, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from models.schemas import BackfillRequest
 from services.connection_service import ConnectionResult, connect_note
+from services.entitlement_gate import require_functional
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ async def list_semantic_orphans() -> List[OrphanItem]:
     return [OrphanItem(**o) for o in find_semantic_orphans()]
 
 
-@router.post("/run/{note_path:path}", response_model=ConnectionResult)
+@router.post("/run/{note_path:path}", response_model=ConnectionResult, dependencies=[Depends(require_functional)])
 async def rerun_connect(
     note_path: str,
     mode: Optional[str] = "fast",
@@ -78,7 +79,7 @@ def _workspace() -> Path:
     return get_settings().workspace_path
 
 
-@router.post("/dismiss", response_model=DismissResponse)
+@router.post("/dismiss", response_model=DismissResponse, dependencies=[Depends(require_functional)])
 async def dismiss_suggestion(payload: SuggestionPair) -> DismissResponse:
     """Persist a user dismissal so the pair never reappears as a suggestion."""
     from services.connection_events import write_event
@@ -115,7 +116,7 @@ async def dismiss_suggestion(payload: SuggestionPair) -> DismissResponse:
     )
 
 
-@router.post("/promote", response_model=PromoteResponse)
+@router.post("/promote", response_model=PromoteResponse, dependencies=[Depends(require_functional)])
 async def promote_suggestion(payload: SuggestionPair) -> PromoteResponse:
     """Promote a suggested link into the note's ``related`` list."""
     from services.connection_events import write_event
@@ -168,7 +169,7 @@ async def promote_suggestion(payload: SuggestionPair) -> PromoteResponse:
     )
 
 
-@router.post("/backfill")
+@router.post("/backfill", dependencies=[Depends(require_functional)])
 async def backfill_connections(payload: BackfillRequest) -> StreamingResponse:
     """Run Smart Connect on all (or orphan-only) notes, streaming JSON progress.
 
@@ -665,7 +666,7 @@ class BulkPromoteResponse(BaseModel):
     dry_run: bool
 
 
-@router.post("/promote-bulk", response_model=BulkPromoteResponse)
+@router.post("/promote-bulk", response_model=BulkPromoteResponse, dependencies=[Depends(require_functional)])
 async def promote_bulk(payload: BulkPromoteRequest) -> BulkPromoteResponse:
     """Promote all suggestions ≥ ``min_confidence`` across the workspace
     (or restricted to one document's sections) in a single call.

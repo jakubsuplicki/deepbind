@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from services.entitlement_gate import require_functional
 from services.enrichment_service import (
     SUBJECT_JIRA,
     SUBJECT_NOTE,
@@ -31,7 +32,7 @@ async def get_queue() -> dict:
     return await queue_status()
 
 
-@router.post("/rerun", status_code=202)
+@router.post("/rerun", status_code=202, dependencies=[Depends(require_functional)])
 async def rerun_enrichment(body: RerunRequest) -> dict:
     if body.subject_type and body.subject_type not in {SUBJECT_JIRA, SUBJECT_NOTE}:
         raise HTTPException(status_code=422, detail="Unsupported subject_type")
@@ -50,7 +51,7 @@ class SharpenAllRequest(BaseModel):
     include_jira: bool = True
 
 
-@router.post("/sharpen-all", status_code=202)
+@router.post("/sharpen-all", status_code=202, dependencies=[Depends(require_functional)])
 async def sharpen_all_endpoint(body: SharpenAllRequest | None = None) -> dict:
     """Enqueue every note and Jira issue for local-AI enrichment in one click."""
     payload = body or SharpenAllRequest()

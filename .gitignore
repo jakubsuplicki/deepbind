@@ -51,8 +51,10 @@ app/mcp_token
 bun.lock
 
 # Desktop bundle build caches — fetched at build time by
-# desktop/scripts/fetch-bundled-models.sh and fetch-ollama.sh
+# desktop/scripts/fetch-bundled-models.sh, fetch-bundled-tokenizers.sh,
+# and fetch-ollama.sh
 backend/_bundled_models/
+backend/_bundled_tokenizers/
 desktop/.ollama-cache/
 
 # Desktop build artifacts (Tauri/PyInstaller/Cargo output)

@@ -4,10 +4,11 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 from services import session_service
 from services import specialist_service
+from services.entitlement_gate import require_functional
 from services.chat import DEFAULT_STRATEGY, ContextStrategy
 from services.system_prompt import (
     StreamEvent,
@@ -1159,7 +1160,7 @@ async def _process_chat_payload(
     return session_id
 
 
-@router.post("/message")
+@router.post("/message", dependencies=[Depends(require_functional)])
 async def http_chat_message(request: Request) -> dict:
     """Inbound message dispatch over HTTP — the Tauri shell calls this from
     a Rust `#[tauri::command]` to bypass WKWebView's WebSocket throttling

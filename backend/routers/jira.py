@@ -18,8 +18,10 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
+
+from services.entitlement_gate import require_functional
 
 from services.jira_ingest import (
     JiraImportError,
@@ -114,7 +116,7 @@ def _validate_upload(file: UploadFile) -> str:
     return "xml" if ext == ".xml" else "csv"
 
 
-@router.post("/import", response_model=ImportResponse)
+@router.post("/import", response_model=ImportResponse, dependencies=[Depends(require_functional)])
 async def import_jira(
     file: UploadFile = File(...),
     project_filter: Optional[str] = Form(None),

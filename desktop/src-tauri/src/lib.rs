@@ -26,6 +26,8 @@
 //! the developer's existing Ollama + manually-launched backend. See
 //! desktop/scripts/dev.sh.
 
+mod license;
+
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -209,7 +211,13 @@ fn spawn_ollama(app: &AppHandle) -> Result<Child, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![send_chat_message])
+        .invoke_handler(tauri::generate_handler![
+            send_chat_message,
+            license::license_get_state,
+            license::license_install_text,
+            license::license_clear,
+            license::license_open_data_folder,
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -314,14 +322,31 @@ pub fn run() {
                     .map_err(|e| format!("reqwest client build failed: {e}"))?,
             ));
 
-            // 4. Build the window with the config baked in via init_script,
-            // so the page loads with `window.__JARVIS_CONFIG__` already set.
+            // 4. Probe the license state once at boot so the first paint
+            // can decide between trial-banner / wall / settings without a
+            // round-trip. ADR 019 — the wall must be present from the
+            // very first paint when the trial has expired (or a license
+            // is invalid), otherwise gated content flickers visible for
+            // the duration of the network hop.
+            let initial_license_state = {
+                let url_handle = app.state::<BackendUrlHandle>();
+                let http_handle = app.state::<HttpClient>();
+                license::boot_state_blocking(app.handle(), &url_handle.0, &http_handle.0)
+            };
+
+            // 5. Build the window with config + license state baked in via
+            // init_script, so the page loads with both globals already set.
             let cfg_json = serde_json::to_string(&serde_json::json!({
                 "backendUrl": cfg.backend_url,
                 "wsUrl": cfg.ws_url,
             }))
             .map_err(|e| format!("config serialize failed: {e}"))?;
-            let init_script = format!("window.__JARVIS_CONFIG__ = {cfg_json};");
+            let license_json = serde_json::to_string(&initial_license_state)
+                .map_err(|e| format!("license-state serialize failed: {e}"))?;
+            let init_script = format!(
+                "window.__JARVIS_CONFIG__ = {cfg_json}; \
+                 window.__JARVIS_LICENSE_STATE__ = {license_json};"
+            );
 
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("DeepFilesAI")
@@ -336,6 +361,57 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            // ADR 019 chunk 5 — `.deepfileslic` file association handler.
+            // Fires when the OS hands us a file (double-click in Finder,
+            // attachment from welcome email). We read the file content
+            // and emit a `license:file_opened` event; the frontend layout
+            // listens, calls the `license_install_text` command, and the
+            // existing wall/banner reactions take it from there.
+            //
+            // We do the file read synchronously here (in the run handler)
+            // because Tauri's RunEvent::Opened is delivered synchronously
+            // and we want to surface read failures right away. The HTTP
+            // round-trip to the sidecar happens in the frontend command
+            // path so it can show a spinner / handle errors uniformly
+            // with the paste-a-key flow.
+            if let RunEvent::Opened { ref urls } = event {
+                use tauri::Emitter;
+                for url in urls {
+                    let path = match url.to_file_path() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            log::warn!(
+                                "license: ignoring non-file URL {url}"
+                            );
+                            continue;
+                        }
+                    };
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => {
+                            log::info!(
+                                "license: file_opened — {} ({} bytes)",
+                                path.display(),
+                                text.len()
+                            );
+                            if let Err(e) =
+                                app.emit("license:file_opened", text)
+                            {
+                                log::warn!(
+                                    "license: emit license:file_opened failed: {e}"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "license: read {} failed: {}",
+                                path.display(),
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+
             // On exit, kill both children. Tauri binds child lifetime to the
             // shell, but explicit kill prevents the brief orphan window
             // during teardown and matches ADR 003's process-supervision

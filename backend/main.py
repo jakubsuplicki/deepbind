@@ -12,6 +12,7 @@ from models.schemas import HealthResponse
 from routers.chat import router as chat_router
 from routers.graph import router as graph_router
 from routers.jira import router as jira_router
+from routers.license import router as license_router
 from routers.local_models import router as local_models_router
 from routers.memory import router as memory_router
 from routers.preferences import router as preferences_router
@@ -100,6 +101,7 @@ def create_app() -> FastAPI:
     app.include_router(retrieval_router)
     app.include_router(connections_router)
     app.include_router(mcp_router)
+    app.include_router(license_router)
     # ADR 015: no `bundle` router (no build-flag to advertise) and no
     # `api_keys` router (no cloud providers). Single-target local-only
     # build means the route surface is fixed at import time.

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
 
 from models.schemas import (
     NoteContentRequest,
@@ -25,6 +25,7 @@ from services.memory_service import (
     list_notes,
     reindex_all,
 )
+from services.entitlement_gate import require_functional
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
@@ -47,7 +48,12 @@ async def get_note_detail(note_path: str):
         raise HTTPException(status_code=404, detail="Note not found")
 
 
-@router.post("/notes/{note_path:path}", response_model=NoteMetadataResponse, status_code=201)
+@router.post(
+    "/notes/{note_path:path}",
+    response_model=NoteMetadataResponse,
+    status_code=201,
+    dependencies=[Depends(require_functional)],
+)
 async def create_note_endpoint(note_path: str, body: NoteContentRequest):
     try:
         return await create_note(note_path, body.content)
@@ -57,7 +63,11 @@ async def create_note_endpoint(note_path: str, body: NoteContentRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.patch("/notes/{note_path:path}", response_model=NoteMetadataResponse)
+@router.patch(
+    "/notes/{note_path:path}",
+    response_model=NoteMetadataResponse,
+    dependencies=[Depends(require_functional)],
+)
 async def append_note_endpoint(note_path: str, body: NoteAppendRequest):
     try:
         return await append_note(note_path, body.append)
@@ -67,7 +77,11 @@ async def append_note_endpoint(note_path: str, body: NoteAppendRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.delete("/notes/{note_path:path}", status_code=200)
+@router.delete(
+    "/notes/{note_path:path}",
+    status_code=200,
+    dependencies=[Depends(require_functional)],
+)
 async def delete_note_endpoint(note_path: str):
     try:
         await delete_note(note_path)
@@ -158,7 +172,7 @@ _UPLOAD_CHUNK = 1024 * 1024  # 1 MB chunks when streaming uploads to disk
 _FOLDER_RE = re.compile(r"^[a-zA-Z0-9-]+$")
 
 
-@router.post("/ingest")
+@router.post("/ingest", dependencies=[Depends(require_functional)])
 async def ingest_file(
     file: UploadFile = File(...),
     folder: str = Form("knowledge"),
@@ -220,7 +234,7 @@ async def ingest_status():
     return ingest_jobs.snapshot()
 
 
-@router.post("/ingest-url")
+@router.post("/ingest-url", dependencies=[Depends(require_functional)])
 async def ingest_url_endpoint(body: UrlIngestRequest):
     """Ingest a YouTube video or web article into memory."""
     from services.ingest import IngestError
@@ -258,7 +272,7 @@ async def ingest_url_endpoint(body: UrlIngestRequest):
         ingest_jobs.finish_job(job_id, error=error_for_job)
 
 
-@router.post("/enrich/{note_path:path}")
+@router.post("/enrich/{note_path:path}", dependencies=[Depends(require_functional)])
 async def enrich_note(note_path: str):
     """Use the local model to auto-generate summary and tags for a note.
 

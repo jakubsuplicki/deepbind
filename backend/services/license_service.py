@@ -102,6 +102,27 @@ def serialize_license(claims: LicenseClaims, signature: bytes) -> str:
     )
 
 
+def verify_license_with_embedded_key(
+    license_text: str,
+    *,
+    now: Optional[datetime] = None,
+) -> VerificationResult:
+    """Verify a license against the build-time-embedded public key.
+
+    Production entry point. Centralises the trust root so callers cannot
+    accidentally pass a different public key. The embedded key is the
+    constant exposed by `services.license_public_key` (production-injected
+    via the build script per ADR 019, dev fallback otherwise).
+    """
+    # Imported here rather than at module top to keep the crypto layer's
+    # dependency surface tight — license_public_key has its own import-
+    # time warning logic and we don't want to trigger it just because
+    # someone imports license_service for the schema types.
+    from services.license_public_key import LICENSE_PUBLIC_KEY
+
+    return verify_license(license_text, LICENSE_PUBLIC_KEY, now=now)
+
+
 def verify_license(
     license_text: str,
     public_key_bytes: bytes,

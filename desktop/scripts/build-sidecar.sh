@@ -39,6 +39,61 @@ echo "==> building sidecar for triple: $TRIPLE"
 # from minute zero). The fetch script is idempotent.
 bash "$SCRIPT_DIR/fetch-bundled-models.sh"
 
+# ADR 019: inject the production license-verification public key at build
+# time. The PyInstaller spec includes whatever ships at
+# backend/services/_license_pubkey_baked.py via the existing
+# collect_submodules("services") path; we write that file from the
+# JARVIS_LICENSE_PUBKEY_HEX env var (64-char hex of 32 raw bytes), then
+# remove it post-build so dev iteration doesn't accidentally bake a stale
+# key. Without the env var, builds fall back to the dev key embedded in
+# services/license_public_key.py — fine for local dev, refused for
+# production builds (JARVIS_BUILD_PROFILE=production).
+BAKED_FILE="$REPO_ROOT/backend/services/_license_pubkey_baked.py"
+EPOCH_FILE="$REPO_ROOT/backend/services/_build_epoch_baked.py"
+BUILD_PROFILE="${JARVIS_BUILD_PROFILE:-dev}"
+if [[ -n "${JARVIS_LICENSE_PUBKEY_HEX:-}" ]]; then
+    if [[ ${#JARVIS_LICENSE_PUBKEY_HEX} -ne 64 ]]; then
+        echo "error: JARVIS_LICENSE_PUBKEY_HEX must be 64 hex chars (32 bytes); got ${#JARVIS_LICENSE_PUBKEY_HEX}" >&2
+        exit 1
+    fi
+    if ! [[ "$JARVIS_LICENSE_PUBKEY_HEX" =~ ^[0-9a-fA-F]{64}$ ]]; then
+        echo "error: JARVIS_LICENSE_PUBKEY_HEX is not valid hex" >&2
+        exit 1
+    fi
+    echo "==> injecting production license public key (ADR 019)"
+    cat > "$BAKED_FILE" <<EOF
+# AUTO-GENERATED at build time by desktop/scripts/build-sidecar.sh.
+# Do not hand-edit. Removed post-build. See ADR 019.
+LICENSE_PUBLIC_KEY_HEX = "$JARVIS_LICENSE_PUBKEY_HEX"
+EOF
+elif [[ "$BUILD_PROFILE" == "production" ]]; then
+    echo "error: production build requested (JARVIS_BUILD_PROFILE=production) but" >&2
+    echo "       JARVIS_LICENSE_PUBKEY_HEX is not set. Refusing to build a" >&2
+    echo "       production sidecar with the dev license fallback key." >&2
+    exit 1
+else
+    echo "==> no JARVIS_LICENSE_PUBKEY_HEX set (dev build — using dev license key)"
+fi
+
+# ADR 019 chunk 6: bake the build epoch so the sidecar can refuse a
+# system clock earlier than its build date (clock-rollback defense).
+# Always bake this for any build that ships a license-aware sidecar —
+# unlike the public key, an out-of-date dev epoch is harmless (it's a
+# floor, not a fence). For dev builds we use the current time so the
+# floor is always "now-ish" and trivially clears.
+BUILD_EPOCH_ISO="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+echo "==> baking build epoch (ADR 019 chunk 6): $BUILD_EPOCH_ISO"
+cat > "$EPOCH_FILE" <<EOF
+# AUTO-GENERATED at build time by desktop/scripts/build-sidecar.sh.
+# Do not hand-edit. Removed post-build. See ADR 019 chunk 6.
+BUILD_EPOCH_ISO = "$BUILD_EPOCH_ISO"
+EOF
+
+# Cleanup is unconditional — even if PyInstaller fails, we don't want
+# either bake file lingering in the working tree (a stale public key
+# would be especially bad on the next dev build).
+trap 'rm -f "$BAKED_FILE" "$EPOCH_FILE"' EXIT
+
 cd "$DESKTOP_DIR/sidecar"
 # G2 graduation: bundle the real backend (run_frozen.py) instead of the
 # spike's hello.py. The new spec collects all backend submodules + the
