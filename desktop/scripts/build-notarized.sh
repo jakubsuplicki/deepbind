@@ -166,23 +166,27 @@ rm -f "$APP_ZIP"
 xcrun stapler staple "$APP"
 
 echo
-echo "==> [5b/5] notarize + staple the .dmg"
-# .dmg gets its own notary submission so Gatekeeper can verify offline (no
-# phone-home required on customer machines — relevant for our compliance
-# audience).
-xcrun notarytool submit "$DMG" "${NOTARY_AUTH[@]}" --wait
-xcrun stapler staple "$DMG"
-
-echo
-echo "==> verification"
-echo "--- .app ---"
+echo "==> verification (.app)"
+# At this point the .app is fully built, signed, and stapled — its work is
+# preserved across any later .dmg-phase failure.
 spctl --assess -vvv --type exec "$APP" || true
 xcrun stapler validate "$APP" || true
-echo "--- .dmg ---"
-spctl --assess -vvv --type install "$DMG" || true
-xcrun stapler validate "$DMG" || true
+echo
+echo "    .app: $APP"
 
 echo
-echo "==> outputs"
-echo "    .app: $APP"
-echo "    .dmg: $DMG"
+echo "==> [5b/5] notarize + staple the .dmg (delegated to build-dmg.sh)"
+# Split out so a transient hdiutil/notarytool/stapler flake on the .dmg
+# doesn't force a 30-min .app rebuild. If this step fails, retry it alone:
+#     bash desktop/scripts/build-dmg.sh
+if ! bash "$SCRIPT_DIR/build-dmg.sh" "$DMG"; then
+    cat >&2 <<EOF
+
+  ✓ .app is fully built, signed, and stapled at:
+      $APP
+  ✗ .dmg phase failed (see error above).
+  → retry without rebuilding the .app:
+      bash desktop/scripts/build-dmg.sh
+EOF
+    exit 1
+fi
