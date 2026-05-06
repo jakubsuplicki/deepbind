@@ -210,6 +210,54 @@ watch(
   { immediate: true },
 )
 
+// ── Re-warming microstate (warm-sidecar turns with > 1 s before stream) ──
+//
+// On warm-sidecar follow-ups the typing dots used to sit silently for up
+// to 24 s on the consistently-reproducing turn-2 back-pressure (per the
+// chat_step instrumentation at backend/routers/chat.py:861). After 1 s
+// without any text or tool activity, escalate the dots to an explicit
+// "re-warming model…" hint so the user has a stable mental model.
+// Cold-sidecar first turn keeps using the 4-stage ChatFirstTurnWarmup
+// instrument readout — this microstate covers everything else.
+const currentTurnStartedAt = ref<number>(0)
+const reWarmTickNow = ref<number>(Date.now())
+let reWarmTick: ReturnType<typeof setInterval> | null = null
+
+function stopReWarmTimer(): void {
+  if (reWarmTick) {
+    clearInterval(reWarmTick)
+    reWarmTick = null
+  }
+}
+
+watch(
+  () => props.isLoading,
+  (loading, wasLoading) => {
+    if (loading && !wasLoading) {
+      currentTurnStartedAt.value = Date.now()
+      reWarmTickNow.value = Date.now()
+      stopReWarmTimer()
+      reWarmTick = setInterval(() => {
+        reWarmTickNow.value = Date.now()
+      }, 250)
+    } else if (!loading && wasLoading) {
+      currentTurnStartedAt.value = 0
+      stopReWarmTimer()
+    }
+  },
+)
+
+onUnmounted(stopReWarmTimer)
+
+const isReWarming = computed(() =>
+  props.isLoading
+  && !props.currentResponse
+  && !props.toolActivity
+  && !isFirstTurnWaiting.value
+  && currentTurnStartedAt.value > 0
+  && (reWarmTickNow.value - currentTurnStartedAt.value) > 1000,
+)
+
 // ── Throttled streaming markdown render ────────────────────────────────
 //
 // Why throttle: build #6 chat_step instrumentation found that a 27-token
@@ -386,6 +434,21 @@ watch(
         :started-at="firstTurnStartedAt"
         :estimated-total-sec="15"
       />
+
+      <!-- Re-warming microstate — warm-sidecar turns where >1 s elapses
+           without text or tool activity. Escalates the silent typing
+           dots to an explicit hint so the user has a mental model for
+           the consistently-reproducing turn-2 back-pressure (chat.py:861
+           instrumentation). -->
+      <div
+        v-else-if="isReWarming"
+        class="chat-panel__message assistant"
+      >
+        <div class="chat-panel__bubble chat-panel__rewarming">
+          <span class="chat-panel__rewarming-dot" />
+          <span class="chat-panel__rewarming-text">re-warming model…</span>
+        </div>
+      </div>
 
       <!-- Typing indicator (dots) — for follow-up turns where the wait
            is short (1-2s warm) or merely longer-than-cached (eviction,
@@ -954,6 +1017,31 @@ watch(
     transform: translateY(-5px);
     opacity: 1;
   }
+}
+
+/* --- Re-warming microstate (warm-sidecar > 1 s wait) --- */
+.chat-panel__rewarming {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.85rem 1.1rem !important;
+  min-height: auto;
+  font-size: 0.82rem;
+  color: var(--neon-cyan-60);
+  font-style: italic;
+  letter-spacing: 0.015em;
+}
+.chat-panel__rewarming-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--neon-cyan);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: rewarmingPulse 1.2s ease-in-out infinite;
+}
+@keyframes rewarmingPulse {
+  0%, 100% { opacity: 0.45; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.25); }
 }
 
 @keyframes slideIn {
