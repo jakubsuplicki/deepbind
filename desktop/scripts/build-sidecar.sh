@@ -130,6 +130,32 @@ if (( ${#LEAKS[@]} > 0 )); then
 fi
 echo "    no cloud SDKs in bundle ✓"
 
+# Audit findings #9 + #10: the bundle must not ship the developer-only
+# samples/ directory (911Report.pdf is referenced by absolute path in test
+# baselines) or the eval fixtures (reference_workspace/ is synthesized from
+# OWASP CC-BY-SA-4.0 and Stanford HAI CC-BY-ND content — both license
+# restrictions are problematic if redistributed). The PyInstaller spec
+# already excludes both — only `tests.eval.latency` ships, not
+# `tests.eval.fixtures` or `samples/`. This assertion is the regression
+# guard so a future spec edit doesn't quietly re-include them.
+echo "==> verifying no developer-only data leaked into bundle (audit #9, #10)"
+DATA_LEAKS=()
+for fragment in "samples/" "911Report.pdf" "tests/eval/fixtures/" "reference_workspace/" "reference_pdfs.json"; do
+    if strings "$SRC" 2>/dev/null | LC_ALL=C grep -qF "$fragment"; then
+        DATA_LEAKS+=("$fragment")
+    fi
+done
+if (( ${#DATA_LEAKS[@]} > 0 )); then
+    echo "error: developer-only data leaked into bundle: ${DATA_LEAKS[*]}" >&2
+    echo "       Per commercial-licensing-audit.md findings #9 (samples/) and" >&2
+    echo "       #10 (eval fixtures), the bundle must not redistribute these." >&2
+    echo "       Likely cause: a recent edit to desktop/sidecar/jarvis-sidecar.spec" >&2
+    echo "       added one of these paths to \`datas\` or extended a" >&2
+    echo "       \`collect_submodules\` call past \`tests.eval.latency\`." >&2
+    exit 1
+fi
+echo "    no developer-only data in bundle ✓"
+
 DEST="$OUT_DIR/jarvis-sidecar-$TRIPLE"
 cp "$SRC" "$DEST"
 chmod +x "$DEST"
