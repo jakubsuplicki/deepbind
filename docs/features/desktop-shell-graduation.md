@@ -294,6 +294,8 @@ Backend orchestrator and frontend wizard landed per ADR 005 §B and §C. Impleme
 
 **Goal:** prove the §B pipeline drives the wizard correctly on a clean install — fresh `<app_data>`, fresh keychain, no prior marker — when the binary is the notarized DMG (not a dev-mode launch).
 
+**Runbook:** [`docs/runbooks/g4b6-cold-launch-verification.md`](../runbooks/g4b6-cold-launch-verification.md) — step-by-step procedure with pass/fail observations, diagnostic commands, and the cold-launch-state-reset recipe (Option A: separate Mac, Option B: simulate clean on this Mac by clearing Tauri app-data, workspace dir, logs, and keychain entries).
+
 **Done when**
 - [ ] Notarized DMG installs cleanly on a stock macOS arm64 box.
 - [ ] First launch shows the OnboardingLocalFlow wizard (no marker present) and auto-kicks the first-run orchestrator.

@@ -80,6 +80,7 @@ All feature docs are in [docs/features/](features/) and concepts are in [docs/co
 | Topic | Doc |
 |---|---|
 | macOS release build (signed + notarized) | [runbooks/release-build-macos.md](runbooks/release-build-macos.md) |
+| G4b6 cold-launch verification on the notarized bundle | [runbooks/g4b6-cold-launch-verification.md](runbooks/g4b6-cold-launch-verification.md) |
 
 ## Architecture decisions
 
