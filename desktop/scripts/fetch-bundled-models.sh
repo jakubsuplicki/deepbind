@@ -69,6 +69,34 @@ EXPECTED_DIR="$CACHE_DIR/models--snowflake--snowflake-arctic-embed-l"
 # Reranker (per ADR 018, bundled alongside the embedder via add_custom_model)
 RERANKER_EXPECTED_DIR_PROBE="$CACHE_DIR/models--onnx-community--bge-reranker-v2-m3-ONNX"
 
+# Scrub orphaned model dirs from previous embedder/reranker swaps. The
+# PyInstaller spec bundles the entire $CACHE_DIR, so a leftover ~240 MB
+# from (e.g.) the pre-2026-05 multilingual MiniLM would silently ride
+# along into the .app, contradicting THIRD-PARTY-NOTICES and bloating
+# the bundle. The set below is the canonical allowlist; anything else
+# under $CACHE_DIR matching `models--*` gets removed.
+EXPECTED_MODEL_DIRS=(
+    "models--snowflake--snowflake-arctic-embed-l"
+    "models--onnx-community--bge-reranker-v2-m3-ONNX"
+)
+if [[ -d "$CACHE_DIR" ]]; then
+    for dir in "$CACHE_DIR"/models--*; do
+        [[ -d "$dir" ]] || continue  # nullglob-tolerant — literal `models--*` if no match
+        name="$(basename "$dir")"
+        keep=0
+        for expected in "${EXPECTED_MODEL_DIRS[@]}"; do
+            if [[ "$name" == "$expected" ]]; then
+                keep=1
+                break
+            fi
+        done
+        if (( keep == 0 )); then
+            echo "==> scrubbing orphaned model cache: $name"
+            rm -rf "$dir"
+        fi
+    done
+fi
+
 embedder_cached=0
 reranker_cached=0
 if [[ -d "$EXPECTED_DIR/snapshots" ]] && find "$EXPECTED_DIR/snapshots" -name 'model.onnx' -size +500M | grep -q .; then
