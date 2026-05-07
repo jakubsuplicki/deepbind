@@ -318,6 +318,14 @@ async def _run_probe(base_url: str) -> bool:
                     ProbeEvidence(**e) for e in payload["candidates_evaluated"]
                 ),
                 user_override=existing_override,
+                # Persist the catalog snapshot the probe ran against so
+                # `needs_rerun()` has something to compare current state to.
+                # Without this, the field defaults to an empty tuple and
+                # every subsequent boot computes
+                # `set(current_models) - set([]) = all current models`,
+                # firing the "A new local model is available — re-run to
+                # consider it" banner forever.
+                catalog_models=tuple(payload.get("catalog_models") or ()),
             )
             persist_probe_result(
                 result,

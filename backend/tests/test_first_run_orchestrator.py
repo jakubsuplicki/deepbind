@@ -263,6 +263,76 @@ class TestPipelineFailures:
         assert status.probe_failed is True
         assert status.marker_written is True
 
+    @pytest.mark.anyio
+    async def test_run_probe_persists_catalog_snapshot(self, workspace, monkeypatch):
+        """The orchestrator's `_run_probe` reconstructs ProbeResult from
+        the event payload and persists it. The catalog snapshot from the
+        payload MUST be carried through — without it, every subsequent
+        boot's `needs_rerun()` computes
+        `set(current_models) - set([]) = all current models` and fires
+        the misleading "A new local model is available" banner forever.
+        """
+        from services import first_run_orchestrator
+
+        # Mock the probe stream to emit a `complete` event with a non-
+        # empty catalog snapshot. The orchestrator must carry the field
+        # through to the persisted payload.
+        async def _fake_probe_events(**_kwargs):
+            yield {
+                "event": "complete",
+                "result": {
+                    "schema_version": 1,
+                    "timestamp_utc": "2026-05-07T00:00:00Z",
+                    "ollama_version": "0.18.0",
+                    "platform": "macos-arm64",
+                    "ram_gb": 24,
+                    "recommended_model": "qwen3:8b",
+                    "safe_fallback_used": False,
+                    "candidates_evaluated": [],
+                    "user_override": None,
+                    "catalog_models": ["qwen3:1.7b", "qwen3:4b", "qwen3:8b"],
+                },
+            }
+
+        from services.ollama_service import RuntimeStatus
+
+        async def _fake_runtime(_base_url):
+            return RuntimeStatus(
+                reachable=True, version="0.18.0", base_url="http://x", models=[],
+            )
+
+        # Point get_settings().workspace_path at the test workspace so
+        # the probe writes config.json into the right tree.
+        from services import workspace_service as _ws_mod  # noqa: F401
+        monkeypatch.setattr(
+            "config.get_settings",
+            lambda: type("S", (), {"workspace_path": workspace})(),
+        )
+        # `probe_runtime` and `iter_probe_events` are both imported lazily
+        # *inside* `_run_probe` from their source modules, so we patch at
+        # the source — patching the orchestrator's namespace would no-op.
+        monkeypatch.setattr(
+            "services.chat_model_probe.iter_probe_events",
+            _fake_probe_events,
+        )
+        monkeypatch.setattr(
+            "services.ollama_service.probe_runtime",
+            _fake_runtime,
+        )
+
+        ok = await first_run_orchestrator._run_probe(base_url="http://x")
+        assert ok is True
+
+        config = json.loads((workspace / "app" / "config.json").read_text())
+        persisted = config.get("chat_model_probe")
+        assert persisted is not None, "probe should have persisted to config.json"
+        assert persisted["catalog_models"] == [
+            "qwen3:1.7b", "qwen3:4b", "qwen3:8b",
+        ], (
+            "catalog snapshot must be carried from event payload to persisted "
+            "record — empty list here means `needs_rerun` will fire forever"
+        )
+
 
 # ── Idempotency / lifecycle guards ──────────────────────────────────────────
 
