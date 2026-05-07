@@ -20,6 +20,7 @@ from services.ollama_dispatcher import OllamaDispatchConfig, OllamaDispatcher
 from services.tools import TOOLS, ToolNotFoundError, execute_tool
 from services.token_tracking import log_usage
 from services.workspace_service import get_api_key
+from services.ws_send_queue import attach as _attach_send_queue, detach as _detach_send_queue, queue_for as _queue_for
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,25 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 async def _send_event(ws: WebSocket, event_type: str, **fields) -> None:
-    await ws.send_json({"type": event_type, **fields})
+    """Send an event to the WebSocket via the per-WS send queue.
+
+    Routing all WS writes through `services.ws_send_queue.WSSendQueue`
+    keeps the per-session dispatch lock decoupled from WS write latency.
+    Without it, a sleeping WKWebView (App Nap between turns on macOS)
+    can block `ws.send_json` for 20-30s on the trailing `done` event,
+    holding the lock and stalling the user's next message — see
+    docs/features/chat.md "WS send queue" subsection.
+
+    Tests/dev paths that bypass `attach_send_queue()` (e.g. raw
+    WebSocket fixtures) fall back to a direct send so the contract is
+    a strict superset of the old behavior.
+    """
+    bus = _queue_for(ws)
+    payload = {"type": event_type, **fields}
+    if bus is None:
+        await ws.send_json(payload)
+        return
+    await bus.enqueue(payload)
 
 
 # ── Per-turn telemetry accumulator (ADR 005 §C trigger 2) ───────────────────
@@ -1237,6 +1256,13 @@ async def chat_ws(websocket: WebSocket) -> None:
 
     await websocket.accept()
 
+    # Attach the per-WS outbound send queue + start its consumer task
+    # before any `_send_event(...)` fires below. All subsequent WS
+    # writes go through the queue, so the per-session dispatch lock is
+    # never held hostage by `ws.send_json` back-pressure (e.g. macOS
+    # WKWebView App Nap between turns).
+    send_queue = _attach_send_queue(websocket)
+
     # Allow resuming an existing session via query param (e.g. after reconnect)
     resume_id = websocket.query_params.get("session_id", "").strip()
     # Validate format before any lookup to prevent abuse
@@ -1345,6 +1371,13 @@ async def chat_ws(websocket: WebSocket) -> None:
         for _sid, _entry in list(_active_sessions.items()):
             if _entry.get("ws") is websocket:
                 _active_sessions.pop(_sid, None)
+        # Stop the WS send queue's consumer task. Drain pending events
+        # for up to 1s — most cases are clean; a stuck client gets the
+        # consumer cancelled so we don't block the WS handler's exit.
+        try:
+            await send_queue.close()
+        finally:
+            _detach_send_queue(websocket)
         if _connection_llm is not None:
             try:
                 await _connection_llm.close()

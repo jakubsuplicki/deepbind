@@ -361,3 +361,153 @@ async def test_ws_falls_back_to_server_key_without_client_key(mock_api_key, mock
             assert len(text_events) >= 1
             assert text_events[0]["content"] == "Fallback"
 
+
+# ── WS send queue integration (the lock-decoupling fix) ─────────────────────
+#
+# These tests pin the property the chat router depends on: with the per-WS
+# send queue attached (production path), `_send_event(ws, ...)` returns
+# promptly even when `ws.send_json` is blocked. Without that property, a
+# napped WKWebView between turns holds the per-session dispatch lock for
+# 20-30s, making the user's next message wait through the previous turn's
+# trailing `done` send.
+
+
+@pytest.mark.anyio
+async def test_send_event_routes_through_queue_when_attached():
+    """With `attach()` on the WS, `_send_event` must enqueue events for
+    the consumer task to drain — not call `ws.send_json` from the caller
+    side."""
+    import asyncio as _asyncio
+    from routers.chat import _send_event
+    from services.ws_send_queue import attach, detach
+
+    received: list[dict] = []
+
+    async def _send_json(payload):
+        received.append(payload)
+
+    ws = type("FakeWS", (), {})()
+    ws.send_json = _send_json  # type: ignore[attr-defined]
+    bus = attach(ws, name="route-test")
+    try:
+        await _send_event(ws, "evt", n=1)
+        await _send_event(ws, "evt", n=2)
+        await _send_event(ws, "done", final=True)
+        # Wait for the consumer to drain.
+        for _ in range(50):
+            if len(received) >= 3:
+                break
+            await _asyncio.sleep(0.01)
+        assert [e["type"] for e in received] == ["evt", "evt", "done"]
+        assert [e.get("n") for e in received[:2]] == [1, 2]
+    finally:
+        await bus.close()
+        detach(ws)
+
+
+@pytest.mark.anyio
+async def test_send_event_does_not_block_on_stuck_ws_when_queue_attached():
+    """**The load-bearing test.** With the queue attached, a wedged
+    `ws.send_json` (e.g. WKWebView App Nap) must not block subsequent
+    `_send_event` calls. Without the queue, every call would block
+    until the wedge clears — which is exactly the dispatch-lock-coupling
+    bug the queue exists to fix.
+
+    Asserts that 5 follow-up sends complete in well under 1s while the
+    first send is held by an asyncio.Event the consumer is awaiting."""
+    import asyncio as _asyncio
+    from routers.chat import _send_event
+    from services.ws_send_queue import attach, detach
+
+    send_started = _asyncio.Event()
+    send_release = _asyncio.Event()
+
+    async def _send_json(payload):
+        send_started.set()
+        await send_release.wait()
+
+    ws = type("FakeWS", (), {})()
+    ws.send_json = _send_json  # type: ignore[attr-defined]
+    bus = attach(ws, name="stuck-test")
+    try:
+        # First event: consumer pulls it and gets stuck inside send_json.
+        await _send_event(ws, "first")
+        await _asyncio.wait_for(send_started.wait(), timeout=1.0)
+
+        # Subsequent _send_events MUST return promptly. With the queue
+        # they enqueue and return; without the queue they would block
+        # until send_release is set.
+        loop = _asyncio.get_event_loop()
+        t0 = loop.time()
+        for i in range(5):
+            await _asyncio.wait_for(
+                _send_event(ws, "follow_up", i=i),
+                timeout=0.5,
+            )
+        elapsed = loop.time() - t0
+        assert elapsed < 0.5, (
+            f"5 _send_event calls should not couple to stuck send_json; "
+            f"elapsed={elapsed:.3f}s"
+        )
+    finally:
+        send_release.set()
+        await bus.close()
+        detach(ws)
+
+
+@pytest.mark.anyio
+async def test_send_event_falls_back_to_direct_send_without_queue():
+    """Backwards-compatibility: tests / fixtures that don't call attach()
+    keep working. `_send_event` falls through to `ws.send_json` directly."""
+    from routers.chat import _send_event
+
+    received: list[dict] = []
+
+    async def _send_json(payload):
+        received.append(payload)
+
+    ws = type("FakeWS", (), {})()
+    ws.send_json = _send_json  # type: ignore[attr-defined]
+    # No attach() — simulating a test/dev path that constructs a bare WS.
+    await _send_event(ws, "ping", x=42)
+    assert received == [{"type": "ping", "x": 42}]
+
+
+@pytest.mark.anyio
+async def test_ws_handler_attaches_and_detaches_send_queue(mock_api_key, mock_claude_stream):
+    """End-to-end: connecting a WS attaches a queue; disconnecting
+    detaches it. Verified by spying on the attach/detach helpers."""
+    from unittest.mock import patch
+
+    mock_claude_stream.stream_response = _fake_stream(
+        StreamEvent(type="text_delta", content="hello"),
+    )
+
+    attach_calls: list = []
+    detach_calls: list = []
+
+    real_attach = __import__("services.ws_send_queue", fromlist=["attach"]).attach
+    real_detach = __import__("services.ws_send_queue", fromlist=["detach"]).detach
+
+    def _spy_attach(ws, **kw):
+        attach_calls.append(ws)
+        return real_attach(ws, **kw)
+
+    def _spy_detach(ws):
+        detach_calls.append(ws)
+        return real_detach(ws)
+
+    from starlette.testclient import TestClient
+
+    with patch("routers.chat._attach_send_queue", _spy_attach), \
+         patch("routers.chat._detach_send_queue", _spy_detach):
+        with TestClient(app) as client:
+            with client.websocket_connect("/api/chat/ws") as ws:
+                ws.receive_json()  # session_start
+                ws.send_json({"content": "hi"})
+                while ws.receive_json()["type"] != "done":
+                    pass
+
+    assert len(attach_calls) == 1, "attach should fire once on WS accept"
+    assert len(detach_calls) == 1, "detach should fire once on WS close"
+    assert attach_calls[0] is detach_calls[0], "same WS instance attached + detached"
