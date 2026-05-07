@@ -47,7 +47,7 @@ Per [ADR 002](architecture/decisions/002-pure-local-product-shape.md) and [ADR 0
 | Frontend build | Vite, static `nuxt generate` for bundling |
 | Backend framework | FastAPI (Python 3.12+), packaged via PyInstaller |
 | Inference runtime | Ollama 0.18.0 (bundled), official `ollama` Python client (Apache-2.0) |
-| Default chat model | Hardware-tiered: `qwen3:8b` (Tier A) / `qwen3:30b-a3b-instruct-2507` (Tier B) / `gpt-oss:120b` (Tier C). User-pinnable. |
+| Default chat model | Hardware-tiered: `qwen3:8b` (Tier A) / `qwen3:30b-a3b-instruct-2507-q4_K_M` (Tier B) / `gpt-oss:120b` (Tier C). User-pinnable. |
 | Embeddings | fastembed ONNX (multilingual MiniLM, bundled — ~240 MB) |
 | Database | SQLite via aiosqlite (FTS5 for search) |
 | Graph | JSON file, visualized with force-graph + Three.js |

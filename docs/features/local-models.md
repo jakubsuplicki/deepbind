@@ -93,10 +93,10 @@ The catalog covers the spectrum from weak laptops to workstations across eight p
 
 | Preset | Model | Size | Native Context | Best RAM | Role / Status |
 |--------|-------|------|---------------|----------|---------------|
-| Long Docs | qwen3:4b-instruct-2507 | 2.6 GB | 256K | 12–24 GB | ADR 005 Tier A downgrade-ladder target — tag unverified |
+| Long Docs | qwen3:4b-instruct-2507-q4_K_M | 2.6 GB | 256K | 12–24 GB | ADR 005 Tier A downgrade-ladder target — tag unverified |
 | Balanced | qwen3:14b | 9.0 GB | 32K | 24–32 GB | best dense Qwen3 for 24 GB unified memory — tag unverified |
-| Best Local | qwen3:30b-a3b-instruct-2507 | 18 GB | 256K | 24–48 GB | ADR 005 Tier B first-run primary — tag unverified |
-| Reasoning | qwen3:30b-a3b-thinking-2507 | 18 GB | 256K | 24–48 GB | ADR 005 Tier B reasoning primary (duel-mode opt-in) — tag unverified |
+| Best Local | qwen3:30b-a3b-instruct-2507-q4_K_M | 18 GB | 256K | 24–48 GB | ADR 005 Tier B first-run primary — tag unverified |
+| Reasoning | qwen3:30b-a3b-thinking-2507-q4_K_M | 18 GB | 256K | 24–48 GB | ADR 005 Tier B reasoning primary (duel-mode opt-in) — tag unverified |
 | Best Local | gpt-oss:120b | 63 GB | 128K | 80–128 GB | ADR 005 Tier C first-run primary (single H100 / 96+ GB unified) — tag unverified |
 | Plumbing | granite4:h-micro | 2.0 GB | 32K | 8–16 GB | always-on classifier (ISO-42001 certified) — tag unverified |
 | Plumbing | granite4:h-tiny | 4.0 GB | 128K | 12–24 GB | ADR 005 Tier B opt-in plumbing upgrade — tag unverified |
@@ -163,9 +163,9 @@ To consume Ollama's pull stream internally without parsing SSE wrapping, the cat
 
 | Tier | Primary | Fallback (background pull) |
 |------|---------|----------------------------|
-| A | `qwen3:8b` | `qwen3:4b-instruct-2507` (256K-native per ADR §A) |
-| B | `qwen3:30b-a3b-instruct-2507` | `qwen3:8b` |
-| C | `gpt-oss:120b` | `qwen3:30b-a3b-instruct-2507` |
+| A | `qwen3:8b` | `qwen3:4b-instruct-2507-q4_K_M` (256K-native per ADR §A) |
+| B | `qwen3:30b-a3b-instruct-2507-q4_K_M` | `qwen3:8b` |
+| C | `gpt-oss:120b` | `qwen3:30b-a3b-instruct-2507-q4_K_M` |
 
 State-machine + endpoint contract tests live in [`tests/test_first_run_orchestrator.py`](../../backend/tests/test_first_run_orchestrator.py): happy-path Tier A + Tier C, primary-pull-fatal, fallback-non-fatal, probe-non-fatal, skip path, marker-already-present short-circuit, concurrent-start idempotency, lifespan cancel.
 
@@ -177,7 +177,7 @@ The frontend half of the first-run pipeline lives in two pieces:
   - `chatReady` — true once the foreground primary lands (i.e. `marker_written` flips, or state advances past `pulling_primary`). The wizard uses this to release the user into chat while the background fallback pull and chat-model probe continue silently. Per ADR §B step 5.
   - `active` — true while the orchestrator is mid-pipeline (`probing` / `pulling_primary` / `pulling_fallback` / `running_probe`).
   - `finished` — true on `complete` or `skipped`.
-  - `stageLabel` — single-line UI label per state ("Detecting your hardware…", "Downloading qwen3:8b", "Topping up qwen3:4b-instruct-2507 in the background", "Validating your setup…", etc).
+  - `stageLabel` — single-line UI label per state ("Detecting your hardware…", "Downloading qwen3:8b", "Topping up qwen3:4b-instruct-2507-q4_K_M in the background", "Validating your setup…", etc).
 - [`OnboardingLocalFlow.vue`](../../frontend/app/components/OnboardingLocalFlow.vue) — two-layer wizard. **Layer 1** (orchestrator-driven, default in the bundled build) drives the §B pipeline UI: probing label → `pulling_primary` progress bar with bytes / pct + "I'll pick my own model later" skip → `chatReady` ready screen with non-blocking background-fallback indicator + Open Jarvis button → `complete` ready screen. **Layer 2** (legacy [`useLocalSetupFlow`](../../frontend/app/composables/useLocalSetupFlow.ts) manual picker) is kept verbatim for the §B skip path AND for the dev-mode fallback when `localModels.isOllamaReady()` is false at mount (no bundled sidecar). Step indicators redesigned to "Detect hardware → Download model → Start using Jarvis" (replaces the legacy "Install runtime → Choose model" which assumed the user installs Ollama themselves).
 
 **Marker-present early return.** If `firstRun.status.marker_present` is true at mount the wizard emits `model-ready` immediately and bails — second/third launches with the marker on disk skip the wizard entirely (per §B step 6 "Subsequent launches skip the entire pipeline").
@@ -264,7 +264,7 @@ Pick the largest passing model. Persist the choice. Re-run on Ollama / OS / hard
 ### Tool Calling Mode
 
 Each model gets a `tool_mode` classification consumed by the [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py):
-- **`native_qwen3`** — model exposes native function-calling in the Qwen3 family format (e.g. qwen3:8b, qwen3:14b, qwen3:30b-a3b-instruct-2507, qwen3:30b-a3b-thinking-2507, gpt-oss:120b, granite4:h-small). The dispatcher passes the tool spec straight to `ollama.AsyncClient.chat(tools=…)` and consumes `tool_calls` chunks from the stream.
+- **`native_qwen3`** — model exposes native function-calling in the Qwen3 family format (e.g. qwen3:8b, qwen3:14b, qwen3:30b-a3b-instruct-2507-q4_K_M, qwen3:30b-a3b-thinking-2507-q4_K_M, gpt-oss:120b, granite4:h-small). The dispatcher passes the tool spec straight to `ollama.AsyncClient.chat(tools=…)` and consumes `tool_calls` chunks from the stream.
 - **`adapted`** — small/mid-size models (e.g. qwen3:4b, granite4:h-micro, granite4:h-tiny) that handle tool calls via JSON-mode prompting; the dispatcher wraps the tool spec into the system prompt and parses the model's JSON output back into a synthetic `tool_use` block.
 - **`excluded_from_tools`** — very small models (< 2 GB) that don't reliably tool-call (e.g. qwen3:1.7b). The dispatcher refuses to attach tools at all.
 

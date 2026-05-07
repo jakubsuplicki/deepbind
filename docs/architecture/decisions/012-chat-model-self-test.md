@@ -90,7 +90,7 @@ The recommendation is persisted to `app/config.json` under a new key:
     "ram_gb": 24,
     "recommended_model": "qwen3:14b",
     "candidates_evaluated": [
-      {"model": "qwen3:30b-a3b-instruct-2507", "verdict": "fail_hardware_fit"},
+      {"model": "qwen3:30b-a3b-instruct-2507-q4_K_M", "verdict": "fail_hardware_fit"},
       {"model": "qwen3:30b-a3b", "verdict": "fail_correctness", "evidence": "Okay, the user asked..."},
       {"model": "qwen3:14b", "verdict": "pass", "warm_short_ms": 299, "realistic_tps": 14.0}
     ],

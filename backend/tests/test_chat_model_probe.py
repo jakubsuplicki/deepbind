@@ -448,13 +448,13 @@ def test_effective_chat_model_prefers_user_override(tmp_path: Path):
             {
                 PROBE_CONFIG_KEY: {
                     "recommended_model": "qwen3:14b",
-                    "user_override": "qwen3:30b-a3b-instruct-2507",
+                    "user_override": "qwen3:30b-a3b-instruct-2507-q4_K_M",
                 }
             }
         ),
         encoding="utf-8",
     )
-    assert effective_chat_model(config) == "qwen3:30b-a3b-instruct-2507"
+    assert effective_chat_model(config) == "qwen3:30b-a3b-instruct-2507-q4_K_M"
 
 
 def test_effective_chat_model_falls_back_to_recommendation(tmp_path: Path):
@@ -507,9 +507,9 @@ def test_set_user_override_updates_existing_record_without_clobbering_evidence(t
         user_override=None,
     )
     persist_probe_result(result, config_path=config)
-    set_user_override(config, model="qwen3:30b-a3b-instruct-2507")
+    set_user_override(config, model="qwen3:30b-a3b-instruct-2507-q4_K_M")
     record = read_probe_result(config)
-    assert record["user_override"] == "qwen3:30b-a3b-instruct-2507"
+    assert record["user_override"] == "qwen3:30b-a3b-instruct-2507-q4_K_M"
     assert record["recommended_model"] == "qwen3:14b"
     assert record["timestamp_utc"] == "2026-04-28T12:34:56Z"
 
@@ -590,7 +590,7 @@ def test_needs_rerun_when_catalog_adds_models():
     env = CurrentEnvironment(
         ollama_version="0.18.0",
         platform="darwin-arm64-macos14",
-        catalog_models=("qwen3:14b", "qwen3:30b-a3b-instruct-2507", "qwen3:8b"),
+        catalog_models=("qwen3:14b", "qwen3:30b-a3b-instruct-2507-q4_K_M", "qwen3:8b"),
     )
     rerun, reason = needs_rerun(persisted, env)
     assert rerun is True

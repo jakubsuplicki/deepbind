@@ -148,7 +148,7 @@ async def _swap_with_warning_side_effect(*, ws, provider, model, base_url, ctx_l
     """Helper-side-effect: emit a warning over `ws` and return the swapped model."""
     if provider == "ollama":
         await ws.send_json({"type": "warning", "content": "Switched to qwen3:4b due to memory pressure"})
-        return "qwen3:4b-instruct-2507", False
+        return "qwen3:4b-instruct-2507-q4_K_M", False
     return model, False
 
 
@@ -173,7 +173,7 @@ def test_oom_pre_text_triggers_ladder_retry():
     with patch("routers.chat.get_api_key", return_value="sk-ant-test-key"), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("qwen3:8b", False))), \
-         patch("routers.chat._ladder_step_after_oom", new=AsyncMock(return_value=("qwen3:4b-instruct-2507", "OOM — switched to Qwen3-4B"))):
+         patch("routers.chat._ladder_step_after_oom", new=AsyncMock(return_value=("qwen3:4b-instruct-2507-q4_K_M", "OOM — switched to Qwen3-4B"))):
 
         with TestClient(app) as client:
             with client.websocket_connect("/api/chat/ws") as ws:
@@ -209,7 +209,7 @@ def test_oom_with_no_fallback_emits_error():
     )
     with patch("routers.chat.get_api_key", return_value="sk-ant-test-key"), \
          patch("routers.chat._make_llm", return_value=instance), \
-         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("qwen3:4b-instruct-2507", False))), \
+         patch("routers.chat._apply_memory_pressure_swap", new=AsyncMock(return_value=("qwen3:4b-instruct-2507-q4_K_M", False))), \
          patch("routers.chat._ladder_step_after_oom", new=AsyncMock(return_value=(None, None))):
 
         with TestClient(app) as client:
@@ -218,7 +218,7 @@ def test_oom_with_no_fallback_emits_error():
                 ws.send_json({
                     "content": "hi",
                     "provider": "ollama",
-                    "model": "qwen3:4b-instruct-2507",
+                    "model": "qwen3:4b-instruct-2507-q4_K_M",
                 })
                 events = []
                 while True:
@@ -286,7 +286,7 @@ def test_lightweight_mode_short_circuits_to_floor():
     floor_entry = MagicMock()
     floor_entry.id = "qwen3-4b-instruct-2507"
     floor_entry.label = "Qwen3-4B-Instruct"
-    floor_entry.ollama_model = "qwen3:4b-instruct-2507"
+    floor_entry.ollama_model = "qwen3:4b-instruct-2507-q4_K_M"
 
     # Stub the bits the helper uses so we exercise the routing logic without
     # depending on host hardware: requested entry is a different (larger)
@@ -316,7 +316,7 @@ def test_lightweight_mode_short_circuits_to_floor():
              "services.ollama_service.list_installed_models",
              new=AsyncMock(return_value=[
                  {"name": "qwen3:8b"},
-                 {"name": "qwen3:4b-instruct-2507"},
+                 {"name": "qwen3:4b-instruct-2507-q4_K_M"},
              ]),
          ):
         with TestClient(app) as client:
@@ -339,7 +339,7 @@ def test_lightweight_mode_short_circuits_to_floor():
     assert "lightweight mode" in warnings[0]["content"].lower()
     # The done event reports the swapped (floor) model.
     done = next(e for e in events if e["type"] == "done")
-    assert "qwen3:4b-instruct-2507" in done["model"]
+    assert "qwen3:4b-instruct-2507-q4_K_M" in done["model"]
 
 
 def test_lightweight_mode_no_warning_when_already_at_floor():
@@ -352,7 +352,7 @@ def test_lightweight_mode_no_warning_when_already_at_floor():
 
     requested_entry = MagicMock()
     requested_entry.id = "qwen3-4b-instruct-2507"
-    requested_entry.ollama_model = "qwen3:4b-instruct-2507"
+    requested_entry.ollama_model = "qwen3:4b-instruct-2507-q4_K_M"
     requested_entry.effective_context_tokens = 32768
     # `pick_runnable_model` will be called; have it report no swap so the
     # whole pre-flight is a no-op as expected.
@@ -382,7 +382,7 @@ def test_lightweight_mode_no_warning_when_already_at_floor():
          ), \
          patch(
              "services.ollama_service.list_installed_models",
-             new=AsyncMock(return_value=[{"name": "qwen3:4b-instruct-2507"}]),
+             new=AsyncMock(return_value=[{"name": "qwen3:4b-instruct-2507-q4_K_M"}]),
          ):
         with TestClient(app) as client:
             with client.websocket_connect("/api/chat/ws") as ws:
@@ -390,7 +390,7 @@ def test_lightweight_mode_no_warning_when_already_at_floor():
                 ws.send_json({
                     "content": "hi",
                     "provider": "ollama",
-                    "model": "qwen3:4b-instruct-2507",
+                    "model": "qwen3:4b-instruct-2507-q4_K_M",
                 })
                 events = []
                 while True:

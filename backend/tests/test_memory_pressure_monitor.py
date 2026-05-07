@@ -126,7 +126,7 @@ class TestPickRunnableModel:
             requested,
             tier="A",
             ctx_len_tokens=4096,
-            installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507"],
+            installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507-q4_K_M"],
             free_ram_bytes=free_bytes,
         )
         assert result.did_swap is True
@@ -161,7 +161,7 @@ class TestPickRunnableModel:
             requested,
             tier="A",
             ctx_len_tokens=4096,
-            installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507"],
+            installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507-q4_K_M"],
             free_ram_bytes=free_bytes,
         )
         assert result.chosen is None
@@ -178,7 +178,7 @@ class TestPickRunnableModel:
             requested,
             tier="A",
             ctx_len_tokens=4096,
-            installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507", "qwen3:30b-a3b-instruct-2507"],
+            installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507-q4_K_M", "qwen3:30b-a3b-instruct-2507-q4_K_M"],
             free_ram_bytes=free_bytes,
         )
         # Should pick the 4B (the requested), not jump up to 8B even though it fits.
@@ -196,7 +196,7 @@ class TestPickRunnableModel:
             requested,
             tier="B",
             ctx_len_tokens=8192,
-            installed_ollama_tags=[requested.ollama_model, "qwen3:8b", "qwen3:4b-instruct-2507"],
+            installed_ollama_tags=[requested.ollama_model, "qwen3:8b", "qwen3:4b-instruct-2507-q4_K_M"],
             free_ram_bytes=free_bytes,
         )
         # We must walk the *Tier B* ladder, not Tier A's, and end up on a runnable rung.
@@ -267,9 +267,9 @@ class TestFloorEntryForTier:
         floor = floor_entry_for_tier(
             "A",
             installed_ollama_tags=[
-                "qwen3:30b-a3b-instruct-2507",
+                "qwen3:30b-a3b-instruct-2507-q4_K_M",
                 "qwen3:8b",
-                "qwen3:4b-instruct-2507",
+                "qwen3:4b-instruct-2507-q4_K_M",
             ],
         )
         assert floor is not None
@@ -280,7 +280,7 @@ class TestFloorEntryForTier:
         # 4B not installed → floor falls back to next-smallest installed (8B)
         floor = floor_entry_for_tier(
             "A",
-            installed_ollama_tags=["qwen3:8b", "qwen3:30b-a3b-instruct-2507"],
+            installed_ollama_tags=["qwen3:8b", "qwen3:30b-a3b-instruct-2507-q4_K_M"],
         )
         assert floor is not None
         assert floor.id == "qwen3-8b"

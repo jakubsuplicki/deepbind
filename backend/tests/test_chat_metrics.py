@@ -313,12 +313,12 @@ def test_oom_retry_resets_metrics_acc_so_failed_round_does_not_leak():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("qwen3:30b-a3b-instruct-2507", False))), \
+               new=AsyncMock(return_value=("qwen3:30b-a3b-instruct-2507-q4_K_M", False))), \
          patch(
              "routers.chat._ladder_step_after_oom",
              new=AsyncMock(return_value=("qwen3:8b", "Switched to qwen3:8b after OOM")),
          ):
-        events = _send_and_collect(model="qwen3:30b-a3b-instruct-2507")
+        events = _send_and_collect(model="qwen3:30b-a3b-instruct-2507-q4_K_M")
 
     done = events[-1]
     m = done["metrics"]
@@ -353,9 +353,9 @@ def test_done_carries_no_metrics_on_oom_with_no_fallback():
     with patch("routers.chat.get_api_key", return_value=""), \
          patch("routers.chat._make_llm", return_value=instance), \
          patch("routers.chat._apply_memory_pressure_swap",
-               new=AsyncMock(return_value=("qwen3:4b-instruct-2507", False))), \
+               new=AsyncMock(return_value=("qwen3:4b-instruct-2507-q4_K_M", False))), \
          patch("routers.chat._ladder_step_after_oom", new=AsyncMock(return_value=(None, None))):
-        events = _send_and_collect(model="qwen3:4b-instruct-2507")
+        events = _send_and_collect(model="qwen3:4b-instruct-2507-q4_K_M")
 
     done = events[-1]
     assert done["type"] == "done"

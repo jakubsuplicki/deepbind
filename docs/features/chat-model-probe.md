@@ -125,7 +125,7 @@ The user can also force a re-run from the settings page at any time.
   `runtimeReachable`.
 - `runProbe()` — opens the SSE stream; pushes events into a reactive
   `events` array so onboarding can render per-candidate progress
-  (`probing 1/3: qwen3:30b-a3b-instruct-2507…`).
+  (`probing 1/3: qwen3:30b-a3b-instruct-2507-q4_K_M…`).
 - `setOverride(model | null)` — `POST /api/local/chat-model-probe/override`.
 - `effectiveModel` — computed; returns `user_override` or
   `recommended_model` or `null`.

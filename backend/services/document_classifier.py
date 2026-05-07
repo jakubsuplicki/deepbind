@@ -226,7 +226,7 @@ async def classify_section_llm(
     try:
         try:
             response = await client.chat(
-                model="qwen3:4b-instruct-2507",  # smallest Tier-A floor; fast for one-shot classification
+                model="qwen3:4b-instruct-2507-q4_K_M",  # smallest Tier-A floor; fast for one-shot classification
                 messages=[{"role": "user", "content": prompt}],
                 options={"num_predict": 16, "temperature": 0.1},
                 keep_alive="30m",

@@ -1011,7 +1011,7 @@ class TestChatModelProbeEndpoints:
             json.dumps({
                 PROBE_CONFIG_KEY: {
                     "schema_version": 1,
-                    "user_override": "qwen3:30b-a3b-instruct-2507",
+                    "user_override": "qwen3:30b-a3b-instruct-2507-q4_K_M",
                     "candidates_evaluated": [],
                 }
             }),
@@ -1049,5 +1049,5 @@ class TestChatModelProbeEndpoints:
 
             await client.post("/api/local/chat-model-probe/run")
             saved = json.loads(config_path.read_text(encoding="utf-8"))
-            assert saved[PROBE_CONFIG_KEY]["user_override"] == "qwen3:30b-a3b-instruct-2507"
+            assert saved[PROBE_CONFIG_KEY]["user_override"] == "qwen3:30b-a3b-instruct-2507-q4_K_M"
             assert saved[PROBE_CONFIG_KEY]["recommended_model"] == "qwen3:14b"

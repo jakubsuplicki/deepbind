@@ -231,7 +231,16 @@ async def _drive_pull(
     saw_success = False
     async for event in pull_model_events(entry.ollama_model, base_url):
         status = str(event.get("status", ""))
-        if status == "error":
+        # Ollama signals failure two different ways: (a) `{"status":
+        # "error", "error": "..."}` for in-progress failures (rare),
+        # and (b) `{"error": "..."}` with no `status` key for upfront
+        # rejections — most commonly "pull model manifest: file does
+        # not exist" when the catalog references a tag that doesn't
+        # exist in the Ollama registry. The single shared branch here
+        # covers both shapes; without the `event.get("error")` check
+        # the upfront-rejection path used to fall through to "stream
+        # ended without success event", which obscured the real cause.
+        if status == "error" or event.get("error"):
             progress.status = "error"
             progress.error = str(event.get("error", "unknown error"))
             return False

@@ -102,7 +102,7 @@ class TestPipelineHappyPath:
     @pytest.mark.anyio
     async def test_tier_a_runs_full_pipeline_to_complete(self, workspace):
         """Probe → pull primary (qwen3:8b) → marker write → pull fallback
-        (qwen3:4b-instruct-2507) → run probe → complete."""
+        (qwen3:4b-instruct-2507-q4_K_M) → run probe → complete."""
         from services import first_run_orchestrator
         from services.ollama_service import HardwareProfile
 

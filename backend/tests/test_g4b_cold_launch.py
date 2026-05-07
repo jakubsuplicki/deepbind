@@ -48,7 +48,7 @@ async def _success_pull(*args, **kwargs):
 async def _list_installed(*args, **kwargs):
     return [
         {"name": "qwen3:8b"},
-        {"name": "qwen3:4b-instruct-2507"},
+        {"name": "qwen3:4b-instruct-2507-q4_K_M"},
     ]
 
 
@@ -111,7 +111,7 @@ async def test_g4b_cold_launch_end_to_end(tmp_path):
         requested,
         tier="A",
         ctx_len_tokens=4096,
-        installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507"],
+        installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507-q4_K_M"],
         free_ram_bytes=32 * (1024 ** 3),  # plenty
     )
     assert swap.did_swap is False
@@ -122,7 +122,7 @@ async def test_g4b_cold_launch_end_to_end(tmp_path):
         requested,
         tier="A",
         ctx_len_tokens=4096,
-        installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507"],
+        installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507-q4_K_M"],
         free_ram_bytes=6 * (1024 ** 3),  # tight
     )
     assert swap_under_pressure.did_swap is True
@@ -131,7 +131,7 @@ async def test_g4b_cold_launch_end_to_end(tmp_path):
     # ── Stage 5: Lightweight mode (G4b5) — pin to floor regardless ───────
     floor = mpm.floor_entry_for_tier(
         "A",
-        installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507"],
+        installed_ollama_tags=["qwen3:8b", "qwen3:4b-instruct-2507-q4_K_M"],
     )
     # Floor on Tier A is qwen3-4b-instruct-2507 (smallest installed on the
     # ladder). Lightweight mode ON → chat dispatch hits this regardless of
