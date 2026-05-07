@@ -361,13 +361,14 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
     # rejects re-introduction at construction time. See ADR 005 §A "License
     # purity" and docs/research/commercial-licensing-audit.md finding #6.
     # ──────────────────────────────────────────────────────────────────────
-    # ──────────────────────────────────────────────────────────────────────
-    # Entries below carry `internal=True` because their Ollama registry tags
-    # have NOT been verified against `ollama.com/library/<name>`. The user-
-    # facing chat picker filters them out (`build_catalog(include_internal=False)`)
-    # so a stale-tag pull doesn't 404 on the customer. Promotion to user-pickable
-    # requires verifying the tag via `ollama pull <tag>` against the live registry,
-    # then flipping `internal=False`.
+    # Tier-A/B chat upgrades (verified pullable on Ollama 0.18.0 on 2026-05-07
+    # via a manifest probe against `localhost:11435/api/pull`). These are the
+    # natural upgrade path advertised by the capacity strip in Settings →
+    # Local Models — so they ship with `internal=False` and appear in the
+    # user picker. The granite4 plumbing models and gpt-oss-120b below remain
+    # `internal=True` until their tags verify and they're scoped into the
+    # picker (granite4 is plumbing-only per ADR 005 §D; gpt-oss-120b is
+    # Tier-C ceiling and gated separately).
     # ──────────────────────────────────────────────────────────────────────
     ModelCatalogEntry(
         # Verified pullable on Ollama 0.18.0 (2026-05-07). The Ollama
@@ -392,7 +393,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["256K native context", "instruction tuned", "multilingual"],
         best_for=["long documents on light hardware", "instruction following"],
         native_tools=True,
-        internal=True,
         bytes_per_kv_token=3072,
         attention_arch="transformer",
         # Qwen3 dense Instruct-2507 advertises 256K; dense-transformer RULER
@@ -406,7 +406,10 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         ladder_positions={"A": 1},
     ),
     ModelCatalogEntry(
-        # TODO: verify Ollama tag — `qwen3:14b` is plausible but unverified.
+        # Verified pullable on Ollama 0.18.0 (2026-05-07). Manifest probe at
+        # `localhost:11435/api/pull` returned blob digest
+        # sha256:a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e
+        # (~8.6 GB on the wire, matches `download_size_gb=9.0`).
         id="qwen3-14b",
         preset="balanced",
         ollama_model="qwen3:14b",
@@ -422,7 +425,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["best dense Qwen3 for 24 GB", "tool calling", "128K via YaRN"],
         best_for=["everyday chat on 24 GB unified memory", "tools", "general use"],
         native_tools=True,
-        internal=True,
         bytes_per_kv_token=5120,
         attention_arch="transformer",
         effective_context_tokens=32768,
@@ -458,7 +460,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["MoE 30B/3B-active", "256K native", "tool calling", "candidate v1 chat model"],
         best_for=["best local chat", "long conversations", "tools"],
         native_tools=True,
-        internal=True,
         bytes_per_kv_token=4096,
         attention_arch="transformer",
         # MoE 30B/3B-active — research-1 calls out roughly double the dense
@@ -579,7 +580,6 @@ MODEL_CATALOG: List[ModelCatalogEntry] = [
         strengths=["MoE 30B/3B-active", "reasoning", "256K native"],
         best_for=["reasoning tasks", "complex analysis", "long-form planning"],
         native_tools=True,
-        internal=True,
         bytes_per_kv_token=4096,
         attention_arch="transformer",
         # Same architecture as the Instruct sibling — same effective ceiling.

@@ -151,15 +151,41 @@ class TestRecommendTop3:
             catalog = await build_catalog(hw, active_model_id=None)
 
         ids = {m.model_id for m in catalog}
+        # Plumbing models (granite4 family) and the Tier-C ceiling
+        # (gpt-oss-120b) remain internal until ADR 005 §D opt-in lands
+        # and the gpt-oss tag is verified end-to-end.
         for internal_id in (
-            "qwen3-4b-instruct-2507",
-            "qwen3-14b",
-            "qwen3-30b-a3b-instruct-2507",
             "granite-4-h-micro",
             "granite-4-h-tiny",
             "granite-4-h-small",
+            "gpt-oss-120b",
         ):
             assert internal_id not in ids
+
+    @pytest.mark.anyio
+    async def test_build_catalog_exposes_verified_chat_upgrades(self):
+        """Per the 2026-05-07 manifest verification pass, the four Tier-A/B
+        chat upgrades are user-pickable so the Settings → Local Models
+        capacity strip ("Runs up to 13B comfortably") has real upgrade
+        targets to point users at."""
+        from services.ollama_service import build_catalog, HardwareProfile
+
+        hw = HardwareProfile(
+            os="macos", arch="arm64", total_ram_gb=32.0, free_disk_gb=100.0,
+            cpu_cores=10, gpu_vendor="apple", is_apple_silicon=True, tier="strong",
+        )
+
+        with patch("services.ollama_service.list_installed_models", new_callable=AsyncMock, return_value=[]):
+            catalog = await build_catalog(hw, active_model_id=None)
+
+        ids = {m.model_id for m in catalog}
+        for verified_id in (
+            "qwen3-4b-instruct-2507",
+            "qwen3-14b",
+            "qwen3-30b-a3b-instruct-2507",
+            "qwen3-30b-a3b-thinking-2507",
+        ):
+            assert verified_id in ids, f"{verified_id} should be user-pickable"
 
     @pytest.mark.anyio
     async def test_build_catalog_include_internal_returns_internal_entries(self):
@@ -177,8 +203,7 @@ class TestRecommendTop3:
         # Sample of expected internal entries (full set covered by
         # test_internal_models_marked at the catalog layer)
         assert "granite-4-h-micro" in ids
-        assert "qwen3-30b-a3b-instruct-2507" in ids
-        assert "qwen3-30b-a3b-thinking-2507" in ids
+        assert "gpt-oss-120b" in ids
 
 
 # ── ADR 005 — Tier-for-hardware mapping ─────────────────────────────────────
@@ -575,21 +600,22 @@ class TestModelCatalog:
     def test_internal_models_marked(self):
         from services.ollama_service import get_catalog
 
-        # All entries with unverified Ollama tags carry internal=True so the
-        # user picker doesn't expose them. Promotion to user-pickable requires
-        # tag verification per the catalog correctness pass.
+        # Granite4 plumbing models stay internal pending ADR 005 §D opt-in;
+        # gpt-oss-120b stays internal until its tag is verified. The four
+        # verified-on-2026-05-07 chat upgrades flipped to user-pickable.
         internal_ids = {m.id for m in get_catalog() if m.internal}
         expected_internal = {
-            "qwen3-4b-instruct-2507",
-            "qwen3-14b",
-            "qwen3-30b-a3b-instruct-2507",
-            "qwen3-30b-a3b-thinking-2507",
             "granite-4-h-micro",
             "granite-4-h-tiny",
             "granite-4-h-small",
             "gpt-oss-120b",
         }
         assert expected_internal.issubset(internal_ids)
+        # And the four verified entries must NOT be internal anymore.
+        assert "qwen3-4b-instruct-2507" not in internal_ids
+        assert "qwen3-14b" not in internal_ids
+        assert "qwen3-30b-a3b-instruct-2507" not in internal_ids
+        assert "qwen3-30b-a3b-thinking-2507" not in internal_ids
 
     def test_qwen3_native_contexts_corrected(self):
         from services.ollama_service import get_model_by_id
@@ -608,15 +634,14 @@ class TestModelCatalog:
     def test_qwen3_30b_a3b_instruct_2507_present(self):
         from services.ollama_service import get_model_by_id
 
-        # v1 canonical chat model. Currently internal because the Ollama tag
-        # is unverified; flips to user-pickable when the tag verifies against
-        # the live registry.
+        # v1 Tier-B first-run primary. Verified pullable on 2026-05-07 under
+        # the q4_K_M tag, so user-pickable (not internal).
         m = get_model_by_id("qwen3-30b-a3b-instruct-2507")
         assert m is not None
         assert m.preset == "best-local"
         assert m.context_tokens == 262144
         assert m.native_tools is True
-        assert m.internal is True
+        assert m.internal is False
 
     def test_qwen3_4b_instruct_2507_distinct_from_qwen3_4b(self):
         from services.ollama_service import get_model_by_id
@@ -786,15 +811,17 @@ class TestLocalModelsAPI:
             assert "score" in item
             assert "recommended" in item
 
-        # No internal models leaked through to the user picker
+        # No internal models leaked through to the user picker. The four
+        # 2026-05-07 verified chat upgrades (qwen3-4b-instruct-2507,
+        # qwen3-14b, qwen3-30b-a3b-{instruct,thinking}-2507) are user-
+        # pickable now; the granite4 plumbing trio + gpt-oss-120b stay
+        # filtered out.
         ids = {item["model_id"] for item in data}
         for internal_id in (
-            "qwen3-4b-instruct-2507",
-            "qwen3-14b",
-            "qwen3-30b-a3b-instruct-2507",
             "granite-4-h-micro",
             "granite-4-h-tiny",
             "granite-4-h-small",
+            "gpt-oss-120b",
         ):
             assert internal_id not in ids, f"{internal_id} (internal) leaked to /catalog"
 

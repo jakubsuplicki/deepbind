@@ -45,7 +45,7 @@ Run Jarvis with on-device AI via Ollama — no API key required.
 
 Per [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md), Ollama is the **only** chat-dispatch target — there is no multi-provider abstraction, no LiteLLM, and no cloud SDKs in the codebase. This feature owns the full local stack: hardware detection, a curated catalog of model presets with hardware-based recommendations, the [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py) that streams `ollama.AsyncClient` events into the router's `StreamEvent` shape, model download with streaming progress, tool-calling mode detection per model, runtime health monitoring with reconnection flow, and slow response indicators.
 
-The catalog is split into two layers: **user-pickable chat models** (3 entries with verified Ollama tags — `qwen3-1.7b`, `qwen3-4b`, `qwen3-8b`) and **internal entries** (8 entries — Qwen3-2507 split fine-tunes, Qwen3-14B, Qwen3-30B-A3B-Instruct-2507, Qwen3-30B-A3B-Thinking-2507, gpt-oss-120b, Granite 4.0 H-Micro/H-Tiny/H-Small — all carry `internal=True` because their Ollama registry tags are unverified). The user-facing endpoint filters internal entries out so a stale-tag pull never 404s the customer; callers that need the full universe (e.g. footprint planning, ADR 005 first-run policy, downgrade ladder lookup) pass `build_catalog(include_internal=True)`. Each internal entry carries a `TODO: verify Ollama tag` comment marking the verification gap; promotion to user-pickable requires `ollama pull <tag>` against the live registry, then flipping `internal=False`.
+The catalog is split into two layers: **user-pickable chat models** (7 entries with verified Ollama tags — `qwen3-1.7b`, `qwen3-4b`, `qwen3-8b`, `qwen3-4b-instruct-2507`, `qwen3-14b`, `qwen3-30b-a3b-instruct-2507`, `qwen3-30b-a3b-thinking-2507`) and **internal entries** (4 entries — Granite 4.0 H-Micro/H-Tiny/H-Small plumbing models per ADR 005 §D opt-in deferred to v1.1, plus `gpt-oss-120b` whose Ollama tag remains unverified). The user-facing endpoint filters internal entries out so a stale-tag pull never 404s the customer; callers that need the full universe (e.g. footprint planning, ADR 005 first-run policy, downgrade ladder lookup) pass `build_catalog(include_internal=True)`. Promotion of an internal entry to user-pickable requires verifying the tag via a `POST /api/pull` manifest probe against a live Ollama runtime, then flipping `internal=False`. The four chat upgrades were verified pullable on 2026-05-07 against bundled Ollama 0.18.0 and flipped together so the Settings → Local Models capacity strip ("Runs up to 13B comfortably" on 24 GB Apple Silicon) has real upgrade targets to point users at.
 
 [ADR 005](../architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md) §A's catalog-discipline rule says only Apache-2.0 / MIT entries belong in the v1 bundle. The `license` field on each entry is typed `Literal["Apache-2.0", "MIT"]` so non-permissive licenses are rejected at construction time — adding a Mistral Research License or Gemma Terms-of-Use entry is a Pydantic validation error, not a runtime metadata flag. The 2026-05-05 cleanup (audit finding #6) deleted the four entries that had been carrying `license="non-permissive"` as placeholder metadata: `ministral-3-8b` + `devstral-small-2-24b` (Mistral Research License — research/eval only, paid commercial license required) and `gemma4-e4b` + `gemma4-26b-a4b` (Gemma Terms of Use — flow-down restrictions on derivative deployment). Coding workloads that previously routed to the `code` preset (devstral) now route through `balanced` / `best-local` against `qwen3-30b-a3b-instruct-2507` or `granite-4-h-small`.
 
@@ -87,24 +87,24 @@ The catalog covers the spectrum from weak laptops to workstations across eight p
 |--------|-------|------|---------------|----------|-------|
 | Fast | qwen3:1.7b | 1.4 GB | 32K | 8–16 GB | 128K via YaRN |
 | Everyday | qwen3:4b | 2.5 GB | 32K | 12–24 GB | 128K via YaRN |
-| Balanced | qwen3:8b | 5.2 GB | 32K | 16–32 GB | 128K via YaRN |
+| Balanced | qwen3:8b | 5.2 GB | 32K | 16–32 GB | 128K via YaRN — ADR 005 Tier A first-run primary |
+| Long Docs | qwen3:4b-instruct-2507-q4_K_M | 2.6 GB | 256K | 12–24 GB | ADR 005 Tier A downgrade-ladder target |
+| Balanced | qwen3:14b | 9.0 GB | 32K | 24–32 GB | best dense Qwen3 for 24 GB unified memory |
+| Best Local | qwen3:30b-a3b-instruct-2507-q4_K_M | 18 GB | 256K | 24–48 GB | ADR 005 Tier B first-run primary |
+| Reasoning | qwen3:30b-a3b-thinking-2507-q4_K_M | 18 GB | 256K | 24–48 GB | ADR 005 Tier B reasoning primary |
 
-**Internal entries** (8 — present in catalog, filtered from user picker until Ollama tag verified, all Apache-2.0):
+**Internal entries** (4 — present in catalog, filtered from user picker, all Apache-2.0):
 
 | Preset | Model | Size | Native Context | Best RAM | Role / Status |
 |--------|-------|------|---------------|----------|---------------|
-| Long Docs | qwen3:4b-instruct-2507-q4_K_M | 2.6 GB | 256K | 12–24 GB | ADR 005 Tier A downgrade-ladder target — tag unverified |
-| Balanced | qwen3:14b | 9.0 GB | 32K | 24–32 GB | best dense Qwen3 for 24 GB unified memory — tag unverified |
-| Best Local | qwen3:30b-a3b-instruct-2507-q4_K_M | 18 GB | 256K | 24–48 GB | ADR 005 Tier B first-run primary — tag unverified |
-| Reasoning | qwen3:30b-a3b-thinking-2507-q4_K_M | 18 GB | 256K | 24–48 GB | ADR 005 Tier B reasoning primary (duel-mode opt-in) — tag unverified |
 | Best Local | gpt-oss:120b | 63 GB | 128K | 80–128 GB | ADR 005 Tier C first-run primary (single H100 / 96+ GB unified) — tag unverified |
-| Plumbing | granite4:h-micro | 2.0 GB | 32K | 8–16 GB | always-on classifier (ISO-42001 certified) — tag unverified |
-| Plumbing | granite4:h-tiny | 4.0 GB | 128K | 12–24 GB | ADR 005 Tier B opt-in plumbing upgrade — tag unverified |
-| Plumbing | granite4:h-small | 18 GB | 128K | 32–48 GB | dispatcher top-tier (tool-capable) — tag unverified |
+| Plumbing | granite4:h-micro | 2.0 GB | 32K | 8–16 GB | always-on classifier (ISO-42001 certified) — ADR 005 §D opt-in deferred to v1.1 |
+| Plumbing | granite4:h-tiny | 4.0 GB | 128K | 12–24 GB | ADR 005 Tier B opt-in plumbing upgrade — deferred to v1.1 |
+| Plumbing | granite4:h-small | 18 GB | 128K | 32–48 GB | dispatcher top-tier (tool-capable) — deferred to v1.1 |
 
 **Removed 2026-05-05** (audit finding #6, ADR 005 §A): `ministral-3:8b` and `devstral-small-2:24b` (Mistral Research License — research/eval only) and `gemma4:e4b` and `gemma4:26b-a4b` (Gemma Terms of Use — flow-down derivative restrictions). The narrowed `license: Literal["Apache-2.0", "MIT"]` type on `ModelCatalogEntry` rejects re-introduction at construction time.
 
-Each internal entry carries a `TODO: verify Ollama tag` comment in [`ollama_service.py`](../../backend/services/ollama_service.py). Promotion to user-pickable requires verifying the tag against `https://ollama.com/library/<name>`, then flipping `internal=False`.
+The four chat upgrades (qwen3-4b-instruct-2507, qwen3-14b, qwen3-30b-a3b-instruct-2507, qwen3-30b-a3b-thinking-2507) were verified pullable on 2026-05-07 against bundled Ollama 0.18.0 via `POST /api/pull` manifest probes and flipped to `internal=False` so the Settings → Local Models capacity strip has real upgrade targets to point users at on 24 GB+ machines. Promotion of a remaining internal entry to user-pickable follows the same path: verify the tag via a manifest probe against a live Ollama runtime, then flip the flag.
 
 Internal entries are present in `MODEL_CATALOG` but excluded from `build_catalog()` unless the caller passes `include_internal=True`.
 
