@@ -210,15 +210,19 @@ watch(
   { immediate: true },
 )
 
-// ── Re-warming microstate (warm-sidecar turns with > 1 s before stream) ──
+// ── Slow-warm-turn microstate (warm-sidecar turns past the normal range) ──
 //
-// On warm-sidecar follow-ups the typing dots used to sit silently for up
-// to 24 s on the consistently-reproducing turn-2 back-pressure (per the
-// chat_step instrumentation at backend/routers/chat.py:861). After 1 s
-// without any text or tool activity, escalate the dots to an explicit
-// "re-warming model…" hint so the user has a stable mental model.
-// Cold-sidecar first turn keeps using the 4-stage ChatFirstTurnWarmup
-// instrument readout — this microstate covers everything else.
+// Originally added to label the 7–24 s turn-2 prefix-instability stalls
+// (see ADR 009 amendment 2026-05-01: retrieval-in-system-prompt was
+// invalidating Ollama's KV cache every turn). With the prefix-stable fix
+// landed, warm-turn TTFT now sits at 1–2 s on M5 / Qwen3 8B / 2.7K-token
+// prefill. A 1 s threshold + "re-warming model" copy was therefore
+// firing on every normal turn and (a) making the system look broken
+// (the model isn't being re-warmed — `load_ms` ≈ 50 ms; this is just
+// prefill compute) and (b) hiding the genuine outliers in the noise.
+// Honest copy ("thinking…") + 3 s threshold means this only surfaces
+// when prefill actually exceeds the post-fix range — usually on
+// retrieval blocks that pulled an unusually large note set.
 const currentTurnStartedAt = ref<number>(0)
 const reWarmTickNow = ref<number>(Date.now())
 let reWarmTick: ReturnType<typeof setInterval> | null = null
@@ -255,7 +259,7 @@ const isReWarming = computed(() =>
   && !props.toolActivity
   && !isFirstTurnWaiting.value
   && currentTurnStartedAt.value > 0
-  && (reWarmTickNow.value - currentTurnStartedAt.value) > 1000,
+  && (reWarmTickNow.value - currentTurnStartedAt.value) > 3000,
 )
 
 // ── Throttled streaming markdown render ────────────────────────────────
@@ -435,18 +439,19 @@ watch(
         :estimated-total-sec="15"
       />
 
-      <!-- Re-warming microstate — warm-sidecar turns where >1 s elapses
-           without text or tool activity. Escalates the silent typing
-           dots to an explicit hint so the user has a mental model for
-           the consistently-reproducing turn-2 back-pressure (chat.py:861
-           instrumentation). -->
+      <!-- Slow-warm-turn microstate — only fires past the post-prefix-
+           stable-fix range (>3 s). On normal warm turns at 1–2 s TTFT
+           the typing dots below cover it; this surface escalates only
+           when prefill is unusually long (e.g. a large retrieval block
+           or a tool-loop follow-up). Copy is "thinking…" because the
+           model is computing, not re-warming. -->
       <div
         v-else-if="isReWarming"
         class="chat-panel__message assistant"
       >
         <div class="chat-panel__bubble chat-panel__rewarming">
           <span class="chat-panel__rewarming-dot" />
-          <span class="chat-panel__rewarming-text">re-warming model…</span>
+          <span class="chat-panel__rewarming-text">thinking…</span>
         </div>
       </div>
 
