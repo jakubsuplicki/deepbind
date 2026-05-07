@@ -6,7 +6,6 @@ from unittest.mock import patch
 import pytest
 
 from services.workspace_service import (
-    WorkspaceExistsError,
     create_workspace,
     get_workspace_status,
     workspace_exists,
@@ -65,10 +64,21 @@ def test_workspace_exists_after_creation(ws_path):
     assert workspace_exists(ws_path) is True
 
 
-def test_create_workspace_twice_raises(ws_path):
-    create_workspace(ws_path)
-    with pytest.raises(WorkspaceExistsError):
-        create_workspace(ws_path)
+def test_create_workspace_twice_is_idempotent(ws_path):
+    """Second call returns status=exists, doesn't error, doesn't rewrite
+    config. The orchestrator path (ADR 005) creates app/config.json at
+    sidecar startup before the wizard ever calls /api/workspace/init,
+    so the wizard's call is *always* a re-call in production."""
+    first = create_workspace(ws_path)
+    assert first["status"] == "ok"
+    config_path = ws_path / "app" / "config.json"
+    config_before = config_path.read_text()
+
+    second = create_workspace(ws_path)
+    assert second["status"] == "exists"
+    assert second["workspace_path"] == str(ws_path)
+    # Config not rewritten — the timestamp inside would otherwise change.
+    assert config_path.read_text() == config_before
 
 
 def test_workspace_path_from_settings(ws_path):

@@ -29,17 +29,17 @@ const { isInitialized } = useAppState()
 async function handleSubmit() {
   error.value = ''
   loading.value = true
+  // /api/workspace/init is idempotent (returns status="exists" when the
+  // first-run orchestrator has already created the workspace at sidecar
+  // startup). Any error here is a real problem — surface it.
   const { initWorkspace } = useApi()
   try {
     await initWorkspace()
   } catch (e: unknown) {
-    // Non-fatal: workspace may already exist (e.g. re-running onboarding)
     const msg = e && typeof e === 'object' && 'message' in e ? (e as Error).message : ''
-    if (!msg.includes('already') && !msg.includes('exists')) {
-      error.value = msg || 'Connection error. Is the backend running?'
-      loading.value = false
-      return
-    }
+    error.value = msg || 'Connection error. Is the backend running?'
+    loading.value = false
+    return
   }
   isInitialized.value = true
   loading.value = false

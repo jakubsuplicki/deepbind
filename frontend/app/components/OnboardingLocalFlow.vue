@@ -190,6 +190,26 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(unit >= 2 ? 1 : 0)} ${units[unit]}`
 }
 
+// Map Ollama's raw pull-stream `status` into user-readable copy. Ollama
+// emits things like "pulling 8eeb52dfb3bb" (a layer hash), which leaks
+// the internal blob digest into the wizard UI as "pulling a3de86cd1c13"
+// — meaningless to a customer. The progress bar + bytes counter already
+// carries the real signal; this helper supplies a clean phase label
+// alongside.
+function humanizePullStatus(raw: string | undefined): string {
+  if (!raw) return 'Preparing'
+  const s = raw.toLowerCase()
+  if (s.startsWith('pulling manifest')) return 'Preparing'
+  if (s.startsWith('pulling ')) return 'Downloading'
+  if (s.startsWith('verifying')) return 'Verifying'
+  if (s.startsWith('writing manifest')) return 'Finalizing'
+  if (s.startsWith('removing')) return 'Cleaning up'
+  if (s === 'success') return 'Done'
+  // Unknown future status — show as-is rather than swallowing; better to
+  // surface a new Ollama status code than hide it behind "Preparing…".
+  return raw.charAt(0).toUpperCase() + raw.slice(1)
+}
+
 const tierLabel = computed(() => {
   const tier = firstRun.status.value.tier
   if (!tier) return null
@@ -288,7 +308,7 @@ const wizardStep = computed<1 | 2 | 3>(() => {
               />
             </div>
             <div class="local-flow__progress-meta">
-              <span class="local-flow__progress-status">{{ firstRun.status.value.primary.status }}</span>
+              <span class="local-flow__progress-status">{{ humanizePullStatus(firstRun.status.value.primary.status) }}</span>
               <span v-if="formattedPrimaryProgress" class="local-flow__progress-bytes">
                 {{ formattedPrimaryProgress }}
                 ·

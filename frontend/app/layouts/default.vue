@@ -31,16 +31,33 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import TrialBanner from '~/components/license/TrialBanner.vue'
 import LicenseWall from '~/components/license/LicenseWall.vue'
 import { useLicenseState } from '~/composables/useLicenseState'
+import { useAppState } from '~/composables/useAppState'
 import { apiUrl } from '~/utils/apiUrl'
 
 const license = useLicenseState()
+const { checkHealth } = useAppState()
 const workspacePath = ref('')
 
 // `unlisten` handle for the Tauri event subscription set up in onMounted.
 // Cleared in onBeforeUnmount so we don't leak listeners across hot-reloads.
 let unlistenFileOpened: (() => void) | null = null
 
+// Backend health poll. The StatusBar pill (`Alive` / `Offline` /
+// `Checking…`) reads `useAppState().backendStatus`, which only updates
+// when `checkHealth()` runs. Previously checkHealth was invoked once
+// in pages/main.vue:onMounted, which means the pill stayed `Checking…`
+// on the onboarding wizard and on any other page that didn't mount
+// /main (the wizard does not). Layout-level invocation fires on every
+// page; the 30 s repeat catches a backend that goes away mid-session.
+let healthPollTimer: ReturnType<typeof setInterval> | null = null
+const HEALTH_POLL_MS = 30_000
+
 onMounted(async () => {
+  // Backend health: fire once immediately, then keep a 30 s heartbeat.
+  // Status pill in StatusBar reads from this.
+  checkHealth()
+  healthPollTimer = setInterval(checkHealth, HEALTH_POLL_MS)
+
   // Fetch workspace path so the past-grace wall can deep-link the user
   // to their data. Best-effort — if the call fails the wall just hides
   // the "Open my data folder" affordance gracefully (button needs a
@@ -85,6 +102,10 @@ onBeforeUnmount(() => {
   if (unlistenFileOpened) {
     unlistenFileOpened()
     unlistenFileOpened = null
+  }
+  if (healthPollTimer) {
+    clearInterval(healthPollTimer)
+    healthPollTimer = null
   }
 })
 </script>

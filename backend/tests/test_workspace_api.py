@@ -21,10 +21,15 @@ async def test_get_status_no_workspace(client, ws_path):
 
 @pytest.mark.anyio
 async def test_post_init_creates_workspace(client, ws_path):
+    # 200 OK with status="ok" on first creation; the route is now
+    # idempotent and uses a single 200 response code (not 201) so a
+    # re-call's "exists" path doesn't have to play games with status
+    # codes.
     with patch("services.workspace_service.get_settings") as mock_s:
         mock_s.return_value.workspace_path = ws_path
         response = await client.post("/api/workspace/init", json={})
-    assert response.status_code == 201
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
     assert (ws_path / "app" / "config.json").exists()
 
 
@@ -55,12 +60,19 @@ async def test_get_status_after_init(client, ws_path):
 
 
 @pytest.mark.anyio
-async def test_post_init_duplicate(client, ws_path):
+async def test_post_init_duplicate_is_idempotent(client, ws_path):
+    """Idempotent — second POST returns 200 with status="exists" rather
+    than the old 409. The orchestrator path (ADR 005) creates the
+    workspace at sidecar startup before the wizard ever calls
+    /api/workspace/init, so the wizard's call is *always* a re-call in
+    production."""
     with patch("services.workspace_service.get_settings") as mock_s:
         mock_s.return_value.workspace_path = ws_path
         await client.post("/api/workspace/init", json={})
         response = await client.post("/api/workspace/init", json={})
-    assert response.status_code == 409
+    assert response.status_code == 200
+    assert response.json()["status"] == "exists"
+    assert response.json()["workspace_path"] == str(ws_path)
 
 
 @pytest.mark.anyio

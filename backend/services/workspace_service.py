@@ -31,10 +31,6 @@ WORKSPACE_DIRS = [
 ]
 
 
-class WorkspaceExistsError(Exception):
-    pass
-
-
 def workspace_exists(workspace_path: Optional[Path] = None) -> bool:
     path = workspace_path or get_settings().workspace_path
     config_file = path / "app" / "config.json"
@@ -60,10 +56,24 @@ def get_workspace_status(workspace_path: Optional[Path] = None) -> dict:
 
 
 def create_workspace(workspace_path: Optional[Path] = None) -> dict:
+    """Ensure the workspace exists. Idempotent: returns ``{"status":
+    "exists", ...}`` for an already-initialized workspace and
+    ``{"status": "ok", ...}`` after a fresh creation. Callers that need
+    to distinguish can branch on ``status``; callers that only need
+    "after this call, the workspace is ready" can ignore it.
+
+    The orchestrator path (ADR 005 first-run) creates ``<workspace>/app/``
+    and seeds specialists at sidecar startup before the wizard ever
+    posts to ``/api/workspace/init``, so by the time the wizard's
+    ``Open Jarvis`` button fires the workspace already exists. Raising
+    here would force every caller (frontend, scripts, future callers)
+    to know about the orchestrator's prior work — idempotency keeps
+    the API forgiving.
+    """
     path = workspace_path or get_settings().workspace_path
 
     if workspace_exists(path):
-        raise WorkspaceExistsError(f"Workspace already exists at {path}")
+        return {"status": "exists", "workspace_path": str(path)}
 
     # Create directory tree
     for d in WORKSPACE_DIRS:

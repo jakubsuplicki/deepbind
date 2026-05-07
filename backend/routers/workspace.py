@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException, status
 
 from models.schemas import WorkspaceInitRequest, WorkspaceInitResponse, WorkspaceStatusResponse
 from services.workspace_service import (
-    WorkspaceExistsError,
     create_workspace,
     get_workspace_status,
 )
@@ -17,12 +16,14 @@ async def workspace_status() -> WorkspaceStatusResponse:
     return WorkspaceStatusResponse(**data)
 
 
-@router.post("/init", response_model=WorkspaceInitResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/init", response_model=WorkspaceInitResponse)
 async def workspace_init(body: WorkspaceInitRequest) -> WorkspaceInitResponse:
+    # Idempotent — `create_workspace` returns `status="exists"` when the
+    # workspace was already initialized (e.g. by the first-run orchestrator
+    # at sidecar startup) and `status="ok"` when it actually created the
+    # tree. Callers that want to distinguish can branch on the field.
     try:
         result = create_workspace()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
-    except WorkspaceExistsError:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workspace already exists")
     return WorkspaceInitResponse(**result)
