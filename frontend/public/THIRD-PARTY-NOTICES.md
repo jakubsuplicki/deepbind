@@ -6,8 +6,11 @@ copyright holder, and any required attribution. The full text of each license
 referenced below is reproduced at the end of this document under "License
 Texts."
 
-DeepFilesAI itself is distributed under the Apache License 2.0; see
-[`LICENSE`](../LICENSE) at the project root.
+DeepFilesAI itself is **proprietary commercial software** owned by Zen Zero
+Pty Ltd; see [`LICENSE`](../LICENSE) at the project root. The licenses
+listed below cover the **bundled third-party components only** — they
+govern those components and do not modify or supersede the proprietary
+license that applies to DeepFilesAI itself.
 
 This document is shipped inside the application bundle as
 `Contents/Resources/THIRD-PARTY-NOTICES.md` and is also surfaced in

@@ -3,7 +3,11 @@ name = "deepfilesai-desktop"
 version = "0.1.0"
 description = "DeepFilesAI desktop shell — Tauri 2 + Python sidecar (ADR 003)."
 authors = ["DeepFilesAI"]
-license = "Apache-2.0"
+# Proprietary — see ../../LICENSE. SPDX `LicenseRef-` form per
+# https://spdx.dev/learn/handling-license-info/ for non-standard licenses.
+# Cargo accepts arbitrary strings here; the value is informational only
+# (we never publish to crates.io).
+license = "LicenseRef-Proprietary"
 edition = "2021"
 rust-version = "1.77.2"
 

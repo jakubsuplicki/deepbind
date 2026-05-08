@@ -3,9 +3,9 @@
 [![CI](https://github.com/jakubsuplicki/deepbind/actions/workflows/ci.yml/badge.svg)](https://github.com/jakubsuplicki/deepbind/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml/badge.svg)](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml)
 [![Release](https://img.shields.io/github/v/release/jakubsuplicki/deepbind?include_prereleases&label=version)](https://github.com/jakubsuplicki/deepbind/releases)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-lightgrey.svg)](LICENSE)
 
-<sub>Built by [Łukasz Jakubowski](https://github.com/Szesnasty) & [Jakub Suplicki](https://github.com/jakubsuplicki) · Apache-2.0</sub>
+<sub>Built by [Łukasz Jakubowski](https://github.com/Szesnasty) & [Jakub Suplicki](https://github.com/jakubsuplicki) · Proprietary — © Zen Zero Pty Ltd</sub>
 
 **An AI workspace that remembers what matters.**
 
@@ -521,7 +521,13 @@ Found a vulnerability? See [SECURITY.md](SECURITY.md) for responsible disclosure
 
 ## License
 
-This project is licensed under the [Apache License 2.0](LICENSE).
+DeepFilesAI is **proprietary commercial software** owned by Zen Zero Pty Ltd. See [`LICENSE`](LICENSE) for full terms.
+
+The repository is private. Source access is granted to employees and authorised contractors solely for the purpose of developing and maintaining the Software, and does not transfer any rights to redistribute or commercialise the source.
+
+End customers receive the right to *use* the compiled application via a signed `.deepfileslic` license file under the terms of the MSA / EULA. No source-code rights are conveyed.
+
+Bundled third-party open-source components retain their original licenses (Apache-2.0 / MIT / BSD / etc.) — see [`docs/THIRD-PARTY-NOTICES.md`](docs/THIRD-PARTY-NOTICES.md). Those licenses govern the bundled components only and do not apply to DeepFilesAI itself.
 
 ---
 

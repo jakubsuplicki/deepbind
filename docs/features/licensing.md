@@ -39,6 +39,33 @@ last_updated: 2026-05-05
 
 Ed25519-signed offline license file ([ADR 006](../architecture/decisions/006-offline-signed-license.md)) with operational model per [ADR 019](../architecture/decisions/019-licensing-operational-model.md).
 
+## In plain terms
+
+**Trial & activation.** Customer opens the app → 30-day free trial starts automatically. The start date lives in the OS keychain, so reinstalling doesn't reset it. They can paste a license key, double-click a `.deepfileslic` email attachment, or buy from the activation wall. Verification is fully offline — the app checks the file against an Ed25519 public key baked into the binary at build time. No phone-home, no server lookup.
+
+**Pricing model.** Annual one-shot purchase. No auto-renewal, no stored payment method. At month 11 the web-app emails a renewal reminder; the customer chooses to repurchase or not. License files are valid for 13 months (12 months entitlement + 30-day grace).
+
+**The 8 states the app can be in:**
+
+- **Trial active** → free trial, full functionality, slim countdown banner.
+- **Trial expiring** → ≤3 days left, banner turns amber.
+- **Trial expired** → full-screen wall, paste-a-key or "Buy a license."
+- **Licensed active** → fully functional, license info in Settings only.
+- **Licensed in-grace** → license expired ≤30 days ago, still works, "Renew now" banner.
+- **Licensed past-grace** → expired >30 days, **read-only mode** — existing chats and notes still browsable, "Open my data folder" surfaces the user's Markdown files. New chats / writes / ingest are blocked. The data sovereignty pitch is provable: we never hold your knowledge hostage.
+- **Licensed invalid** → license file is malformed or signed with the wrong key. Wall with diagnostic.
+- **Clock invalid** → system clock is more than 5 minutes behind the build epoch / last-seen timestamp (rollback attack OR genuinely-broken CMOS). Diagnostic wall pointing at OS date settings, with paste-a-key still available for legitimate dead-CMOS recovery.
+
+**Three security layers:**
+
+1. **Single trust root** — the public key is baked into the sidecar binary at build time. Production builds inject a real key via env var; dev builds use a committed dev keypair (the dev private key signs test licenses but those licenses fail in production builds).
+2. **Service-layer gates** — every write/inference HTTP endpoint declares a `require_functional` FastAPI dependency that 403s when the entitlement state is non-functional. Read paths (listing notes, viewing chats, search) deliberately do not declare the gate, so past-grace mode preserves data access.
+3. **Clock-rollback defense** — each binary embeds its build timestamp; the OS keychain stores the highest timestamp ever observed (`monotonic_floor`); the state machine refuses to compute against a clock more than 5 minutes behind `max(build_epoch, monotonic_floor)`. Survives app reinstall.
+
+**Verification.** 64 dedicated tests across 5 files cover all 8 states + boundary cases (day-30 exact, 5-minute clock tolerance, gate blocking + read-path-pass-through, foreign-signature rejection, day-rollover semantics). Full backend suite went 1390 → 1454 over the 6 chunks, zero regressions in licensing-touched code. End-to-end smoke verified by signing real licenses with the dev keypair and walking the state machine through every state.
+
+**Out of scope (lives in other repos / operational work).** Stripe checkout + transactional email pipeline (in upcoming `web-app/`); HSM/YubiKey migration of the private key (currently web-app server holds it — interim mitigation); pricing decision; MSA/EULA seat-entitlement legal clauses; customer-facing self-serve resend page.
+
 ## Status: current — all 6 chunks landed
 
 Implementation per [ADR 019 §"Implementation chunks"](../architecture/decisions/019-licensing-operational-model.md):
