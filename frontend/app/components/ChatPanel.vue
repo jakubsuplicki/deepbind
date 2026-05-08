@@ -4,6 +4,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useChatHealth } from '~/composables/useChatHealth'
 import { useSpecialists } from '~/composables/useSpecialists'
+import { useWarmup } from '~/composables/useWarmup'
 import ChatFirstTurnWarmup from '~/components/ChatFirstTurnWarmup.vue'
 
 marked.setOptions({ breaks: true, gfm: true })
@@ -54,6 +55,26 @@ function metricsTooltip(m?: ChatTurnMetrics): string {
 const { activeSpecialists, deactivate } = useSpecialists()
 const chatHealth = useChatHealth()
 chatHealth.ensureBaselinesLoaded()
+
+// ML warmup status — drives the ambient "preparing models" pill above
+// the messages area. Polling is started once at the layout level; this
+// composable is read-only here. Subsides instantly once `ready` flips.
+const warmup = useWarmup()
+const showWarmupPill = computed(() => warmup.started.value && !warmup.ready.value)
+const warmupComponentList = computed(() => {
+  // Stable order matches backend warmup sequence: tokenizer → NER →
+  // embedder → reranker. Mirrors services/warmup_service._run_all so the
+  // user sees progress in the same order it actually completes.
+  const order = ['tokenizer', 'ner', 'embedder', 'reranker'] as const
+  const map = warmup.components.value
+  return order
+    .filter(name => map[name] != null)
+    .map(name => ({
+      name,
+      label: { tokenizer: 'tokenizer', ner: 'NER', embedder: 'embedder', reranker: 'reranker' }[name],
+      state: map[name].state,
+    }))
+})
 
 function statusFor(model?: string): 'healthy' | 'slow' | 'fast' | 'unknown' {
   return model ? chatHealth.statusFor(model) : 'unknown'
@@ -367,6 +388,29 @@ watch(
          ref is still computed in useChat.ts but no longer rendered;
          keeping the ref for now as a passive signal in case a future
          surface wants it.) -->
+
+    <!-- ML warmup pill. Visible only while the sidecar is preloading the
+         fastembed/spaCy/HF tokenizer artifacts at boot. Disappears the
+         instant warmup completes. Styled as an instrument-readout pill
+         (small, monospace, no chrome) so it never overpromises and never
+         blocks input — the user can still send a message; the worst case
+         is the existing first-turn warmup surface taking the lazy-load
+         hit, which now degrades to "the warmup we already showed you,
+         but on the chat path" rather than a silent 25 s stall. -->
+    <Transition name="warmup-pill">
+      <div v-if="showWarmupPill" class="chat-panel__warmup-pill" role="status" aria-live="polite">
+        <span class="chat-panel__warmup-pill-dot" />
+        <span class="chat-panel__warmup-pill-label">PREPARING MODELS</span>
+        <ul class="chat-panel__warmup-pill-stages">
+          <li
+            v-for="c in warmupComponentList"
+            :key="c.name"
+            class="chat-panel__warmup-pill-stage"
+            :class="`chat-panel__warmup-pill-stage--${c.state}`"
+          >{{ c.label }}</li>
+        </ul>
+      </div>
+    </Transition>
 
     <!-- Sustained-slow advisory (ADR 005 §C trigger 2). Only renders
          when the latest turn's decode_tps for the active model is below
@@ -683,6 +727,105 @@ watch(
 .chat-panel__health-banner-link:hover {
   color: rgba(251, 146, 60, 1);
   border-bottom-color: rgba(251, 146, 60, 0.9);
+}
+
+/* ML warmup pill — instrument-readout aesthetic, matches the dial colour
+   from ChatFirstTurnWarmup so the two surfaces feel like one system. */
+.chat-panel__warmup-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.35rem 0.8rem;
+  margin: 0.3rem 1.5rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  color: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  width: fit-content;
+}
+
+.chat-panel__warmup-pill-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #d4a017;
+  box-shadow: 0 0 0 0 rgba(212, 160, 23, 0.18);
+  animation: warmup-pill-pulse 1.6s ease-in-out infinite;
+}
+
+.chat-panel__warmup-pill-label {
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.chat-panel__warmup-pill-stages {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.55rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  display: inline-flex;
+  gap: 0.6rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+}
+
+.chat-panel__warmup-pill-stage {
+  color: rgba(255, 255, 255, 0.36);
+  transition: color 0.25s ease;
+}
+
+.chat-panel__warmup-pill-stage--running {
+  color: #d4a017;
+}
+
+.chat-panel__warmup-pill-stage--ready,
+.chat-panel__warmup-pill-stage--skipped {
+  color: rgba(255, 255, 255, 0.72);
+  text-decoration: line-through;
+  text-decoration-color: rgba(212, 160, 23, 0.4);
+  text-decoration-thickness: 1px;
+}
+
+.chat-panel__warmup-pill-stage--failed {
+  color: rgba(251, 146, 60, 0.8);
+}
+
+@keyframes warmup-pill-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212, 160, 23, 0.18); }
+  50%      { box-shadow: 0 0 0 4px transparent; }
+}
+
+@media (prefers-color-scheme: light) {
+  .chat-panel__warmup-pill {
+    color: rgba(0, 0, 0, 0.55);
+    background: rgba(0, 0, 0, 0.015);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+  .chat-panel__warmup-pill-stages { border-left-color: rgba(0, 0, 0, 0.1); }
+  .chat-panel__warmup-pill-stage { color: rgba(0, 0, 0, 0.34); }
+  .chat-panel__warmup-pill-stage--ready,
+  .chat-panel__warmup-pill-stage--skipped { color: rgba(0, 0, 0, 0.7); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-panel__warmup-pill-dot { animation: none; }
+}
+
+/* Vue <Transition name="warmup-pill"> classes */
+.warmup-pill-enter-active,
+.warmup-pill-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.warmup-pill-enter-from,
+.warmup-pill-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 .chat-panel__message {

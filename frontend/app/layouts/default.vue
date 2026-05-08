@@ -32,10 +32,12 @@ import TrialBanner from '~/components/license/TrialBanner.vue'
 import LicenseWall from '~/components/license/LicenseWall.vue'
 import { useLicenseState } from '~/composables/useLicenseState'
 import { useAppState } from '~/composables/useAppState'
+import { useWarmup } from '~/composables/useWarmup'
 import { apiUrl } from '~/utils/apiUrl'
 
 const license = useLicenseState()
 const { checkHealth } = useAppState()
+const { startWarmupPolling } = useWarmup()
 const workspacePath = ref('')
 
 // `unlisten` handle for the Tauri event subscription set up in onMounted.
@@ -57,6 +59,12 @@ onMounted(async () => {
   // Status pill in StatusBar reads from this.
   checkHealth()
   healthPollTimer = setInterval(checkHealth, HEALTH_POLL_MS)
+
+  // ML warmup poll. The sidecar warms fastembed/spaCy/HF tokenizers in a
+  // background thread on boot; this composable polls /api/health/warm
+  // until ready (idempotent — only one poll loop runs across the app).
+  // See backend/services/warmup_service.py and ChatPanel's warmup banner.
+  startWarmupPolling()
 
   // Fetch workspace path so the past-grace wall can deep-link the user
   // to their data. Best-effort — if the call fails the wall just hides

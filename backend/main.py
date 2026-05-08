@@ -60,6 +60,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.debug("Specialist seeding skipped: %s", exc)
     await start_workers()
+    # ML warmup: preload fastembed embedder, reranker, spaCy NER, and HF
+    # tokenizers in a background thread so the first user-facing chat turn
+    # doesn't pay the lazy-load cost. Non-blocking — start_workers() and the
+    # `yield` below proceed immediately. See services/warmup_service.py and
+    # docs/features/chat.md for the full rationale (cold-start turn-2 stall).
+    from services import warmup_service
+    warmup_service.start()
     yield
     # Stop background pieces in reverse order of startup.
     await stop_workers()
@@ -86,6 +93,21 @@ def create_app() -> FastAPI:
     @app.get("/api/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(status="ok", version=APP_VERSION)
+
+    @app.get("/api/health/warm")
+    async def warmup_status() -> dict:
+        """Snapshot of ML-component warmup progress.
+
+        The frontend polls this on app launch to surface a "preparing models"
+        affordance during the ~10-15 s background warmup. Returns the per-
+        component state map (see services/warmup_service.py) plus an aggregate
+        ``ready`` flag. Always 200 — readiness is a payload field, not an HTTP
+        status, so the route is cheap to hit while loading.
+        """
+        from services import warmup_service
+        snap = warmup_service.status()
+        snap["ready"] = warmup_service.is_ready()
+        return snap
 
     app.include_router(workspace_router)
     app.include_router(memory_router)

@@ -1150,22 +1150,55 @@ async def _process_chat_payload(
 
     graph_scope = data.get("graph_scope") or None
 
-    # Wire-time diagnostic — see useChat.sendMessage / Tauri command for the
-    # matching frontend timestamps. `transport` distinguishes WS-direct sends
-    # (legacy / browser dev) from HTTP+IPC sends (production Tauri path).
-    # If the WKWebView throttling theory holds, transport=ws will show large
-    # wire_time on turn-2 sends and transport=http will not.
+    # Wire-time diagnostic — `wire_time_ms` is the headline number
+    # (now - t_pre_send), and the three sub-fields decompose where the
+    # delay actually lives:
+    #
+    #   js_to_rust_ms      — t_rust_received - t_pre_send
+    #     JS event-loop scheduling + Tauri JS-to-Rust IPC bridge.
+    #     Large values point at WKWebView/JSContext throttling
+    #     (e.g. App Nap waking the bridge cold) — the same class of
+    #     issue ADR 016 was meant to dodge by routing sends off the WS,
+    #     surfacing here on the IPC bridge itself.
+    #   rust_to_fastapi_ms — t_fastapi_entered - t_rust_received
+    #     Rust reqwest HTTP roundtrip to loopback + macOS network stack.
+    #     Should be <10 ms for a warm connection-pool. Large values
+    #     point at connection-establishment overhead or kernel-side
+    #     back-pressure.
+    #   fastapi_to_lock_ms — now - t_fastapi_entered
+    #     FastAPI route handler + per-session lock acquisition. Pre-WS
+    #     send queue (this fix) this could be 20+ s waiting for the
+    #     previous turn's stuck `_send_event(done)` to flush; should now
+    #     be <5 ms because the lock is no longer held through WS writes.
+    #
+    # WS transport (browser dev / legacy) doesn't have t_rust or
+    # t_fastapi (no Tauri / FastAPI route in the path), so those fields
+    # render as `-` to keep the line greppable.
     try:
         _t_enter = data.pop("t_enter_ms", None)
         _t_pre_send = data.pop("t_pre_send_ms", None)
+        _t_rust = data.pop("t_rust_received_ms", None)
+        _t_fastapi = data.pop("_t_fastapi_entered_ms", None)
         if isinstance(_t_enter, (int, float)) and isinstance(_t_pre_send, (int, float)):
             import time as _time2
             _now_ms = _time2.time() * 1000.0
             _js_block_ms = float(_t_pre_send) - float(_t_enter)
             _wire_time_ms = _now_ms - float(_t_pre_send)
+
+            def _fmt(value, base):
+                if isinstance(value, (int, float)) and isinstance(base, (int, float)):
+                    return f"{float(value) - float(base):.1f}"
+                return "-"
+
+            _js_to_rust = _fmt(_t_rust, _t_pre_send)
+            _rust_to_fastapi = _fmt(_t_fastapi, _t_rust)
+            _fastapi_to_lock = _fmt(_now_ms, _t_fastapi)
+
             logger.info(
-                "chat_step session=%s step=received js_block_ms=%.1f wire_time_ms=%.1f transport=%s",
-                session_id, _js_block_ms, _wire_time_ms, transport,
+                "chat_step session=%s step=received js_block_ms=%.1f js_to_rust_ms=%s rust_to_fastapi_ms=%s fastapi_to_lock_ms=%s wire_time_ms=%.1f transport=%s",
+                session_id, _js_block_ms,
+                _js_to_rust, _rust_to_fastapi, _fastapi_to_lock,
+                _wire_time_ms, transport,
             )
     except Exception:
         pass
@@ -1193,9 +1226,19 @@ async def http_chat_message(request: Request) -> dict:
     frontend as `error` events on the existing WebSocket, matching the
     legacy WS-direct path's error shape.
     """
+    # Wire-time decomposition: stamp now() the moment FastAPI's route
+    # handler enters, BEFORE `await request.json()` (which itself can be
+    # non-trivial on large payloads). Combined with t_pre_send_ms from JS
+    # and t_rust_received_ms from the Tauri command, this lets
+    # `_process_chat_payload` decompose wire_time_ms into the three legs
+    # of the JS → Rust → FastAPI → lock pipeline.
+    import time as _time
+    t_fastapi_entered_ms = _time.time() * 1000.0
+
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    payload["_t_fastapi_entered_ms"] = t_fastapi_entered_ms
 
     session_id = (payload.get("session_id") or "").strip()
     if not session_id:

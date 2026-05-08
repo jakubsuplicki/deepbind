@@ -32,7 +32,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{
@@ -310,14 +310,24 @@ pub fn run() {
             };
 
             // Make the backend URL + a shared reqwest client available to
-            // `send_chat_message`. Long-lived client reuses the connection
-            // pool across the whole session — first POST opens a TCP
-            // connection to the sidecar; subsequent ones reuse it, so the
-            // command's overhead stays microseconds, not millis.
+            // `send_chat_message`. The client disables connection pooling
+            // (`pool_max_idle_per_host(0)`) — every chat-message POST opens
+            // a fresh TCP connection to the loopback sidecar. Reason: the
+            // pool used to keep idle connections for 60 s, but uvicorn's
+            // default HTTP keep-alive is 5 s. Between two user turns
+            // (typically 10-30 s) the server side would close the
+            // connection while the pool still cached it; the next POST
+            // would pull a half-closed socket from the pool, write into
+            // the kernel buffer, and stall ~18 s waiting for a response
+            // that never came (build #11 chat_step received decomposition:
+            // `rust_to_fastapi_ms=18211.6` while `js_to_rust_ms=10.0` and
+            // `fastapi_to_lock_ms=0.1`). Cost of disabling pooling on
+            // loopback is ~100 µs per POST — orders of magnitude smaller
+            // than the stale-connection stall it eliminates.
             app.manage(BackendUrlHandle(cfg.backend_url.clone()));
             app.manage(HttpClient(
                 reqwest::Client::builder()
-                    .pool_idle_timeout(Duration::from_secs(60))
+                    .pool_max_idle_per_host(0)
                     .build()
                     .map_err(|e| format!("reqwest client build failed: {e}"))?,
             ));
@@ -474,6 +484,28 @@ async fn send_chat_message(
     backend: State<'_, BackendUrlHandle>,
     client: State<'_, HttpClient>,
 ) -> Result<(), String> {
+    // Wire-time decomposition diagnostic — capture the moment Rust enters
+    // the command (i.e. after the JS `await invoke(...)` has crossed the
+    // Tauri IPC boundary). Combined with `t_pre_send_ms` from JS and
+    // `t_fastapi_entered_ms` on the FastAPI side, this lets the chat
+    // router's `chat_step received` log decompose `wire_time_ms` into:
+    //   js_to_rust_ms      = t_rust_received_ms - t_pre_send_ms      (Tauri invoke + IPC)
+    //   rust_to_fastapi_ms = t_fastapi_entered_ms - t_rust_received_ms (Rust HTTP + macOS net)
+    //   fastapi_to_lock_ms = now - t_fastapi_entered_ms              (FastAPI + lock acquire)
+    // Without this, "wire_time" is a single number that hides whether
+    // a residual delay is in Tauri's JS bridge, Rust's HTTP client, or
+    // backend-side queuing.
+    let t_rust_received_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(0.0);
+    let mut payload = payload;
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert(
+            "t_rust_received_ms".to_string(),
+            serde_json::json!(t_rust_received_ms),
+        );
+    }
     let url = format!("{}/api/chat/message", backend.0);
     let resp = client
         .0

@@ -588,8 +588,25 @@ async def _save_session_to_memory_locked(
     topics = _extract_topics(messages)
     notes_accessed = sorted(session.get("notes_accessed", set()))
 
-    # Extract person names mentioned in conversation
-    people_mentioned = _extract_people_from_messages(messages)
+    # Extract person names mentioned in conversation. Wrapped in
+    # `asyncio.to_thread` because `extract_entities` runs spaCy
+    # synchronously under the GIL — and on the FIRST call after a
+    # cold app start, spaCy lazy-loads its model (the
+    # `import services.entity_extraction` chain pulls in spaCy and
+    # the language model on demand). That first load + first NER
+    # inference takes 10-20 s, all GIL-held. Running it inline on
+    # the asyncio event loop would block uvicorn's `accept()` for
+    # the full duration — which is exactly the bug that surfaced as
+    # "the second user message of every cold app start sits at
+    # `rust_to_fastapi_ms = 18-23s`": the post-turn-1 background
+    # save fires `_extract_people_from_messages`, spaCy lazy-loads,
+    # the event loop stalls, turn 2's HTTP SYN sits in the kernel
+    # accept queue until the GIL releases. Subsequent saves are
+    # fast because spaCy is now cached. Offloading to a thread keeps
+    # the event loop responsive throughout.
+    people_mentioned = await asyncio.to_thread(
+        _extract_people_from_messages, messages,
+    )
 
     # Add topic words as extra tags (max 3)
     for topic in topics[:3]:
@@ -637,8 +654,15 @@ async def _save_session_to_memory_locked(
 
     # Update knowledge graph incrementally — ingest_note reads the saved file,
     # extracts entities (people, tags, links) and updates graph without full rebuild.
+    # Wrapped in `asyncio.to_thread` for the same reason as
+    # `_extract_people_from_messages` above: ingest_note routes through
+    # `graph_service.entity_edges.extract_entities` which is sync spaCy
+    # under the GIL. Without offloading, the post-turn-1 save would block
+    # the event loop a second time after the people-extraction pass.
     try:
-        graph_service.ingest_note(note_path, workspace_path=ws)
+        await asyncio.to_thread(
+            graph_service.ingest_note, note_path, workspace_path=ws,
+        )
     except Exception:
         logger.warning("Failed to add conversation to graph for session %s", session_id)
 
