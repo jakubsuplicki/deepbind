@@ -5,7 +5,9 @@ Local Model Context Protocol server that lets any MCP-compatible AI client
 into your Jarvis workspace — notes, conversations, Jira, knowledge graph.
 
 - **Transport:** stdio only (zero-config, no port, no token)
-- **Binary:** `jarvis-mcp` — standalone CLI on your `PATH` after backend install
+- **Binary:** `jarvis-mcp` in dev (editable install) — or the bundled
+  `jarvis-sidecar` invoked with `--mcp` in the .app (same binary, two modes;
+  see "Two physical entry points" below)
 - **Surface:** 22 read-only tools + 3 opt-in write tools (25 total)
 - **Privacy:** runs locally, launched on demand by the client
 - **Logs:** JSONL append-only at `app/logs/mcp/YYYY-MM-DD.jsonl`
@@ -34,7 +36,33 @@ into your Jarvis workspace — notes, conversations, Jira, knowledge graph.
 
 No `cwd`, no `PYTHONPATH`, no env required — the workspace is auto-discovered.
 If `jarvis-mcp` is not on your `PATH`, the Settings snippet generator emits
-an absolute-path fallback pointing at `backend/.venv/bin/jarvis-mcp`.
+an absolute-path fallback. In dev mode that points at
+`backend/.venv/bin/jarvis-mcp`; in the bundled .app it points at the
+running sidecar binary plus a `--mcp` flag (see below).
+
+## Two physical entry points
+
+The same MCP server logic ships two ways depending on how the backend is
+running:
+
+- **Dev mode (editable install).** `pip install -e backend/` registers a
+  `jarvis-mcp` console script (entry-point declared in
+  [`backend/pyproject.toml`](../../../backend/pyproject.toml) — points at
+  `mcp_server.__main__:main`). `scripts/install-backend.mjs` symlinks it
+  into `~/.local/bin` so MCP clients can spawn it as `jarvis-mcp`.
+
+- **Bundled mode (PyInstaller .app).** The PyInstaller spec only builds
+  one binary — `jarvis-sidecar` — to avoid doubling the .app size. That
+  binary's frozen entry point ([`backend/scripts/run_frozen.py`](../../../backend/scripts/run_frozen.py))
+  detects `--mcp` in argv at startup and dispatches into
+  `mcp_server.__main__.main()` instead of booting the FastAPI server. The
+  Settings snippet generator emits `sys.executable` (a stable path inside
+  the .app) plus `["--mcp", "--transport", "stdio"]` as args. There is no
+  separate `jarvis-mcp` binary in the bundle.
+
+Why one binary, two modes: the entire dependency tree (services,
+fastembed, spaCy, …) is already paid for once in the bundle, so a second
+mode is free. A second PyInstaller spec would duplicate ~hundreds of MB.
 
 ## Ready-to-paste per-client configs
 

@@ -1,10 +1,14 @@
 /**
  * useMcp — composable for the Settings → MCP Server panel.
  *
- * The MCP server is a standalone CLI (`jarvis-mcp`) that MCP clients
- * (Cursor, Claude Desktop, VS Code, Continue, Zed) launch themselves
- * over stdio. The Jarvis backend does NOT manage its lifecycle — this
- * composable just reports status and renders client config snippets.
+ * The MCP server is a stdio CLI that MCP clients (Cursor, Claude Desktop,
+ * VS Code, Continue, Zed) launch themselves. The Jarvis backend does NOT
+ * manage its lifecycle — this composable just reports status and renders
+ * client config snippets.
+ *
+ * `cli_command` + `cli_args` come from the backend, which picks them based
+ * on whether `jarvis-mcp` is on PATH, whether we're running under
+ * PyInstaller (then it's the bundle binary + `--mcp`), or a dev venv.
  */
 
 import { ref, computed, readonly } from 'vue'
@@ -13,6 +17,7 @@ export interface McpInfo {
   cli_on_path: boolean
   cli_path: string | null
   cli_command: string
+  cli_args: string[]
   workspace_path: string
   backend_dir: string
   tool_count: number
@@ -27,6 +32,7 @@ const info = ref<McpInfo>({
   cli_on_path: false,
   cli_path: null,
   cli_command: 'jarvis-mcp',
+  cli_args: ['--transport', 'stdio'],
   workspace_path: '',
   backend_dir: '',
   tool_count: 0,
@@ -57,9 +63,11 @@ async function refreshInfo(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export interface SnippetContext {
-  /** Either "jarvis-mcp" (preferred, CLI on PATH) or absolute path fallback. */
+  /** Either "jarvis-mcp" (CLI on PATH), the bundle binary path, or the dev venv fallback. */
   command: string
-  /** True when the CLI is on PATH; affects which snippet is shown. */
+  /** Argv tail. Includes "--mcp" when the bundle binary is dispatching as MCP. */
+  args: string[]
+  /** True when `jarvis-mcp` is on PATH; affects which snippet hint is shown. */
   portable: boolean
 }
 
@@ -73,6 +81,7 @@ export function buildStdioConfig(ctx: SnippetContext): string {
     mcpServers: {
       jarvis: {
         command: ctx.command,
+        args: ctx.args,
       },
     },
   })
@@ -85,6 +94,7 @@ export function buildVscodeConfig(ctx: SnippetContext): string {
       jarvis: {
         type: 'stdio',
         command: ctx.command,
+        args: ctx.args,
       },
     },
   })
@@ -93,6 +103,7 @@ export function buildVscodeConfig(ctx: SnippetContext): string {
 export function useMcp() {
   const snippetCtx = computed<SnippetContext>(() => ({
     command: info.value.cli_command,
+    args: info.value.cli_args,
     portable: info.value.cli_on_path,
   }))
 

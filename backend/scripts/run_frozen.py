@@ -143,7 +143,30 @@ def _bind_socket(host: str, port: int) -> socket.socket:
     return sock
 
 
+def _dispatch_mcp_mode_if_requested() -> None:
+    """When invoked as `<bundle-binary> --mcp …`, run as the stdio MCP server.
+
+    The same frozen binary serves two roles: by default it boots the FastAPI
+    sidecar; with `--mcp` in argv it dispatches to mcp_server.__main__ instead.
+    This lets external MCP clients (Claude Desktop, Cursor, etc.) spawn the
+    bundled binary directly — there is no separate `jarvis-mcp` executable in
+    the .app, and the dependency tree (services, fastembed, spaCy, …) is
+    already paid for, so a second mode costs nothing.
+
+    Returns only if `--mcp` is absent. Otherwise calls SystemExit via the MCP
+    entry point's normal completion path.
+    """
+    if "--mcp" not in sys.argv[1:]:
+        return
+    sys.argv = [sys.argv[0]] + [a for a in sys.argv[1:] if a != "--mcp"]
+    from mcp_server.__main__ import main as mcp_main
+    mcp_main()
+    raise SystemExit(0)
+
+
 def main() -> int:
+    _dispatch_mcp_mode_if_requested()
+
     log_path = _setup_logging()
     logging.getLogger("jarvis-sidecar").info(
         "sidecar starting; logs at %s", log_path

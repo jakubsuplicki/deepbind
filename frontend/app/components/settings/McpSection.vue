@@ -55,9 +55,9 @@
     </div>
 
     <div v-if="!mcp.info.value.cli_on_path" class="mcp-section__error">
-      <strong>jarvis-mcp</strong> isn't on your <code>PATH</code>. The bootstrap installer normally
-      symlinks it to <code>~/.local/bin</code>. Either re-run <code>scripts/install-backend.mjs</code>,
-      or use the absolute path snippet below: <code>{{ mcp.info.value.cli_command }}</code>
+      <strong>jarvis-mcp</strong> isn't on your <code>PATH</code>. The snippet below uses the
+      absolute path to the running binary instead — it will work as-is, no install step needed.
+      <code>{{ fullCliCommand }}</code>
     </div>
 
     <div v-if="mcp.error.value" class="mcp-section__error">{{ mcp.error.value }}</div>
@@ -106,11 +106,17 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted } from 'vue'
+import { computed, nextTick, onMounted } from 'vue'
 import SettingsSection from '~/components/settings/SettingsSection.vue'
 import { useMcpSnippets, formatLastCall } from '~/composables/settings/useMcpSnippets'
 
 const { mcp, activeId, copied, activeTab, activeText, copy, tabs } = useMcpSnippets()
+
+const fullCliCommand = computed(() => {
+  const cmd = mcp.info.value.cli_command
+  const args = mcp.info.value.cli_args ?? []
+  return args.length ? `${cmd} ${args.join(' ')}` : cmd
+})
 
 onMounted(async () => {
   await mcp.refreshInfo()
