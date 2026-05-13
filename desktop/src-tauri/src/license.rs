@@ -331,18 +331,16 @@ pub async fn license_open_data_folder(
         .map_err(|e| format!("open data folder {path}: {e}"))
 }
 
-/// One-shot: read state at boot for inlining into the WebView via
-/// `__JARVIS_LICENSE_STATE__`. Synchronous wrapper for use inside the
-/// setup hook (which is sync). Errors are logged + the function returns
-/// `null` so the frontend boots into a "state unknown" fallback rather
-/// than failing to launch.
-pub fn boot_state_blocking(
+/// One-shot: read license state during the splash-driven boot sequence.
+/// Errors are logged and the function returns `Value::Null` so the frontend
+/// boots into a "state unknown" fallback (`useLicenseState` has its own
+/// background re-fetch) rather than blocking the splash transition.
+pub async fn boot_state(
     app: &AppHandle,
     backend_url: &str,
     client: &reqwest::Client,
 ) -> Value {
-    let work = refresh_state(app, backend_url, client);
-    match tauri::async_runtime::block_on(work) {
+    match refresh_state(app, backend_url, client).await {
         Ok(state) => state,
         Err(e) => {
             log::warn!("boot license state probe failed: {e}");

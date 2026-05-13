@@ -36,7 +36,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{
-    async_runtime, AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder,
+    async_runtime, AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl,
+    WebviewWindowBuilder,
 };
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -47,6 +48,107 @@ use tokio::time::timeout;
 struct BackendConfig {
     backend_url: String,
     ws_url: String,
+}
+
+// ---------------------------------------------------------------------------
+// Boot-stage tracking — drives the splash screen.
+// ---------------------------------------------------------------------------
+//
+// The Tauri shell builds the window IMMEDIATELY, before any of the slow boot
+// work (Ollama spawn → bind, sidecar spawn → READY, license probe). The
+// splash component subscribes to `boot:stage` events and mirrors the real
+// boot progress; on `boot:complete` it injects `__JARVIS_CONFIG__` +
+// `__JARVIS_LICENSE_STATE__` globals and crossfades to the real layout.
+//
+// The shell maintains a snapshot of the most-recent stage in `BootStateHandle`
+// so a splash that mounts AFTER an early stage already fired (Vue's hydration
+// vs the Rust task is a race) can call `get_boot_state` and resume from the
+// right point. Without that, an unlucky splash mount could miss the
+// `ollama_starting` event and sit on the default-pending state for several
+// seconds.
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BootPhase {
+    OllamaStarting,
+    OllamaReady,
+    SidecarStarting,
+    SidecarReady,
+    LicenseProbing,
+    Ready,
+    Error,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct BootStage {
+    phase: BootPhase,
+    /// Human-readable detail line. Plain English, not a code path.
+    detail: String,
+    /// 0.0..1.0 monotone — splash uses this to paint the trace.
+    progress: f32,
+    /// Populated only on `Phase::Ready` and `Phase::Error`. The frontend
+    /// reads `config` + `license` here on the boot:complete event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config: Option<BackendConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    license: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl BootStage {
+    fn new(phase: BootPhase, detail: &str, progress: f32) -> Self {
+        Self {
+            phase,
+            detail: detail.to_string(),
+            progress,
+            config: None,
+            license: None,
+            error: None,
+        }
+    }
+
+    fn ready(config: BackendConfig, license: serde_json::Value) -> Self {
+        Self {
+            phase: BootPhase::Ready,
+            detail: "ready".to_string(),
+            progress: 1.0,
+            config: Some(config),
+            license: Some(license),
+            error: None,
+        }
+    }
+
+    fn error(detail: &str, message: String) -> Self {
+        Self {
+            phase: BootPhase::Error,
+            detail: detail.to_string(),
+            progress: 0.0,
+            config: None,
+            license: None,
+            error: Some(message),
+        }
+    }
+}
+
+struct BootStateHandle(Mutex<BootStage>);
+
+fn emit_boot(app: &AppHandle, stage: BootStage) {
+    if let Some(handle) = app.try_state::<BootStateHandle>() {
+        if let Ok(mut guard) = handle.0.lock() {
+            *guard = stage.clone();
+        }
+    }
+    if let Err(e) = app.emit("boot:stage", &stage) {
+        log::warn!("boot:stage emit failed: {e}");
+    }
+}
+
+#[tauri::command]
+fn get_boot_state(state: State<'_, BootStateHandle>) -> BootStage {
+    state.0.lock().map(|g| g.clone()).unwrap_or_else(|_| {
+        BootStage::error("internal lock poisoned", "boot state unreadable".into())
+    })
 }
 
 const OLLAMA_HOST: &str = "127.0.0.1";
@@ -207,11 +309,151 @@ fn spawn_ollama(app: &AppHandle) -> Result<Child, String> {
     Ok(child)
 }
 
+/// Boot orchestration — runs in an async task spawned from `setup`. The
+/// window is already painting the splash by the time this starts; every
+/// stage transition is mirrored to the splash via `boot:stage` events.
+///
+/// Errors are *non-fatal*: instead of bubbling up (which would kill the
+/// already-built window), we emit a `Phase::Error` stage and let the splash
+/// surface a "boot failed" state with a retry / quit affordance. This is the
+/// honest UX — silently exiting on a bundle integrity issue would leave the
+/// user staring at a vanished window with nothing to act on.
+async fn run_boot_sequence(app: AppHandle) {
+    // Dev-mode short-circuit. JARVIS_DEV_BACKEND_URL trusts the developer's
+    // already-running Ollama + manually-launched backend; no ollama spawn,
+    // no sidecar spawn, just license probe and emit Ready. See
+    // desktop/scripts/dev.sh.
+    if let Ok(url) = std::env::var("JARVIS_DEV_BACKEND_URL") {
+        if !url.is_empty() {
+            log::info!("dev mode: JARVIS_DEV_BACKEND_URL={url}");
+            let ws_url = url
+                .replacen("https://", "wss://", 1)
+                .replacen("http://", "ws://", 1);
+            let cfg = BackendConfig { backend_url: url, ws_url };
+            // Manage the shared HTTP client so license probe + chat sends work.
+            app.manage(BackendUrlHandle(cfg.backend_url.clone()));
+            match reqwest::Client::builder().pool_max_idle_per_host(0).build() {
+                Ok(client) => {
+                    app.manage(HttpClient(client));
+                }
+                Err(e) => {
+                    emit_boot(&app, BootStage::error("http client build failed", e.to_string()));
+                    return;
+                }
+            }
+            emit_boot(&app, BootStage::new(BootPhase::LicenseProbing, "verifying entitlement", 0.85));
+            let url_handle = app.state::<BackendUrlHandle>();
+            let http_handle = app.state::<HttpClient>();
+            let license = license::boot_state(&app, &url_handle.0, &http_handle.0).await;
+            emit_boot(&app, BootStage::ready(cfg, license));
+            return;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Stage 1: Ollama
+    // -----------------------------------------------------------------
+    emit_boot(&app, BootStage::new(BootPhase::OllamaStarting, "spinning up local inference runtime", 0.10));
+    let ollama_child = match spawn_ollama(&app) {
+        Ok(c) => c,
+        Err(e) => {
+            emit_boot(&app, BootStage::error("ollama spawn failed", e));
+            return;
+        }
+    };
+    // Manage immediately so the quit handler can find + kill it even if
+    // we abort the boot sequence below.
+    app.manage(OllamaHandle(Mutex::new(Some(ollama_child))));
+
+    let ollama_addr: SocketAddr = format!("{OLLAMA_HOST}:{OLLAMA_PORT}").parse().unwrap();
+    if let Err(e) = async_runtime::spawn_blocking(move || {
+        await_ollama_ready(ollama_addr, OLLAMA_READY_DEADLINE)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("ollama-ready task panicked: {e}")))
+    {
+        emit_boot(&app, BootStage::error("ollama did not bind", e));
+        return;
+    }
+    let ollama_base_url = format!("http://{ollama_addr}");
+    log::info!("ollama ready at {ollama_base_url}");
+    emit_boot(&app, BootStage::new(BootPhase::OllamaReady, "inference runtime online", 0.30));
+
+    // -----------------------------------------------------------------
+    // Stage 2: Sidecar (PyInstaller unpack + Python startup is the bulk
+    // of cold-launch wall-clock — typically 8-25 s on a fresh install)
+    // -----------------------------------------------------------------
+    emit_boot(&app, BootStage::new(BootPhase::SidecarStarting, "extracting inference services", 0.40));
+    let shell_pid = std::process::id().to_string();
+    let sidecar_cmd = match app.shell().sidecar("jarvis-sidecar") {
+        Ok(c) => c,
+        Err(e) => {
+            emit_boot(&app, BootStage::error("sidecar lookup failed", e.to_string()));
+            return;
+        }
+    };
+    let sidecar_cmd = sidecar_cmd
+        .env("JARVIS_SHELL_PID", shell_pid)
+        .env("JARVIS_OLLAMA_BASE_URL", &ollama_base_url)
+        // CORS: bundled webview origin is platform-specific
+        // (`tauri://localhost` on macOS, `https://tauri.localhost`
+        // on Windows). Pass both so the same binary is portable.
+        .env("JARVIS_CORS_ORIGINS", "tauri://localhost,https://tauri.localhost");
+
+    let (rx, child) = match sidecar_cmd.spawn() {
+        Ok(p) => p,
+        Err(e) => {
+            emit_boot(&app, BootStage::error("sidecar spawn failed", e.to_string()));
+            return;
+        }
+    };
+    app.manage(SidecarHandle(Mutex::new(Some(child))));
+
+    let cfg = match await_sidecar_ready(rx, SIDECAR_READY_DEADLINE).await {
+        Ok(c) => c,
+        Err(e) => {
+            emit_boot(&app, BootStage::error("backend handshake failed", e));
+            return;
+        }
+    };
+    log::info!("sidecar ready: backend_url={}, ws_url={}", cfg.backend_url, cfg.ws_url);
+    emit_boot(&app, BootStage::new(BootPhase::SidecarReady, "services online", 0.75));
+
+    // -----------------------------------------------------------------
+    // Stage 3: shared HTTP client + license probe
+    // -----------------------------------------------------------------
+    // Long-lived reqwest client — see comments in send_chat_message for the
+    // pool_max_idle_per_host(0) reasoning.
+    app.manage(BackendUrlHandle(cfg.backend_url.clone()));
+    match reqwest::Client::builder().pool_max_idle_per_host(0).build() {
+        Ok(client) => {
+            app.manage(HttpClient(client));
+        }
+        Err(e) => {
+            emit_boot(&app, BootStage::error("http client build failed", e.to_string()));
+            return;
+        }
+    }
+
+    emit_boot(&app, BootStage::new(BootPhase::LicenseProbing, "verifying entitlement", 0.90));
+    let license = {
+        let url_handle = app.state::<BackendUrlHandle>();
+        let http_handle = app.state::<HttpClient>();
+        license::boot_state(&app, &url_handle.0, &http_handle.0).await
+    };
+
+    // -----------------------------------------------------------------
+    // Stage 4: ready → splash transitions out, real layout mounts
+    // -----------------------------------------------------------------
+    emit_boot(&app, BootStage::ready(cfg, license));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
+            get_boot_state,
             send_chat_message,
             license::license_get_state,
             license::license_install_text,
@@ -227,144 +469,43 @@ pub fn run() {
                 )?;
             }
 
-            // Dev-mode bypass: trust the developer's already-running stack
-            // (their host Ollama + a hand-launched backend). See
-            // desktop/scripts/dev.sh.
-            let cfg = match std::env::var("JARVIS_DEV_BACKEND_URL").ok() {
-                Some(ref url) if !url.is_empty() => {
-                    log::info!("dev mode: JARVIS_DEV_BACKEND_URL={url}");
-                    let ws_url = url
-                        .replacen("https://", "wss://", 1)
-                        .replacen("http://", "ws://", 1);
-                    BackendConfig {
-                        backend_url: url.clone(),
-                        ws_url,
-                    }
-                }
-                _ => {
-                    // 1. Spawn bundled ollama and wait for it to bind :11435.
-                    let ollama_child = spawn_ollama(app.handle())
-                        .map_err(|e| format!("ollama spawn failed: {e}"))?;
-                    let ollama_addr: SocketAddr =
-                        format!("{OLLAMA_HOST}:{OLLAMA_PORT}").parse().unwrap();
-                    if let Err(e) =
-                        await_ollama_ready(ollama_addr, OLLAMA_READY_DEADLINE)
-                    {
-                        // We started a child but it never bound. Kill it
-                        // before bubbling the error so we don't leak a
-                        // process when Tauri tears the app down.
-                        let mut c = ollama_child;
-                        let _ = c.kill();
-                        return Err(format!("ollama not ready: {e}").into());
-                    }
-                    app.manage(OllamaHandle(Mutex::new(Some(ollama_child))));
-                    let ollama_base_url = format!("http://{ollama_addr}");
-                    log::info!("ollama ready at {ollama_base_url}");
+            // Seed the boot-state handle with the pending stage so a splash
+            // that calls `get_boot_state` before the first event fires sees
+            // a coherent value (not "ready" by default).
+            app.manage(BootStateHandle(Mutex::new(BootStage::new(
+                BootPhase::OllamaStarting,
+                "initializing",
+                0.0,
+            ))));
 
-                    // 2. Spawn jarvis-sidecar pointed at our ollama. Pass our
-                    // PID so the sidecar's watchdog can self-terminate on a
-                    // hard shell exit (SIGKILL / force-quit). See
-                    // backend/scripts/run_frozen.py and ADR 003 §"Negative"
-                    // §zombies.
-                    let shell_pid = std::process::id().to_string();
-                    // CORS: the bundled webview origin is platform-specific
-                    // (`tauri://localhost` on macOS, `https://tauri.localhost`
-                    // on Windows). Pass both so the same shell binary is
-                    // portable when we add Windows. Dev mode bypasses this
-                    // path entirely (JARVIS_DEV_BACKEND_URL branch above).
-                    // Without this env var the FastAPI default
-                    // `["http://localhost:3000"]` rejects the webview's
-                    // requests with no Access-Control-Allow-Origin header,
-                    // surfacing in the UI as "Failed to fetch model catalog".
-                    let sidecar = app
-                        .shell()
-                        .sidecar("jarvis-sidecar")
-                        .map_err(|e| format!("sidecar lookup failed: {e}"))?
-                        .env("JARVIS_SHELL_PID", shell_pid)
-                        .env("JARVIS_OLLAMA_BASE_URL", &ollama_base_url)
-                        .env(
-                            "JARVIS_CORS_ORIGINS",
-                            "tauri://localhost,https://tauri.localhost",
-                        );
-                    let (rx, child) = sidecar
-                        .spawn()
-                        .map_err(|e| format!("sidecar spawn failed: {e}"))?;
-
-                    // 3. Wait for the READY line (synchronous block on the
-                    // async runtime — Tauri's setup hook is sync).
-                    let cfg = async_runtime::block_on(await_sidecar_ready(
-                        rx,
-                        SIDECAR_READY_DEADLINE,
-                    ))
-                    .map_err(|e| format!("backend handshake failed: {e}"))?;
-
-                    log::info!(
-                        "sidecar ready: backend_url={}, ws_url={}",
-                        cfg.backend_url,
-                        cfg.ws_url
-                    );
-
-                    app.manage(SidecarHandle(Mutex::new(Some(child))));
-                    cfg
-                }
-            };
-
-            // Make the backend URL + a shared reqwest client available to
-            // `send_chat_message`. The client disables connection pooling
-            // (`pool_max_idle_per_host(0)`) — every chat-message POST opens
-            // a fresh TCP connection to the loopback sidecar. Reason: the
-            // pool used to keep idle connections for 60 s, but uvicorn's
-            // default HTTP keep-alive is 5 s. Between two user turns
-            // (typically 10-30 s) the server side would close the
-            // connection while the pool still cached it; the next POST
-            // would pull a half-closed socket from the pool, write into
-            // the kernel buffer, and stall ~18 s waiting for a response
-            // that never came (build #11 chat_step received decomposition:
-            // `rust_to_fastapi_ms=18211.6` while `js_to_rust_ms=10.0` and
-            // `fastapi_to_lock_ms=0.1`). Cost of disabling pooling on
-            // loopback is ~100 µs per POST — orders of magnitude smaller
-            // than the stale-connection stall it eliminates.
-            app.manage(BackendUrlHandle(cfg.backend_url.clone()));
-            app.manage(HttpClient(
-                reqwest::Client::builder()
-                    .pool_max_idle_per_host(0)
-                    .build()
-                    .map_err(|e| format!("reqwest client build failed: {e}"))?,
-            ));
-
-            // 4. Probe the license state once at boot so the first paint
-            // can decide between trial-banner / wall / settings without a
-            // round-trip. ADR 019 — the wall must be present from the
-            // very first paint when the trial has expired (or a license
-            // is invalid), otherwise gated content flickers visible for
-            // the duration of the network hop.
-            let initial_license_state = {
-                let url_handle = app.state::<BackendUrlHandle>();
-                let http_handle = app.state::<HttpClient>();
-                license::boot_state_blocking(app.handle(), &url_handle.0, &http_handle.0)
-            };
-
-            // 5. Build the window with config + license state baked in via
-            // init_script, so the page loads with both globals already set.
-            let cfg_json = serde_json::to_string(&serde_json::json!({
-                "backendUrl": cfg.backend_url,
-                "wsUrl": cfg.ws_url,
-            }))
-            .map_err(|e| format!("config serialize failed: {e}"))?;
-            let license_json = serde_json::to_string(&initial_license_state)
-                .map_err(|e| format!("license-state serialize failed: {e}"))?;
-            let init_script = format!(
-                "window.__JARVIS_CONFIG__ = {cfg_json}; \
-                 window.__JARVIS_LICENSE_STATE__ = {license_json};"
-            );
-
+            // Build the window IMMEDIATELY. The page loads the splash route;
+            // `useBoot` subscribes to `boot:stage` events and crossfades into
+            // the real layout once `Phase::Ready` arrives. Total time-to-paint
+            // is ~200 ms vs. the 10-30 s blank dock-bounce of the prior shape.
+            //
+            // No `initialization_script` for `__JARVIS_CONFIG__` /
+            // `__JARVIS_LICENSE_STATE__` — those values aren't known yet. The
+            // splash component writes them onto `window` when `boot:complete`
+            // fires, before triggering the layout mount, so consumers
+            // (`useLicenseState`, `useApi`, …) see them populated on their
+            // first read. ADR 019's first-paint contract holds: the splash
+            // is non-content, no gated surface paints until license state is
+            // known.
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("DeepFilesAI")
                 .inner_size(960.0, 720.0)
-                .initialization_script(&init_script)
                 .resizable(true)
                 .build()
                 .map_err(|e| format!("window build failed: {e}"))?;
+
+            // Spawn the boot sequence. Window is already up; this drives the
+            // splash through its real stages. Errors land as `Phase::Error`
+            // events rather than aborting, so the user sees a tangible failure
+            // state instead of a silently-vanished window.
+            let app_handle = app.handle().clone();
+            async_runtime::spawn(async move {
+                run_boot_sequence(app_handle).await;
+            });
 
             Ok(())
         })

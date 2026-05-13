@@ -31,6 +31,23 @@ The root page (`pages/index.vue`) is the only entry point for the application. O
 
 This means there is no client-side route guard middleware — the redirect logic lives entirely in `index.vue` and runs once per page load.
 
+### Splash-driven async boot ([ADR 022](../architecture/decisions/022-splash-boot-async.md))
+
+The Tauri shell builds the main window **immediately** on launch — before Ollama spawns, before the Python sidecar unpacks, before the license probe. That window's first paint is [`SplashScreen.vue`](../../frontend/app/components/SplashScreen.vue), a calibration-boot surface that mirrors the real boot stages emitted by the shell as `boot:stage` events.
+
+The shell's `setup` hook is now ~25 lines: install the dev logger, seed a `BootStateHandle` with the initial pending stage, build the window, and `async_runtime::spawn` `run_boot_sequence`. That async task walks Ollama-spawn → sidecar-spawn → `JARVIS_BACKEND_READY` handshake → license probe, calling `emit_boot(...)` at each transition. Errors land as `Phase::Error` events instead of bubbling up — that lets the splash surface a tangible failure state rather than vanishing the window.
+
+Frontend pieces:
+
+- [`useBoot.ts`](../../frontend/app/composables/useBoot.ts) is a module-level singleton that subscribes once to `boot:stage`. On `Phase::Ready` it writes `__JARVIS_CONFIG__` and `__JARVIS_LICENSE_STATE__` onto `window` *before* flipping `boot.ready` true, so the real layout's first read sees populated globals. ADR 019's first-paint contract holds: the splash itself is non-content (brand surface only), and the real layout doesn't mount until license state is known.
+- A late-mount catch-up via the `get_boot_state` Tauri command handles the Vue-hydration vs. Rust-task race — if the splash mounts after the first event already fired, the snapshot resumes the readout from the right point.
+- `SplashScreen.vue` renders an instrument-panel surface (all-monospace, brand-cyan + phosphor-amber accent, hairline borders, scanlines + grain, corner ticks) driven by the real stage events. Long stages (sidecar spawn — 10–25 s on a cold install while the 1.8 GB PyInstaller bundle unpacks to `/var/folders/.../tmp.…`) cycle through honest subtitle variants every 4 s so the eye sees motion instead of staring at a static label.
+- In browser-dev mode (`__TAURI_INTERNALS__` absent), `useBoot` short-circuits to `ready=true` immediately. The splash never paints; the dev Nuxt server is already talking to a hand-launched backend.
+- `default.vue` gates the real layout on `boot.ready` and unmounts the splash 460 ms after ready flips (longer than the splash's own 420 ms opacity transition, so the visual fade always finishes before the DOM node disappears).
+- Other startup side-effects (`checkHealth`, `startWarmupPolling`, the `license:file_opened` listener) are deferred until boot completes — they all depend on backend up anyway, and firing them earlier produced spurious "Offline" pills.
+
+Net result: the cold-launch perceived wait drops from a 10–30 s blank dock-bounce (which read as "the app crashed") to a ~200 ms paint-to-splash plus a calibrated readout of what's actually happening.
+
 ### Shared state via `useAppState`
 
 Three pieces of state are owned at the application level and shared across all pages using Nuxt's `useState()` (keyed strings, so calls from different components return the same reactive ref):

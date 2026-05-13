@@ -62,11 +62,27 @@ async def lifespan(app: FastAPI):
     await start_workers()
     # ML warmup: preload fastembed embedder, reranker, spaCy NER, and HF
     # tokenizers in a background thread so the first user-facing chat turn
-    # doesn't pay the lazy-load cost. Non-blocking — start_workers() and the
-    # `yield` below proceed immediately. See services/warmup_service.py and
+    # doesn't pay the lazy-load cost. See services/warmup_service.py and
     # docs/features/chat.md for the full rationale (cold-start turn-2 stall).
-    from services import warmup_service
-    warmup_service.start()
+    #
+    # Defer the warmup START by 2 s. The warmup thread holds Python's GIL
+    # for ~30-40 s during spaCy's `xx_ent_wiki_sm` import + first inference,
+    # which starves uvicorn's asyncio loop and queues every inbound HTTP
+    # request behind the load. The Tauri shell's first request after
+    # `JARVIS_BACKEND_READY` is the license probe (`POST /api/license/state`),
+    # which gates the splash screen → real-layout transition. Without this
+    # delay the user sees a 60+ s splash even on warm-cache launches; with
+    # it, the license probe and any other immediate startup requests get
+    # served first (the GIL is uncontended for the first ~2 s post-yield),
+    # then warmup runs in the background while the user is already in the
+    # real UI. ADR 022 records the architectural reasoning.
+    async def _deferred_warmup() -> None:
+        import asyncio
+        await asyncio.sleep(2)
+        from services import warmup_service
+        warmup_service.start()
+    import asyncio as _asyncio
+    _asyncio.create_task(_deferred_warmup())
     yield
     # Stop background pieces in reverse order of startup.
     await stop_workers()
