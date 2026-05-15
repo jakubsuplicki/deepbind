@@ -1,562 +1,327 @@
-# Jarvis
+# DeepFilesAI
 
 [![CI](https://github.com/jakubsuplicki/deepbind/actions/workflows/ci.yml/badge.svg)](https://github.com/jakubsuplicki/deepbind/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml/badge.svg)](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml)
-[![Release](https://img.shields.io/github/v/release/jakubsuplicki/deepbind?include_prereleases&label=version)](https://github.com/jakubsuplicki/deepbind/releases)
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-lightgrey.svg)](LICENSE)
 
-<sub>Built by [Łukasz Jakubowski](https://github.com/Szesnasty) & [Jakub Suplicki](https://github.com/jakubsuplicki) · Proprietary — © Zen Zero Pty Ltd</sub>
+<sub>Codename: Jarvis · Proprietary software owned by Zen Zero Pty Ltd</sub>
 
-**An AI workspace that remembers what matters.**
+**A pure-local AI workspace that remembers what matters.**
 
-Local-first memory, hybrid retrieval, and durable context.
-Run Jarvis on your machine with Ollama or connect your preferred cloud provider.
-Every useful interaction makes the system better over time.
+DeepFilesAI is a local-first personal knowledge, planning, and memory system. It runs as a desktop app with a local web UI, a local Python sidecar, a bundled Ollama runtime, and a Markdown workspace that stays on the user's machine.
 
-Jarvis helps you:
-- import notes, files, URLs, and YouTube sources into one memory system
-- retrieve context through keyword, semantic, and graph search
-- turn useful outputs into reusable notes, plans, and summaries
-- run locally with Ollama or connect Anthropic, OpenAI, or Google
-- create specialists and structured debates on top of your memory
+V1 is intentionally **pure local**:
 
-> **Jarvis is not another AI chat with memory.**
-> **It is a personal knowledge system that gets more useful every time you use it.**
+- no cloud LLM providers
+- no API-key UI
+- no LiteLLM
+- no web search
+- no telemetry SDKs
+- no vendor-hosted backend
 
-![Jarvis hero](./docs/assets/hero.png)
+Model downloads can still contact the Ollama registry when the user pulls a local model. Inference, retrieval, memory, graph building, session history, and write-back all run locally.
 
----
-
-## In one sentence
-
-Jarvis is a local-first personal knowledge system that retrieves from your notes, reasons with AI, and writes useful results back into memory.
+![DeepFilesAI hero](./docs/assets/hero.png)
 
 ---
 
-## Why this exists
+## In One Sentence
 
-Knowledge work is fragmented. Ideas live in notes. Context lives in files. Research lives in links. Decisions disappear into chat history. Useful AI outputs vanish after the session ends.
-
-That creates real costs:
-- repeated thinking
-- lost context
-- higher AI spend rebuilding context over and over
-- no compounding value from what you already know
-
-Jarvis fixes the loop: **input → retrieve → reason → write back → better retrieval next time.**
+DeepFilesAI retrieves from your local notes and documents, reasons with a local model, and writes useful outputs back into durable Markdown memory.
 
 ---
 
-## Run it your way
+## Current Product Shape
 
-### Local mode — private, on-device, no API key required
+The current source of truth is:
 
-Use [Ollama](https://ollama.com) and downloadable models directly on your computer. Your data and your model stay on your machine.
+- [Project overview](./docs/overview.md)
+- [ADR 002 — Pure local product shape](./docs/architecture/decisions/002-pure-local-product-shape.md)
+- [ADR 003 — Tauri shell + sidecars](./docs/architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md)
+- [ADR 015 — Single-target local-only stack](./docs/architecture/decisions/015-single-target-local-only-stack.md)
+- [ADR 020 — Web search dropped from v1](./docs/architecture/decisions/020-web-search-dropped-v1.md)
 
-### Cloud mode — bring your own provider
-
-Use Anthropic, OpenAI, or Google via API key. Access the most capable models when you need them.
-
-### Hybrid mode — mix local and cloud
-
-Use local models for everyday work and switch to cloud for heavier tasks. Change providers per conversation from Settings.
+Older planning docs may still mention Claude, Anthropic, OpenAI, Google, web search, browser-only operation, or cloud/provider switching. Those references are historical pre-pivot material unless an accepted ADR says otherwise.
 
 ---
 
-## Local models you can start with
-
-Jarvis includes 7 curated model presets that run through Ollama. It recommends models based on your hardware and lets you download, switch, and manage them directly from Settings.
-
-| Preset | Model | Best for |
-|---|---|---|
-| **Fast** | Qwen3 1.7B | Weakest laptops, quick local chat |
-| **Everyday** | Qwen3 4B | Lightweight everyday use |
-| **Balanced** | Qwen3 8B | Best default for most users |
-| **Long Docs** | Ministral 3 8B | Long documents, larger context windows |
-| **Reasoning** | Gemma 4 E4B | Stronger reasoning on better hardware |
-| **Code** | Devstral Small 2 24B | Repo work and multi-file edits |
-| **Best Local** | Gemma 4 27B | Best quality, complex tasks |
-
-Start with **Qwen3 8B** if you want the safest default. You can add cloud providers later in Settings.
-
----
-
-## Why local mode matters
-
-- No API key required — start using Jarvis immediately
-- Private in local mode — prompts and memory stay on your machine
-- Lower recurring cost — no per-token charges
-- Good fit for memory-heavy workflows — retrieval runs locally too
-- Great for notes, documents, planning, and retrieval
-
----
-
-## What makes Jarvis different
-
-### Your memory belongs to you
-Local Markdown files are the source of truth. Not a proprietary memory layer. Not a database you can't read.
-
-### Retrieval before reasoning — the real moat
-Most AI apps send your whole prompt to a model and pay for every token. Jarvis does the expensive work locally first, then sends only a small, high-signal context to the model. Fewer tokens, lower cost, better answers.
-
-```mermaid
-flowchart LR
-    Q[Your question] --> BM25[BM25<br/>keyword]
-    Q --> SEM[Semantic<br/>embeddings]
-    Q --> GRAPH[Graph<br/>expansion]
-    BM25 --> RANK[Hybrid ranking]
-    SEM --> RANK
-    GRAPH --> RANK
-    RANK --> COMP[Context<br/>compression]
-    COMP --> MODEL[LLM<br/>local or cloud]
-    MODEL --> OUT[Answer +<br/>write-back to memory]
-    OUT -. ingest-time .-> CONNECT[Smart Connect<br/>per-note linking]
-    CONNECT --> GRAPH
-```
-
-All steps before the model run on your machine. The LLM sees only the distilled context — not your entire workspace. New notes are auto-linked at ingest time by Smart Connect, so the graph keeps growing without a global rebuild.
-
-### A real knowledge graph
-Notes, people, projects, places, and sources are connected through a graph that is part of retrieval and reasoning — not just a visualization. Every new note is linked at ingest time using cheap local signals (BM25, embeddings, alias matches, shared sources/batches), with user review for promote / dismiss in the memory page.
-
-**Smart Connect quality loop.** Suggestions come with a transparent score breakdown (BM25 / semantic / alias / shared-source) so you can see *why* two notes were linked. Confirmed `related` edges drive retrieval at full weight; unconfirmed `suggested_related` candidates are capped at 0.35 by default and never inflate scores. A one-click **Backfill** runs Smart Connect across the whole vault, and a per-suggestion event log tracks promote / dismiss / keep-all decisions.
-
-**Controlled graph expansion.** During chat, Jarvis expands one hop from anchor notes through high-trust edges (`related`, `part_of`) to surface neighbours that BM25 alone would miss — within a strict token budget so core context is never sacrificed. Three toggles in **Settings → Retrieval** let you turn each edge type on or off.
-
-### Local or cloud — your choice
-Run fully local with Ollama and downloadable models, or connect Anthropic, OpenAI, or Google via API key. Switch between local and cloud per conversation. No vendor lock-in.
-
-### Specialists from the UI
-Create reusable roles — Weekly Planner, Health Guide, Study Coach, Research Assistant — directly from the interface. No prompt engineering required.
-
-### Web search
-When local memory isn't enough, Jarvis searches the web via DuckDuckGo — no extra API keys needed.
-
-### Write-back by design
-Useful outputs become notes, summaries, plans, graph links, and durable context. Every useful interaction makes the system better.
-
-### Obsidian-compatible
-Your `Jarvis/memory/` folder works as a valid Obsidian vault — plain Markdown, YAML frontmatter, wiki-links, human-readable structure.
-
-### MCP server — Jarvis as local memory for every AI tool
-
-Jarvis includes a built-in **Model Context Protocol (MCP) server** with **26 tools over stdio** (23 read-only + 3 opt-in writes), so any MCP-aware client can use your workspace as a shared memory backend — including **Claude Desktop, Cursor, VS Code Copilot, Continue**, and more.
-
-See the full tool catalogue — what each tool does and what you gain — in [`docs/features/mcp-server/tools.md`](./docs/features/mcp-server/tools.md).
-
-Why this matters:
-- **Token savings** — retrieval runs locally on your machine first (BM25 + semantic + graph), so cloud models receive only a smaller, higher-signal context.
-- **One memory, many tools** — use the same notes, plans, summaries, and graph context from Jarvis itself or from external AI tools.
-- **Local-first by default** — the MCP server runs on your machine over stdio; your workspace stays local unless you choose a cloud model for reasoning.
-- **Spend control** — tools are tagged by cost class (`free`, `cheap`, `standard`, `premium`) so you can cap usage per session.
-- **Easy setup** — Jarvis provides ready-to-paste JSON config snippets for supported MCP clients in **Settings → MCP**.
-
-> **Jarvis becomes the local brain. Your favorite AI app becomes the interface.**
-
-### Agent rules — make your AI client use Jarvis tools correctly
-
-Jarvis ships with a ready-to-use **agent rules file** ([`docs/jarvis-agent-rules.mdc`](./docs/jarvis-agent-rules.mdc)) that teaches your AI client how to route questions to the right `jarvis_*` MCP tools, format answers, and avoid redundant calls.
-
-**Copy it into your project:**
-
-| Client | Where to place |
-|---|---|
-| **Cursor** | `.cursor/rules/jarvis.mdc` |
-| **Claude Code** | `.claude/instructions.md` (paste contents) |
-| **VS Code Copilot** | `.github/copilot-instructions.md` (paste contents) |
-
-The file is open — use it as-is or adapt it to your workflow.
-
----
-
-## What's working now
-
-**Core**
-- Browser-based UI — chat, memory browser, graph view, settings
-- Local workspace with Markdown memory (Obsidian-compatible)
-- File, URL, and YouTube ingest (including PDF) — all through the UI
-- Hybrid retrieval: BM25 + semantic + graph scoring
-- Local embeddings via fastembed (multilingual, no API calls)
-- Interactive D3 graph visualization
-- Session-to-memory write-back with graph updates
-- Token tracking with budget controls
-
-**Models**
-- **Local via Ollama** — 7 curated presets, no API key required
-- **Hardware-aware recommendations** based on your RAM, disk, and GPU
-- Download, switch, and manage models from Settings
-- **Cloud providers** — Anthropic, OpenAI, Google via API key
-- Switch local ↔ cloud per conversation
-
-**Power features**
-- Specialist system with full UI wizard
-- Web search via DuckDuckGo (no extra API key)
-- **Smart Connect quality loop** — vault-wide backfill, score breakdown per suggestion, event log, and dismissal stats
-- **Controlled graph expansion** in chat — one-hop expansion via confirmed `related` / `part_of` edges with token-budget cap (toggles in Settings → Retrieval)
-- **Built-in MCP server (26 tools over stdio)** \u2014 use Jarvis memory from Claude Desktop, Cursor, VS Code Copilot, Continue, and other MCP-aware clients ([full tool list](./docs/features/mcp-server/tools.md))
-
-**Coming next:** stronger feedback loops, smarter graph enrichment, Council Mode, voice (once quality is reliable).
-
----
-
-## How it works in practice
-
-**Imported:** project notes, 2 URLs, 1 YouTube video.
-
-**Asked Jarvis:** *"What should we do next?"*
-
-**Jarvis:**
-1. Retrieved relevant notes from memory (BM25 + embeddings)
-2. Expanded context through graph links
-3. Ranked and compressed candidates
-4. Produced a practical plan via Claude
-5. Saved the result to `memory/plans/`
-6. Updated graph relationships for future use
-
-**Result:** not just a better answer — a better system after the answer.
-
----
-
-## Interface
-
-Jarvis can be powered by cloud providers or run fully locally with downloadable models.
-
-### Chat — your memory-aware assistant
-Ask questions, get answers grounded in your own notes. Context is retrieved automatically — you just talk.
-![Chat](./docs/assets/chat.png)
-
-### Memory — browse and manage your knowledge
-All your notes in one place. Search, filter by folder, edit inline. Everything is plain Markdown — open it in Obsidian anytime.
-![Memory](./docs/assets/memory.png)
-
-### Graph — see how your knowledge connects
-People, projects, topics, and sources linked visually. Click any node to explore. The graph isn't decoration — it powers retrieval.
-![Graph](./docs/assets/graph.png)
-
-### Specialists — custom roles, no code required
-Create focused advisors with their own knowledge, rules, and style. A Growth Strategist thinks differently than an Operations Advisor — and that's the point.
-![Specialists](./docs/assets/specialists.png)
-
-### Settings — your setup, your control
-API keys, model selection, token budgets, workspace path. Everything stays local.
-![Settings](./docs/assets/settings.png)
-
-<details>
-<summary><strong>Why this is not ChatGPT, NotebookLM, or Obsidian</strong></summary>
-
-| Tool | What it does well | Where Jarvis differs |
-|---|---|---|
-| **ChatGPT** | Great general AI assistant | Jarvis writes outputs back into structured, local memory |
-| **NotebookLM** | Source-grounded research | Jarvis turns sources into a living memory + graph + specialist system |
-| **Obsidian** | Local note-taking and vault management | Jarvis adds retrieval, reasoning, specialists, graph-aware context, and write-back |
-
-**Jarvis is the layer that turns information into working memory.**
-
-</details>
-
----
-
-## Quick start
-
-### 1. One command — everything handled
-
-Requirements: **Node.js 20+** and **Python 3.12 or 3.13**.
-Don't have them? Jump to [zero-prereq bootstrap](#zero-prereq-bootstrap).
-
-```bash
-git clone https://github.com/jakubsuplicki/deepbind.git
-cd Jarvis
-npm run wake-up-jarvis
-```
-
-That single command runs preflight checks, installs backend + frontend dependencies, builds the production bundle, and starts both servers.
-
-Then open **http://localhost:3000**. On first run, Jarvis walks you through a short onboarding and **creates your `~/Jarvis/` workspace** (memory, graph, sessions, config) at the location you pick. You land in a browser UI where you can pick local or cloud models and start importing memory immediately.
-
-From there, drag files, paste URLs, or add YouTube links **directly from the UI** — everything ingested lands in your local Markdown memory and goes straight into retrieval.
-
-> Aliases: `npm run wake`, `npm start`. Stop with **Ctrl+C**.
-
-### 2. Choose how to run it
-
-#### Local mode — no API key
-
-1. Install [Ollama](https://ollama.com) and start it
-2. Open Settings in Jarvis → go to Local Models
-3. Pick a model preset and click Pull to download it
-4. Select the model as active and start chatting
-
-No API key needed. Everything runs on your machine.
-
-#### Cloud mode
-
-1. Get an API key from [Anthropic](https://console.anthropic.com), [OpenAI](https://platform.openai.com/api-keys), or [Google AI](https://aistudio.google.com/apikey)
-2. Open Settings in Jarvis → paste your API key
-3. Select your preferred model and start chatting
-
-Both options are first-class. You can switch between them anytime.
-
-### 3. (Optional) Connect Jarvis to Claude Desktop, Cursor, or VS Code
-
-Jarvis exposes a local **MCP server** so external AI tools can read from and write to your workspace memory. External clients can search your memory, read notes, create new notes, and reuse graph-linked context without leaving their own interface.
-
-1. Open **Settings → MCP** in Jarvis
-2. Enable the MCP server
-3. Copy the generated JSON snippet for your client:
-   - **Claude Desktop** → `claude_desktop_config.json`
-   - **Cursor** → `~/.cursor/mcp.json`
-   - **VS Code Copilot** → `.vscode/mcp.json`
-   - **Continue** → `~/.continue/config.json`
-4. Restart the client
-
-Jarvis tools for memory search, note read/write, graph access, and sessions will then be available inside that client.
-
-Full docs and client-specific examples: [`docs/features/mcp-server/`](./docs/features/mcp-server/).
-
-<details>
-<summary><strong>Zero-prereq bootstrap</strong></summary>
-
-Recommended if you don't have Node.js or Python installed.
-
-**macOS / Linux:**
-```bash
-bash ./bootstrap/install.sh
-```
-
-**Windows (PowerShell):**
-```powershell
-powershell -ExecutionPolicy Bypass -File .\bootstrap\install.ps1
-```
-
-Scripts ask for confirmation before downloading local runtimes, then run the same `wake-up-jarvis` flow.
-
-</details>
-
-<details>
-<summary><strong>Already installed? Just run it</strong></summary>
-
-```bash
-npm run serve
-```
-
-Starts both servers without reinstalling. Dev mode with HMR:
-
-```bash
-npm run dev
-```
-
-</details>
-
-<details>
-<summary><strong>All commands</strong></summary>
-
-```bash
-# Preflight
-npm run preflight          # check versions, no side effects
-
-# Install
-npm run install:all        # backend + frontend
-npm run install:backend    # backend only
-npm run install:frontend   # frontend only
-
-# Production
-npm run wake-up-jarvis     # preflight + install + build + serve
-npm run wake               # alias
-npm start                  # alias
-npm run build              # nuxt build → frontend/.output
-npm run serve              # serve both servers
-npm run serve:backend      # backend only (uvicorn)
-npm run serve:frontend     # frontend only
-
-# Development
-npm run dev                # HMR frontend + auto-reload backend
-npm run dev:backend        # uvicorn --reload
-npm run dev:frontend       # nuxt dev
-
-# Reset workspace  (~/Jarvis/ data only — source code is never touched)
-npm run reset:all          # delete everything — asks "yes" in terminal to confirm
-npm run reset:db           # delete jarvis.db (SQLite index)
-npm run reset:memory       # delete memory/ folder (all Markdown notes)
-npm run reset:sessions     # delete app/sessions/ (chat history)
-npm run reset:graph        # delete graph/ folder (knowledge graph)
-npm run reset:agents       # delete agents/ folder (specialist definitions)
-npm run reset:cache        # delete app/cache/ (retrieval cache)
-```
-
-</details>
-
-<details>
-<summary><strong>Troubleshooting</strong></summary>
-
-#### Any platform
-- **Port 8000 or 3000 in use** — find and stop the other process (`lsof -i :8000` on macOS/Linux)
-- **Broken venv** — delete `backend/.venv` and re-run `npm run wake-up-jarvis`
-
-#### Windows
-- **Install looks stuck during venv creation** — antivirus scanning. Give it 2–5 minutes. Don't Ctrl+C.
-- **Too slow?** Add Windows Defender exclusion for `backend\.venv`
-- **Scripts disabled** — use `powershell -ExecutionPolicy Bypass -File \.\bootstrap\install.ps1`
-
-#### macOS
-- **"xcrun: error"** — run `xcode-select --install`
-- **Python 3.14+** — not yet supported. Use 3.12 or 3.13.
-
-</details>
+## What It Does
+
+DeepFilesAI helps you:
+
+- import notes, files, PDFs, URLs, YouTube transcripts, and Jira exports into local memory
+- search memory with BM25 keyword search, embeddings, reranking, and graph expansion
+- split long documents into sections so retrieval can cite the right part
+- build and inspect a local knowledge graph
+- save useful chat outputs back into Markdown notes, plans, summaries, and sessions
+- create specialists with their own rules and knowledge
+- expose the same local memory to MCP clients such as Claude Desktop, Cursor, VS Code Copilot, and Continue
+
+The product is not trying to be a generic chatbot. It is a local knowledge system whose value compounds as memory improves.
 
 ---
 
 ## Architecture
 
-### Source of truth doctrine
-
-- `Jarvis/memory/` Markdown files = canonical
-- SQLite = operational index/cache (rebuildable)
-- Graph = derived relationship layer (rebuildable)
-- Embeddings = derived semantic layer (rebuildable)
-
-If you delete everything except `memory/`, the system rebuilds itself.
-
-### User workspace (created on first run)
-
-When you create a workspace in the app, Jarvis generates this structure at your chosen location (default: `~/Jarvis/`).
-This is **not** the source code — it's your personal data directory.
-
-```
-~/Jarvis/
-├── app/
-│   ├── config.json        # metadata + flags
-│   ├── sessions/          # chat session history (JSON)
-│   ├── cache/             # retrieval cache
-│   ├── logs/              # token usage logs
-│   ├── audio/             # voice recordings
-│   └── jarvis.db          # SQLite operational DB
-├── memory/
-│   ├── inbox/             # quick captures
-│   ├── daily/             # daily notes
-│   ├── projects/          # project notes
-│   ├── people/            # people notes
-│   ├── areas/             # life areas
-│   ├── plans/             # plans & checklists
-│   ├── summaries/         # AI-generated summaries
-│   ├── knowledge/         # imported sources
-│   ├── preferences/       # user rules
-│   ├── examples/          # good output examples
-│   ├── conversations/     # saved chat sessions (auto-created)
-│   └── attachments/       # files, PDFs
-├── graph/
-│   └── graph.json         # knowledge graph data
-└── agents/                # specialist definitions (JSON)
+```text
+DeepFilesAI.app
+├─ Tauri shell (Rust)
+│  ├─ starts the Nuxt webview immediately
+│  ├─ spawns bundled Ollama on a private localhost port
+│  ├─ spawns the frozen FastAPI sidecar
+│  └─ supervises child process shutdown
+│
+├─ Nuxt 4 / Vue frontend
+│  ├─ chat
+│  ├─ memory browser
+│  ├─ graph view
+│  ├─ specialists
+│  └─ settings
+│
+├─ FastAPI sidecar (Python, PyInstaller)
+│  ├─ retrieval and context building
+│  ├─ Ollama dispatch
+│  ├─ ingest and parsing
+│  ├─ graph/index maintenance
+│  ├─ MCP server entrypoint
+│  └─ local file I/O
+│
+└─ Local workspace
+   ├─ memory/*.md      canonical user knowledge
+   ├─ app/jarvis.db    rebuildable SQLite index/cache
+   ├─ graph/graph.json rebuildable graph
+   └─ agents/*.json    specialists
 ```
 
-### Reset / wipe data
+### Why This Shape
 
-All reset commands operate only on `~/Jarvis/` (or `JARVIS_WORKSPACE_PATH`). Source code is never touched.
+The product is designed for compliance-sensitive knowledge work where "trust us, the cloud path is disabled" is not a good enough answer. The local-only claim is structural: the v1 app does not ship cloud LLM SDKs or provider routes.
+
+The source-of-truth rule is equally important: Markdown is canonical. SQLite, embeddings, and graph files are acceleration layers that can be rebuilt.
+
+---
+
+## Retrieval Before Reasoning
+
+DeepFilesAI does not throw the whole workspace into the model. It searches locally first, compresses the result, then sends a smaller context to the local model.
+
+```mermaid
+flowchart LR
+    Q[User question] --> BM25[BM25 keyword]
+    Q --> SEM[Semantic search]
+    Q --> GRAPH[Graph expansion]
+    BM25 --> RANK[Hybrid rank]
+    SEM --> RANK
+    GRAPH --> RANK
+    RANK --> TRACE[Retrieval trace]
+    RANK --> COMP[Context compression]
+    COMP --> MODEL[Local Ollama model]
+    MODEL --> OUT[Answer]
+    OUT --> WRITE[Optional write-back]
+    WRITE --> MD[Markdown memory]
+    MD --> INDEX[SQLite + embeddings + graph rebuild]
+```
+
+This design keeps the model focused, reduces context bloat, and makes answers inspectable through retrieval traces.
+
+---
+
+## Local Models
+
+DeepFilesAI uses Ollama for chat models. The desktop app bundles the Ollama runtime and runs it on a private localhost port so it does not depend on a user-installed Ollama service.
+
+The catalog is hardware-aware. Smaller machines start with lighter Qwen3 models; stronger machines can pull larger Qwen3 / Granite / gpt-oss entries where supported.
+
+The first-run flow pulls a recommended model, probes whether it behaves correctly for chat/tool use, then keeps a fallback model available for memory-pressure downgrade.
+
+See [Local Models](./docs/features/local-models.md) and [ADR 005](./docs/architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md).
+
+---
+
+## Key Features
+
+### Local Markdown Memory
+
+The workspace is an Obsidian-compatible Markdown vault. User knowledge lives in readable files, not a proprietary database.
+
+### Hybrid Retrieval
+
+Retrieval combines keyword search, local embeddings, reranking, graph neighbours, section classification, and context compression.
+
+### Knowledge Graph
+
+Notes, documents, sections, entities, Jira issues, sources, and relationships form a local graph used for retrieval and visualization.
+
+### Smart Connect
+
+New notes can be linked to related notes using cheap local signals. Suggested edges can be reviewed, promoted, dismissed, and audited with score breakdowns.
+
+### Document Intelligence
+
+Large PDFs and long documents are split into section notes, classified, indexed, and grouped so retrieval can target the relevant section instead of treating the document as one giant blob.
+
+### Specialists
+
+Specialists are reusable local roles with their own instructions and knowledge boundaries. They sit on top of the same local retrieval and memory system.
+
+### MCP Server
+
+DeepFilesAI includes a local stdio MCP server so external AI tools can use the same memory backend. See [MCP Server Tools](./docs/features/mcp-server/tools.md).
+
+### Offline Licensing
+
+Commercial activation uses signed `.deepfileslic` files verified locally. No vendor admin portal is required for v1.
+
+---
+
+## What Is Not In V1
+
+- No Anthropic/OpenAI/Google provider selection
+- No cloud API-key storage
+- No web-search fallback
+- No hosted sync or shared team server
+- No cloud telemetry
+- No mobile app
+- No multi-user shared knowledge mesh
+
+Some of these are discussed in research or future-version docs. They are not part of the v1 product shape.
+
+---
+
+## Developer Quick Start
+
+Requirements:
+
+- Node.js 20+
+- npm 9+
+- Python 3.12 or 3.13
+
+The repo also supports a local standalone Python runtime downloaded by the install scripts.
 
 ```bash
-npm run reset:all       # wipe everything — requires typing "yes" to confirm
-npm run reset:db        # database only  (rebuilds on next ingest)
-npm run reset:memory    # all Markdown notes
-npm run reset:sessions  # chat history
-npm run reset:graph     # knowledge graph
-npm run reset:agents    # specialist definitions
-npm run reset:cache     # retrieval cache
+npm run preflight
+npm run wake-up-jarvis
 ```
 
-After `reset:all`, open **http://localhost:3000** and go through onboarding to create a fresh workspace.
+Then open:
 
-### Retrieval pipeline
+```text
+http://localhost:3000
+```
 
-Full diagram in [Retrieval before reasoning](#retrieval-before-reasoning--the-real-moat) above. In short: BM25 + semantic + graph run locally, hybrid-rank, compress, and only then hit the model.
+Useful aliases:
 
----
+```bash
+npm run wake
+npm start
+```
 
-## Design principles
+Stop the dev/browser process with `Ctrl+C`.
 
-- Local-first — all data on your machine
-- Memory belongs to the user — Markdown, not a proprietary layer
-- Derived layers (SQLite, graph, embeddings) must be rebuildable
-- Retrieval gets smarter before prompts get bigger
-- Useful outputs write back into the system
-- Every interaction should make the next one better
+### Development
 
----
+```bash
+npm run dev
+npm run dev:backend
+npm run dev:frontend
+```
 
-## Who this is for
+### Tests
 
-Founders. Researchers. Builders. Students. Knowledge workers.
-Anyone who thinks in notes and wants continuity, not just output.
+```bash
+cd backend
+pytest
 
-> *"I don't need another answer. I need a system that helps me stop losing context."*
+cd ../frontend
+npm test
+```
 
-**Who Jarvis is not for:** if you only want a generic chatbot with no durable memory, this is probably more system than you need. Jarvis is built for people who already work with notes, documents, and recurring context — and want that context to compound over time.
+### Workspace Reset
 
----
+These commands operate on the user workspace, not the source tree.
 
-## Contributing
-
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-Strong areas: retrieval quality, graph UX, specialist templates, ingest pipelines, local model support, Obsidian workflows, onboarding polish.
-
-Open an issue or send a PR.
-
----
-
-## Contributors
-
-<table>
-  <tr>
-    <td align="center"><a href="https://github.com/Szesnasty"><img src="https://github.com/Szesnasty.png" width="80" style="border-radius:50%;" /><br /><b>Łukasz Jakubowski</b></a></td>
-    <td align="center"><a href="https://github.com/jakubsuplicki"><img src="https://github.com/jakubsuplicki.png" width="80" style="border-radius:50%;" /><br /><b>Jakub Suplicki</b></a></td>
-  </tr>
-</table>
+```bash
+npm run reset:all
+npm run reset:db
+npm run reset:memory
+npm run reset:sessions
+npm run reset:graph
+npm run reset:agents
+npm run reset:cache
+```
 
 ---
 
-## Security
+## Desktop Release Build
 
-Found a vulnerability? See [SECURITY.md](SECURITY.md) for responsible disclosure guidelines. Do not open a public issue.
+The macOS release path produces a signed, notarized, stapled `DeepFilesAI.app` and `.dmg` for Apple Silicon.
+
+Start here:
+
+- [macOS release build runbook](./docs/runbooks/release-build-macos.md)
+- [G4b6 cold-launch verification](./docs/runbooks/g4b6-cold-launch-verification.md)
+
+The release build verifies that cloud SDKs do not leak into the bundle and that the Info.plist capabilities match the local-only contract.
+
+---
+
+## User Workspace
+
+Default path:
+
+```text
+~/Jarvis/
+```
+
+Structure:
+
+```text
+~/Jarvis/
+├── app/
+│   ├── config.json
+│   ├── sessions/
+│   ├── cache/
+│   ├── logs/
+│   └── jarvis.db
+├── memory/
+│   ├── inbox/
+│   ├── daily/
+│   ├── projects/
+│   ├── people/
+│   ├── areas/
+│   ├── plans/
+│   ├── summaries/
+│   ├── knowledge/
+│   ├── preferences/
+│   ├── examples/
+│   ├── conversations/
+│   └── attachments/
+├── graph/
+│   └── graph.json
+└── agents/
+```
+
+If `memory/` survives, the operational layers can be rebuilt.
+
+---
+
+## Repository Structure
+
+```text
+deepbind/
+├── backend/      FastAPI sidecar, retrieval, ingest, graph, MCP, tests
+├── frontend/     Nuxt 4 / Vue UI and frontend tests
+├── desktop/      Tauri shell, sidecar build, release scripts
+├── bootstrap/    local setup helpers
+├── scripts/      root Node launchers
+├── docs/         ADRs, feature docs, runbooks, research
+└── samples/      developer-only fixtures
+```
 
 ---
 
 ## License
 
-DeepFilesAI is **proprietary commercial software** owned by Zen Zero Pty Ltd. See [`LICENSE`](LICENSE) for full terms.
+DeepFilesAI is proprietary commercial software owned by Zen Zero Pty Ltd. See [LICENSE](./LICENSE).
 
-The repository is private. Source access is granted to employees and authorised contractors solely for the purpose of developing and maintaining the Software, and does not transfer any rights to redistribute or commercialise the source.
-
-End customers receive the right to *use* the compiled application via a signed `.deepfileslic` license file under the terms of the MSA / EULA. No source-code rights are conveyed.
-
-Bundled third-party open-source components retain their original licenses (Apache-2.0 / MIT / BSD / etc.) — see [`docs/THIRD-PARTY-NOTICES.md`](docs/THIRD-PARTY-NOTICES.md). Those licenses govern the bundled components only and do not apply to DeepFilesAI itself.
-
----
-
-## Code of Conduct
-
-This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code.
-
----
-
-## Repository structure
-
-```
-jarvis/
-├── backend/            # FastAPI + SQLite + LiteLLM
-│   ├── models/         # Pydantic schemas, DB setup
-│   ├── routers/        # API endpoints (chat, memory, graph, specialists…)
-│   ├── services/       # Core logic (retrieval, graph, embeddings, ingest…)
-│   ├── mcp_server/     # Built-in MCP server (stdio)
-│   ├── tests/          # pytest suite
-│   └── utils/          # Markdown parsing helpers
-├── frontend/           # Nuxt 4 + Vue 3 + TypeScript
-│   ├── app/
-│   │   ├── components/ # UI components
-│   │   ├── composables/# State & logic (chat, graph, voice…)
-│   │   └── pages/      # main, memory, graph, specialists, settings…
-│   └── tests/          # vitest suite
-├── bootstrap/          # Zero-prereq installers (local runtime download)
-├── scripts/            # Cross-platform Node launchers
-└── docs/               # Project documentation
-```
-
-
+Bundled third-party components retain their own licenses. See [Third-Party Notices](./docs/THIRD-PARTY-NOTICES.md).
