@@ -128,6 +128,9 @@ def _outcome_from_row(row: aiosqlite.Row) -> SourceImportFileOutcome:
     )
 
 
+_ACTIVE_STATES = ("queued", "importing", "cancelling", "removing")
+
+
 async def create_batch_manifest(
     *,
     batch_id: str,
@@ -314,16 +317,155 @@ async def update_batch_state(
         await db.execute(
             """
             UPDATE source_import_batches
-            SET state = ?,
+            SET state = CASE
+                    WHEN state = 'cancelling' AND ? = 'importing' THEN state
+                    ELSE ?
+                END,
                 current_file = ?,
                 created_note_count = created_note_count + ?,
                 updated_at = ?,
-                finished_at = COALESCE(?, finished_at)
+                finished_at = CASE WHEN ? THEN ? ELSE finished_at END
             WHERE batch_id = ?
             """,
-            (state, current_file, created_note_delta, now, finished_at, batch_id),
+            (
+                state,
+                state,
+                current_file,
+                created_note_delta,
+                now,
+                1 if finished else 0,
+                finished_at,
+                batch_id,
+            ),
         )
         await db.commit()
+
+
+async def is_batch_cancellation_requested(
+    batch_id: str,
+    *,
+    workspace_path: Optional[Path] = None,
+) -> bool:
+    db_path = await _ensure_db(workspace_path)
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute(
+            "SELECT state FROM source_import_batches WHERE batch_id = ?",
+            (batch_id,),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        raise KeyError("Import batch not found")
+    return str(row[0]) in {"cancelling", "cancelled"}
+
+
+async def request_batch_cancel(
+    batch_id: str,
+    *,
+    workspace_path: Optional[Path] = None,
+) -> str:
+    db_path = await _ensure_db(workspace_path)
+    now = _now_iso()
+    async with aiosqlite.connect(str(db_path)) as db:
+        cursor = await db.execute(
+            "SELECT state FROM source_import_batches WHERE batch_id = ?",
+            (batch_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("Import batch not found")
+        state = str(row[0])
+        if state in {"queued", "importing"}:
+            await db.execute(
+                """
+                UPDATE source_import_batches
+                SET state = 'cancelling',
+                    updated_at = ?
+                WHERE batch_id = ?
+                """,
+                (now, batch_id),
+            )
+            await db.commit()
+            return "cancelling"
+        return state
+
+
+async def mark_unprocessed_files_cancelled(
+    batch_id: str,
+    *,
+    reason: str = "cancelled_by_user",
+    workspace_path: Optional[Path] = None,
+) -> None:
+    db_path = await _ensure_db(workspace_path)
+    now = _now_iso()
+    async with aiosqlite.connect(str(db_path)) as db:
+        await db.execute(
+            """
+            UPDATE source_import_files
+            SET status = 'skipped',
+                stage = 'cancelled',
+                reason = ?,
+                updated_at = ?
+            WHERE batch_id = ?
+              AND status IN ('queued', 'importing')
+            """,
+            (reason, now, batch_id),
+        )
+        await db.commit()
+
+
+async def mark_interrupted_batches(
+    *,
+    workspace_path: Optional[Path] = None,
+) -> int:
+    """Mark active manifests from a previous process as interrupted.
+
+    Folder imports are background tasks. If the sidecar exits while a task is
+    queued/importing/cancelling/removing, there is no safe worker to resume
+    implicitly on the next launch. We expose the partial batch as interrupted
+    so the user can remove it or explicitly re-import later.
+    """
+    db_path = await _ensure_db(workspace_path)
+    now = _now_iso()
+    async with aiosqlite.connect(str(db_path)) as db:
+        active_placeholders = ",".join("?" for _ in _ACTIVE_STATES)
+        cursor = await db.execute(
+            f"""
+            SELECT batch_id FROM source_import_batches
+            WHERE state IN ({active_placeholders})
+            """,
+            list(_ACTIVE_STATES),
+        )
+        rows = await cursor.fetchall()
+        batch_ids = [str(row[0]) for row in rows]
+        if not batch_ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in batch_ids)
+        await db.execute(
+            f"""
+            UPDATE source_import_files
+            SET status = 'failed',
+                stage = 'interrupted',
+                reason = 'app_closed_during_import',
+                updated_at = ?
+            WHERE batch_id IN ({placeholders})
+              AND status = 'importing'
+            """,
+            [now, *batch_ids],
+        )
+        await db.execute(
+            f"""
+            UPDATE source_import_batches
+            SET state = 'interrupted',
+                current_file = NULL,
+                updated_at = ?,
+                finished_at = COALESCE(finished_at, ?)
+            WHERE batch_id IN ({placeholders})
+            """,
+            [now, now, *batch_ids],
+        )
+        await db.commit()
+    return len(batch_ids)
 
 
 async def update_file_status(

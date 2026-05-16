@@ -9,7 +9,9 @@ sources:
   - backend/services/ingest.py
   - backend/services/structured_ingest.py
   - backend/services/source_import/extractors.py
+  - backend/services/source_import/cancellation.py
   - backend/services/source_import/manifest.py
+  - backend/services/source_import/removal.py
   - backend/services/source_import/worker.py
   - backend/services/url_ingest.py
   - backend/services/embedding_service.py
@@ -87,6 +89,10 @@ For `.csv` and `.xml` files, `fast_ingest` delegates to `structured_ingest.inges
 For business document files, `source_import.extractors` converts the approved upload into Markdown before indexing. DOCX/XLSX/PPTX use conservative standard-library ZIP/XML parsing so the desktop bundle does not gain new parser dependencies in this slice. HTML uses the existing `trafilatura` + `markdownify` stack, RTF uses a best-effort control-word stripper, EML uses Python's standard `email` package, and ZIP creates a safe archive inventory note rather than extracting child files.
 
 When `fast_ingest` is called by Folder Source Import, it receives a safe `source_label` and extra frontmatter such as `source_kind`, `source_relpath`, `source_filename`, `source_size`, and `import_batch_id`. That keeps generated Markdown source-relative even though the operational manifest keeps the absolute source root for local lifecycle work. The same provenance path is passed through `structured_ingest.ingest_structured_file` so CSV/XML folder imports do not write absolute local paths into user-facing notes.
+
+Folder import cancellation and interruption are tracked in the manifest, not in Markdown. Active imports move through `cancelling` before the worker finishes the current file, skips queued files, and marks the batch `cancelled`; if the app restarts with an active batch still in the manifest, startup marks it `interrupted`. Completed notes from cancelled or interrupted batches remain normal Markdown memory until the user removes that import.
+
+Folder import removal uses the manifest's generated note paths instead of folder-wide deletion. `source_import.removal` calls the same soft-delete path used by manual note deletion, so imported Markdown moves to `.trash/`, then it clears derived rows for those paths and schedules a graph rebuild. The manifest remains as local operational audit metadata; unrelated notes in the same destination folder are left alone.
 
 The file is received by the router as a multipart upload, written to a temporary file, passed to `fast_ingest`, and the temporary file is always deleted in a `finally` block regardless of outcome.
 
@@ -178,7 +184,7 @@ The memory page is a two-panel layout: a sidebar with `NoteList` for browsing/se
 
 `NoteList` derives the folder list from the current notes array in the parent component — it does not fetch folders independently. Clicking an already-active folder deactivates it (toggles off), returning to the unfiltered view.
 
-`ImportDialog` uses a drag-and-drop zone backed by a hidden `<input type="file">` and submits file imports via `multipart/form-data` using Nuxt's `$fetch`. It also has an in-progress Folder mode for [Folder Source Import](folder-source-import.md): the desktop shell grants a selected folder to `/api/source-import/scan`, the dialog shows a metadata-only inventory plus review exclusions, and the approved selection can start a local import batch with progress/completion counts. `LinkIngestDialog` uses `v-model` for open/close state and performs client-side URL type detection with the same regex patterns used on the backend, giving the user immediate visual feedback before submitting.
+`ImportDialog` uses a drag-and-drop zone backed by a hidden `<input type="file">` and submits file imports via `multipart/form-data` using Nuxt's `$fetch`. It also has an in-progress Folder mode for [Folder Source Import](folder-source-import.md): the desktop shell grants a selected folder to `/api/source-import/scan`, the dialog shows a metadata-only inventory plus review exclusions, the approved selection can start a local import batch with progress/completion counts, and a completed import can be removed from the completion surface. `LinkIngestDialog` uses `v-model` for open/close state and performs client-side URL type detection with the same regex patterns used on the backend, giving the user immediate visual feedback before submitting.
 
 `SuggestionsPanel` renders Smart Connect output above the note body. It reads `suggested_related` and `aliases_matched` directly from the note's frontmatter (so it stays in sync with what the backend actually wrote), colour-codes each item by tier (strong / normal / weak), and exposes three actions per suggestion: open the linked note, **Keep** (calls `POST /api/connections/promote` → moves the path into `related:`), and **Dismiss** (calls `POST /api/connections/dismiss` → records the pair so it never returns). A header-level **Re-run** button calls `POST /api/connections/run/{path}?mode=fast` to recompute suggestions on demand. After every action `NoteViewer` emits `changed`; the page reloads the note and refreshes the orphan count. The memory page sidebar shows a small banner with the current semantic-orphan count and a Review button that opens the first orphan.
 
@@ -220,8 +226,10 @@ When a large document (e.g. a PDF) is ingested it is split into many section not
 - `backend/services/dismissed_suggestions.py` — Smart Connect dismissal store: SQLite table `dismissed_suggestions(note_path, target_path, dismissed_at)` with `dismiss()`, `undismiss()`, `list_dismissed_for()`, `list_all()`, `remove_note()`
 - `backend/routers/connections.py` — Smart Connect HTTP surface: `GET /api/connections/orphans`, `POST /api/connections/run/{path}` (mode=fast|aggressive), `POST /api/connections/dismiss`, `POST /api/connections/promote`
 - `backend/services/structured_ingest.py` — CSV/XML ingest with Jira export detection; groups issues by epic/project, creates overview + detail notes with wiki-linked people for graph integration; accepts folder-import provenance from `fast_ingest`
+- `backend/services/source_import/cancellation.py` — Folder import cancellation lifecycle; requests cancellation for active batches while preserving already-created Markdown
 - `backend/services/source_import/manifest.py` — SQLite operational manifest for approved folder imports, including batch/file status and generated note paths
-- `backend/services/source_import/worker.py` — Folder import worker that reads approved files, hashes after approval, writes via `fast_ingest`, and updates batch progress
+- `backend/services/source_import/removal.py` — Folder import removal lifecycle; archives only manifest-created notes and clears note-scoped derived rows before graph refresh
+- `backend/services/source_import/worker.py` — Folder import worker that reads approved files, hashes after approval, writes via `fast_ingest`, honors cancellation between files, and updates batch progress
 - `backend/services/url_ingest.py` — URL ingest for YouTube videos (transcript + oEmbed metadata) and general web articles (trafilatura + markdownify); short-circuits when the privacy kill-switch blocks URL ingest.
 - `backend/services/ingest_jobs.py` — Process-local, thread-safe ingest job tracker. Powers the global "Ingesting…" status badge. Includes `schedule_graph_rebuild()` for the one-at-a-time background graph rebuild after each file ingest.
 - `frontend/app/composables/useIngestStatus.ts` — Singleton composable that polls `/api/memory/ingest/status` every 5 s, merges server-tracked jobs with client-side upload progress, and ref-counts subscribers so the timer only runs while at least one component is mounted.
@@ -231,8 +239,8 @@ When a large document (e.g. a PDF) is ingested it is split into many section not
 - `frontend/app/components/NoteList.vue` — Sidebar list with FTS search input, folder filter pills, and per-note delete with confirmation
 - `frontend/app/components/NoteViewer.vue` — Right-panel note reader; renders Markdown via `marked` + `DOMPurify` after stripping frontmatter; embeds `SuggestionsPanel` above the body
 - `frontend/app/components/SuggestionsPanel.vue` — Smart Connect review UI: lists `suggested_related` with confidence + methods, per-item Keep / Dismiss buttons (promote → `related`, dismiss → `dismissed_suggestions`), and a header-level Re-run button
-- `frontend/app/composables/useSourceImport.ts` — Frontend API wrapper for trusted folder selection, scan, review selection, import start, and import status polling
-- `frontend/app/components/ImportDialog.vue` — Drag-and-drop file upload modal; submits to `/api/memory/ingest` as multipart and hosts the in-progress folder scan/review/import-progress mode
+- `frontend/app/composables/useSourceImport.ts` — Frontend API wrapper for trusted folder selection, scan, review selection, import start, import status polling, cancellation, and import removal
+- `frontend/app/components/ImportDialog.vue` — Drag-and-drop file upload modal; submits to `/api/memory/ingest` as multipart and hosts the in-progress folder scan/review/import-progress/cancel/removal mode
 - `frontend/app/components/LinkIngestDialog.vue` — URL import modal with client-side YouTube/article detection, folder selection, and optional AI summary toggle
 
 ## API / Interface

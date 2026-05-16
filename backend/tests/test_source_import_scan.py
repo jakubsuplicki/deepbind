@@ -3,11 +3,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import aiosqlite
 import pytest
 
 from config import get_settings
 from models.database import init_database
 from services.source_import.grants import clear_grants_for_tests
+from services.source_import.manifest import mark_interrupted_batches
 from services.source_import.store import clear_scans_for_tests
 from utils.markdown import parse_frontmatter
 
@@ -327,3 +329,386 @@ async def test_start_import_processes_approved_files_with_safe_provenance(
     assert fm["import_batch_id"] == batch_id
     assert str(source) not in content
     assert not list((workspace / "memory" / "imports").glob("**/exclude.md"))
+
+
+@pytest.mark.anyio
+async def test_cancel_import_stops_queued_files_after_current_file(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    await init_database(workspace / "app" / "jarvis.db")
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+
+    first_ingest_started = asyncio.Event()
+    release_first_ingest = asyncio.Event()
+    ingest_calls = 0
+
+    async def _fake_fast_ingest(
+        _path,
+        *,
+        target_folder,
+        workspace_path=None,
+        original_name=None,
+        **_kwargs,
+    ):
+        nonlocal ingest_calls
+        ingest_calls += 1
+        if ingest_calls == 1:
+            first_ingest_started.set()
+            await release_first_ingest.wait()
+        name = Path(original_name or "imported.md").stem
+        return {"path": f"{target_folder}/{name}.md", "total_notes": 1}
+
+    monkeypatch.setattr("services.source_import.worker.fast_ingest", _fake_fast_ingest)
+
+    source = tmp_path / "Client A"
+    source.mkdir()
+    for idx in range(3):
+        (source / f"note-{idx}.md").write_text(f"# Note {idx}", encoding="utf-8")
+
+    token = await _grant(client, source)
+    scan = await client.post("/api/source-import/scan", json={"source_token": token})
+    assert scan.status_code == 200
+    selection = await client.post(
+        f"/api/source-import/scans/{scan.json()['scan_id']}/selection",
+        json={},
+    )
+    assert selection.status_code == 200
+
+    started = await client.post(
+        f"/api/source-import/scans/{scan.json()['scan_id']}/start",
+        json={"selection_id": selection.json()["selection_id"]},
+    )
+    assert started.status_code == 200
+    batch_id = started.json()["batch_id"]
+
+    await asyncio.wait_for(first_ingest_started.wait(), timeout=2)
+    cancelled = await client.post(f"/api/source-import/imports/{batch_id}/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["state"] == "cancelling"
+
+    release_first_ingest.set()
+    finished = await _wait_for_import(client, batch_id)
+
+    assert finished["state"] == "cancelled"
+    assert finished["imported_file_count"] == 1
+    assert finished["skipped_file_count"] == 2
+    assert ingest_calls == 1
+    skipped_reasons = {
+        item["reason"]
+        for item in finished["files"]
+        if item["status"] == "skipped"
+    }
+    assert skipped_reasons == {"cancelled_by_user"}
+
+
+@pytest.mark.anyio
+async def test_remove_import_archives_only_batch_notes_and_cleans_derived_rows(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    db_path = workspace / "app" / "jarvis.db"
+    await init_database(db_path)
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+
+    async def _fake_connect(*_args, **_kwargs):
+        return SimpleNamespace(model_dump=lambda: {})
+
+    monkeypatch.setattr("services.connection_service.connect_note", _fake_connect)
+    monkeypatch.setattr("services.ingest_jobs.schedule_graph_rebuild", lambda **_kwargs: None)
+
+    source = tmp_path / "Client A"
+    source.mkdir()
+    (source / "keep.md").write_text("# Keep\n\nBatch note", encoding="utf-8")
+
+    token = await _grant(client, source)
+    scan = await client.post("/api/source-import/scan", json={"source_token": token})
+    assert scan.status_code == 200
+    scan_body = scan.json()
+
+    selection = await client.post(
+        f"/api/source-import/scans/{scan_body['scan_id']}/selection",
+        json={},
+    )
+    assert selection.status_code == 200
+
+    started = await client.post(
+        f"/api/source-import/scans/{scan_body['scan_id']}/start",
+        json={"selection_id": selection.json()["selection_id"]},
+    )
+    assert started.status_code == 200
+    batch_id = started.json()["batch_id"]
+
+    finished = await _wait_for_import(client, batch_id)
+    assert finished["state"] == "completed"
+    note_path = next(
+        path
+        for item in finished["files"]
+        for path in item["note_paths"]
+    )
+    imported_note = workspace / "memory" / note_path
+    assert imported_note.exists()
+
+    user_note = imported_note.parent / "user-added.md"
+    user_note.write_text("# User added\n\nKeep this", encoding="utf-8")
+
+    async with aiosqlite.connect(str(db_path)) as db:
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO node_embeddings(
+                node_id, node_type, label, embedding, content_hash,
+                model_name, dimensions, embedded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"note:{note_path}",
+                "note",
+                "Keep",
+                b"0",
+                "hash",
+                "test-model",
+                1,
+                "2026-05-16T00:00:00Z",
+            ),
+        )
+        await db.execute(
+            """
+            INSERT INTO enrichments(
+                subject_type, subject_id, content_hash, model_id,
+                prompt_version, status, payload, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "note",
+                note_path,
+                "hash",
+                "test-model",
+                1,
+                "ok",
+                "{}",
+                "2026-05-16T00:00:00Z",
+            ),
+        )
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO dismissed_suggestions(
+                note_path, target_path, dismissed_at
+            )
+            VALUES (?, ?, ?)
+            """,
+            (note_path, "knowledge/other.md", "2026-05-16T00:00:00Z"),
+        )
+        await db.commit()
+
+    removed = await client.post(
+        f"/api/source-import/imports/{batch_id}/remove",
+        json={"confirm_batch_id": batch_id},
+    )
+
+    assert removed.status_code == 200
+    removed_body = removed.json()
+    assert removed_body["state"] == "removed"
+    assert not imported_note.exists()
+    assert (workspace / ".trash" / note_path).exists()
+    assert user_note.exists()
+
+    async with aiosqlite.connect(str(db_path)) as db:
+        assert await _count_rows(db, "notes", "path", note_path) == 0
+        assert await _count_rows(db, "node_embeddings", "node_id", f"note:{note_path}") == 0
+        assert await _count_rows(db, "enrichments", "subject_id", note_path) == 0
+        cursor = await db.execute(
+            """
+            SELECT COUNT(1) FROM dismissed_suggestions
+            WHERE note_path = ? OR target_path = ?
+            """,
+            (note_path, note_path),
+        )
+        assert (await cursor.fetchone())[0] == 0
+
+    second = await client.post(
+        f"/api/source-import/imports/{batch_id}/remove",
+        json={"confirm_batch_id": batch_id},
+    )
+    assert second.status_code == 200
+    assert second.json()["state"] == "removed"
+
+
+@pytest.mark.anyio
+async def test_remove_import_failure_keeps_rows_for_unarchived_notes(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    db_path = workspace / "app" / "jarvis.db"
+    await init_database(db_path)
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+
+    async def _fake_connect(*_args, **_kwargs):
+        return SimpleNamespace(model_dump=lambda: {})
+
+    async def _fail_delete(*_args, **_kwargs):
+        raise RuntimeError("archive failed")
+
+    monkeypatch.setattr("services.connection_service.connect_note", _fake_connect)
+    monkeypatch.setattr("services.ingest_jobs.schedule_graph_rebuild", lambda **_kwargs: None)
+
+    source = tmp_path / "Client A"
+    source.mkdir()
+    (source / "keep.md").write_text("# Keep\n\nBatch note", encoding="utf-8")
+
+    token = await _grant(client, source)
+    scan = await client.post("/api/source-import/scan", json={"source_token": token})
+    assert scan.status_code == 200
+    selection = await client.post(
+        f"/api/source-import/scans/{scan.json()['scan_id']}/selection",
+        json={},
+    )
+    assert selection.status_code == 200
+    started = await client.post(
+        f"/api/source-import/scans/{scan.json()['scan_id']}/start",
+        json={"selection_id": selection.json()["selection_id"]},
+    )
+    assert started.status_code == 200
+    batch_id = started.json()["batch_id"]
+
+    finished = await _wait_for_import(client, batch_id)
+    assert finished["state"] == "completed"
+    note_path = next(path for item in finished["files"] for path in item["note_paths"])
+    imported_note = workspace / "memory" / note_path
+    assert imported_note.exists()
+
+    async with aiosqlite.connect(str(db_path)) as db:
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO node_embeddings(
+                node_id, node_type, label, embedding, content_hash,
+                model_name, dimensions, embedded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"note:{note_path}",
+                "note",
+                "Keep",
+                b"0",
+                "hash",
+                "test-model",
+                1,
+                "2026-05-16T00:00:00Z",
+            ),
+        )
+        await db.commit()
+
+    monkeypatch.setattr("services.source_import.removal.delete_note", _fail_delete)
+
+    removed = await client.post(
+        f"/api/source-import/imports/{batch_id}/remove",
+        json={"confirm_batch_id": batch_id},
+    )
+
+    assert removed.status_code == 409
+    assert imported_note.exists()
+    summary = await client.get(f"/api/source-import/imports/{batch_id}")
+    assert summary.status_code == 200
+    assert summary.json()["state"] == "completed"
+    async with aiosqlite.connect(str(db_path)) as db:
+        assert await _count_rows(db, "node_embeddings", "node_id", f"note:{note_path}") == 1
+
+
+@pytest.mark.anyio
+async def test_startup_recovery_marks_active_imports_interrupted(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    db_path = workspace / "app" / "jarvis.db"
+    await init_database(db_path)
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+
+    now = "2026-05-16T00:00:00Z"
+    async with aiosqlite.connect(str(db_path)) as db:
+        await db.execute(
+            """
+            INSERT INTO source_import_batches(
+                batch_id, scan_id, selection_id, source_kind, source_display_name,
+                source_root_path, destination_root, state, total_file_count,
+                total_bytes, created_note_count, current_file, started_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "import_active",
+                "scan_1",
+                "sel_1",
+                "local_folder",
+                "Client A",
+                str(tmp_path / "Client A"),
+                "imports/client-a",
+                "importing",
+                1,
+                10,
+                0,
+                "note.md",
+                now,
+                now,
+            ),
+        )
+        await db.execute(
+            """
+            INSERT INTO source_import_files(
+                batch_id, file_id, relpath, filename, extension, size,
+                modified_at, status, stage, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "import_active",
+                "file_1",
+                "note.md",
+                "note.md",
+                ".md",
+                10,
+                now,
+                "importing",
+                "reading",
+                now,
+            ),
+        )
+        await db.commit()
+
+    assert await mark_interrupted_batches(workspace_path=workspace) == 1
+
+    recovered = await client.get("/api/source-import/imports/import_active")
+    assert recovered.status_code == 200
+    body = recovered.json()
+    assert body["state"] == "interrupted"
+    assert body["current_file"] is None
+    assert body["finished_at"] is not None
+    assert body["files"][0]["status"] == "failed"
+    assert body["files"][0]["stage"] == "interrupted"
+    assert body["files"][0]["reason"] == "app_closed_during_import"
+
+
+async def _count_rows(db: aiosqlite.Connection, table: str, column: str, value: str) -> int:
+    cursor = await db.execute(
+        f"SELECT COUNT(1) FROM {table} WHERE {column} = ?",
+        (value,),
+    )
+    row = await cursor.fetchone()
+    return int(row[0])

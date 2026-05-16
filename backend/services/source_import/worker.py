@@ -12,6 +12,8 @@ from services.source_import.manifest import (
     create_batch_manifest,
     get_batch_runtime,
     get_batch_summary,
+    is_batch_cancellation_requested,
+    mark_unprocessed_files_cancelled,
     update_batch_state,
     update_file_status,
 )
@@ -152,6 +154,25 @@ async def run_import_batch(
 
         total = len(files)
         for index, item in enumerate(files, start=1):
+            if await is_batch_cancellation_requested(
+                batch_id,
+                workspace_path=workspace_path,
+            ):
+                await mark_unprocessed_files_cancelled(
+                    batch_id,
+                    workspace_path=workspace_path,
+                )
+                await update_batch_state(
+                    batch_id,
+                    "cancelled",
+                    current_file=None,
+                    finished=True,
+                    workspace_path=workspace_path,
+                )
+                if job_id:
+                    ingest_jobs.finish_job(job_id, error="Folder import cancelled")
+                return
+
             ingest_jobs.update_stage(job_id, f"reading {index}/{total}")
             await update_batch_state(
                 batch_id,
@@ -250,6 +271,25 @@ async def run_import_batch(
                     reason=str(exc),
                     workspace_path=workspace_path,
                 )
+
+        if await is_batch_cancellation_requested(
+            batch_id,
+            workspace_path=workspace_path,
+        ):
+            await mark_unprocessed_files_cancelled(
+                batch_id,
+                workspace_path=workspace_path,
+            )
+            await update_batch_state(
+                batch_id,
+                "cancelled",
+                current_file=None,
+                finished=True,
+                workspace_path=workspace_path,
+            )
+            if job_id:
+                ingest_jobs.finish_job(job_id, error="Folder import cancelled")
+            return
 
         summary = await get_batch_summary(batch_id, workspace_path=workspace_path)
         final_state = (

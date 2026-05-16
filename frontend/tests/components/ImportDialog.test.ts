@@ -4,9 +4,11 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import ImportDialog from '~/components/ImportDialog.vue'
 
 const sourceImportMocks = vi.hoisted(() => ({
+  cancelImport: vi.fn(),
   createSelection: vi.fn(),
   getImport: vi.fn(),
   pickFolderSource: vi.fn(),
+  removeImport: vi.fn(),
   scanSource: vi.fn(),
   startImport: vi.fn(),
 }))
@@ -17,9 +19,11 @@ vi.mock('~/composables/useSourceImport', () => ({
 
 describe('components/ImportDialog.vue', () => {
   beforeEach(() => {
+    sourceImportMocks.cancelImport.mockReset()
     sourceImportMocks.createSelection.mockReset()
     sourceImportMocks.getImport.mockReset()
     sourceImportMocks.pickFolderSource.mockReset()
+    sourceImportMocks.removeImport.mockReset()
     sourceImportMocks.scanSource.mockReset()
     sourceImportMocks.startImport.mockReset()
   })
@@ -273,6 +277,241 @@ describe('components/ImportDialog.vue', () => {
 
     expect(sourceImportMocks.startImport).toHaveBeenCalledWith('scan_123', 'sel_1')
     expect(wrapper.text()).toContain('Imported 1 files and created 1 notes')
+  })
+
+  it('folder mode can remove a completed import', async () => {
+    sourceImportMocks.pickFolderSource.mockResolvedValue({
+      source_token: 'source-token',
+      source_kind: 'local_folder',
+      display_name: 'Client A',
+      root_path: '/Users/me/Client A',
+      expires_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.scanSource.mockResolvedValue({
+      scan_id: 'scan_123',
+      source_kind: 'local_folder',
+      source_display_name: 'Client A',
+      source_root_path: '/Users/me/Client A',
+      proposed_destination_root: 'memory/imports/client-a/',
+      total_files_seen: 1,
+      total_size_seen: 20,
+      supported_file_count: 1,
+      unsupported_file_count: 0,
+      skipped_file_count: 0,
+      skipped_by_reason: {},
+      counts_by_extension: { '.md': 1 },
+      largest_files: [],
+      folder_summary: [],
+      files: [{
+        id: 'brief-md',
+        relpath: 'brief.md',
+        filename: 'brief.md',
+        extension: '.md',
+        size: 20,
+        modified_at: null,
+        status: 'supported',
+        reason: null,
+      }],
+      file_list_truncated: false,
+      limit_hit: false,
+      created_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.createSelection.mockResolvedValue({
+      selection_id: 'sel_1',
+      scan_id: 'scan_123',
+      source_display_name: 'Client A',
+      proposed_destination_root: 'memory/imports/client-a/',
+      approved_file_count: 1,
+      approved_total_size: 20,
+      excluded_file_count: 0,
+      excluded_total_size: 0,
+      unsupported_file_count: 0,
+      skipped_file_count: 0,
+      excluded_by_rule: {},
+      approved_files: [],
+      approved_file_list_truncated: false,
+      created_at: '2026-05-16T00:00:01Z',
+    })
+    sourceImportMocks.startImport.mockResolvedValue({
+      batch_id: 'import_1',
+      scan_id: 'scan_123',
+      selection_id: 'sel_1',
+      source_kind: 'local_folder',
+      source_display_name: 'Client A',
+      destination_root: 'memory/imports/client-a-import1/',
+      state: 'completed',
+      total_file_count: 1,
+      imported_file_count: 1,
+      skipped_file_count: 0,
+      failed_file_count: 0,
+      created_note_count: 1,
+      total_bytes: 20,
+      processed_bytes: 20,
+      current_file: null,
+      files: [],
+      started_at: '2026-05-16T00:00:02Z',
+      updated_at: '2026-05-16T00:00:03Z',
+      finished_at: '2026-05-16T00:00:03Z',
+    })
+    sourceImportMocks.removeImport.mockResolvedValue({
+      batch_id: 'import_1',
+      scan_id: 'scan_123',
+      selection_id: 'sel_1',
+      source_kind: 'local_folder',
+      source_display_name: 'Client A',
+      destination_root: 'memory/imports/client-a-import1/',
+      state: 'removed',
+      total_file_count: 1,
+      imported_file_count: 1,
+      skipped_file_count: 0,
+      failed_file_count: 0,
+      created_note_count: 1,
+      total_bytes: 20,
+      processed_bytes: 20,
+      current_file: null,
+      files: [],
+      started_at: '2026-05-16T00:00:02Z',
+      updated_at: '2026-05-16T00:00:04Z',
+      finished_at: '2026-05-16T00:00:04Z',
+    })
+
+    const wrapper = await mountSuspended(ImportDialog, {
+      props: { visible: true },
+    })
+    await wrapper.findAll('.import-dialog__mode-btn')[1]!.trigger('click')
+    await wrapper.find('.import-dialog__browse-btn').trigger('click')
+    await flushPromises()
+    await wrapper.find('.import-dialog__import-btn').trigger('click')
+    await flushPromises()
+    await wrapper.find('.import-dialog__import-btn').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.import-dialog__remove-btn').trigger('click')
+    await flushPromises()
+    const confirmButton = document.body.querySelector(
+      '.confirm-dialog__btn--confirm'
+    ) as HTMLButtonElement | null
+    expect(confirmButton).toBeTruthy()
+    confirmButton!.click()
+    await flushPromises()
+
+    expect(sourceImportMocks.removeImport).toHaveBeenCalledWith('import_1', 'import_1')
+    expect(wrapper.text()).toContain('Removed import: 1 created notes moved out of memory')
+  })
+
+  it('folder mode can cancel an active import', async () => {
+    sourceImportMocks.pickFolderSource.mockResolvedValue({
+      source_token: 'source-token',
+      source_kind: 'local_folder',
+      display_name: 'Client A',
+      root_path: '/Users/me/Client A',
+      expires_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.scanSource.mockResolvedValue({
+      scan_id: 'scan_123',
+      source_kind: 'local_folder',
+      source_display_name: 'Client A',
+      source_root_path: '/Users/me/Client A',
+      proposed_destination_root: 'memory/imports/client-a/',
+      total_files_seen: 1,
+      total_size_seen: 20,
+      supported_file_count: 1,
+      unsupported_file_count: 0,
+      skipped_file_count: 0,
+      skipped_by_reason: {},
+      counts_by_extension: { '.md': 1 },
+      largest_files: [],
+      folder_summary: [],
+      files: [{
+        id: 'brief-md',
+        relpath: 'brief.md',
+        filename: 'brief.md',
+        extension: '.md',
+        size: 20,
+        modified_at: null,
+        status: 'supported',
+        reason: null,
+      }],
+      file_list_truncated: false,
+      limit_hit: false,
+      created_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.createSelection.mockResolvedValue({
+      selection_id: 'sel_1',
+      scan_id: 'scan_123',
+      source_display_name: 'Client A',
+      proposed_destination_root: 'memory/imports/client-a/',
+      approved_file_count: 1,
+      approved_total_size: 20,
+      excluded_file_count: 0,
+      excluded_total_size: 0,
+      unsupported_file_count: 0,
+      skipped_file_count: 0,
+      excluded_by_rule: {},
+      approved_files: [],
+      approved_file_list_truncated: false,
+      created_at: '2026-05-16T00:00:01Z',
+    })
+    sourceImportMocks.startImport.mockResolvedValue({
+      batch_id: 'import_1',
+      scan_id: 'scan_123',
+      selection_id: 'sel_1',
+      source_kind: 'local_folder',
+      source_display_name: 'Client A',
+      destination_root: 'memory/imports/client-a-import1/',
+      state: 'importing',
+      total_file_count: 1,
+      imported_file_count: 0,
+      skipped_file_count: 0,
+      failed_file_count: 0,
+      created_note_count: 0,
+      total_bytes: 20,
+      processed_bytes: 0,
+      current_file: 'brief.md',
+      files: [],
+      started_at: '2026-05-16T00:00:02Z',
+      updated_at: '2026-05-16T00:00:03Z',
+      finished_at: null,
+    })
+    sourceImportMocks.cancelImport.mockResolvedValue({
+      batch_id: 'import_1',
+      scan_id: 'scan_123',
+      selection_id: 'sel_1',
+      source_kind: 'local_folder',
+      source_display_name: 'Client A',
+      destination_root: 'memory/imports/client-a-import1/',
+      state: 'cancelling',
+      total_file_count: 1,
+      imported_file_count: 0,
+      skipped_file_count: 0,
+      failed_file_count: 0,
+      created_note_count: 0,
+      total_bytes: 20,
+      processed_bytes: 0,
+      current_file: 'brief.md',
+      files: [],
+      started_at: '2026-05-16T00:00:02Z',
+      updated_at: '2026-05-16T00:00:04Z',
+      finished_at: null,
+    })
+
+    const wrapper = await mountSuspended(ImportDialog, {
+      props: { visible: true },
+    })
+    await wrapper.findAll('.import-dialog__mode-btn')[1]!.trigger('click')
+    await wrapper.find('.import-dialog__browse-btn').trigger('click')
+    await flushPromises()
+    await wrapper.find('.import-dialog__import-btn').trigger('click')
+    await flushPromises()
+    await wrapper.find('.import-dialog__import-btn').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.import-dialog__stop-btn').trigger('click')
+    await flushPromises()
+
+    expect(sourceImportMocks.cancelImport).toHaveBeenCalledWith('import_1')
+    expect(wrapper.text()).toContain('Cancelling import after the current file finishes')
+    wrapper.unmount()
   })
 
   it('import button disabled when no file selected', async () => {

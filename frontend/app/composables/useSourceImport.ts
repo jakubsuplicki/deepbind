@@ -80,6 +80,7 @@ export interface SourceImportBatchSummary {
   state:
     | 'queued'
     | 'importing'
+    | 'cancelling'
     | 'completed'
     | 'cancelled'
     | 'interrupted'
@@ -170,10 +171,36 @@ export function useSourceImport() {
     )
   }
 
+  async function cancelImport(batchId: string): Promise<SourceImportBatchSummary> {
+    return await $fetch<SourceImportBatchSummary>(
+      apiUrl(`/api/source-import/imports/${encodeURIComponent(batchId)}/cancel`),
+      {
+        method: 'POST',
+      },
+    )
+  }
+
+  async function removeImport(
+    batchId: string,
+    confirmBatchId: string,
+  ): Promise<SourceImportBatchSummary> {
+    return await $fetch<SourceImportBatchSummary>(
+      apiUrl(`/api/source-import/imports/${encodeURIComponent(batchId)}/remove`),
+      {
+        method: 'POST',
+        body: {
+          confirm_batch_id: confirmBatchId,
+        },
+      },
+    )
+  }
+
   return {
+    cancelImport,
     createSelection,
     getImport,
     pickFolderSource,
+    removeImport,
     scanSource,
     startImport,
   }

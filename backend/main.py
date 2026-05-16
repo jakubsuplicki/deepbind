@@ -41,6 +41,10 @@ async def lifespan(app: FastAPI):
     db_path = settings.workspace_path / "app" / "jarvis.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     await init_database(db_path)
+    from services.source_import.manifest import mark_interrupted_batches
+    interrupted = await mark_interrupted_batches()
+    if interrupted:
+        logger.info("Marked %d source import batch(es) interrupted", interrupted)
     # Markdown -> SQLite reindex stays synchronous: it's a single SQL truncate
     # plus a directory walk, well under a second on multi-thousand-note vaults.
     from services.memory_service import reindex_all

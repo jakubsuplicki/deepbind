@@ -9,8 +9,13 @@ from services.source_import.grants import (
     consume_grant,
     create_grant,
 )
+from services.source_import.cancellation import (
+    SourceImportCancelConflict,
+    cancel_import_batch,
+)
 from services.source_import.models import (
     SourceImportBatchSummary,
+    SourceImportRemoveRequest,
     SourceImportStartRequest,
     SourceGrantRequest,
     SourceGrantResponse,
@@ -18,6 +23,10 @@ from services.source_import.models import (
     SourceSelectionSummary,
     SourceScanReport,
     SourceScanRequest,
+)
+from services.source_import.removal import (
+    SourceImportRemovalConflict,
+    remove_import_batch,
 )
 from services.source_import.manifest import get_batch_summary, list_batch_summaries
 from services.source_import.scan import scan_folder
@@ -187,3 +196,39 @@ async def get_source_import_endpoint(batch_id: str) -> SourceImportBatchSummary:
         return await get_batch_summary(batch_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Import batch not found")
+
+
+@router.post(
+    "/imports/{batch_id}/cancel",
+    response_model=SourceImportBatchSummary,
+    dependencies=[Depends(require_functional)],
+)
+async def cancel_source_import_endpoint(batch_id: str) -> SourceImportBatchSummary:
+    try:
+        return await cancel_import_batch(batch_id=batch_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    except SourceImportCancelConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post(
+    "/imports/{batch_id}/remove",
+    response_model=SourceImportBatchSummary,
+    dependencies=[Depends(require_functional)],
+)
+async def remove_source_import_endpoint(
+    batch_id: str,
+    body: SourceImportRemoveRequest,
+) -> SourceImportBatchSummary:
+    try:
+        return await remove_import_batch(
+            batch_id=batch_id,
+            confirm_batch_id=body.confirm_batch_id,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    except SourceImportRemovalConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

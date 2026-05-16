@@ -9,6 +9,7 @@ SourceGrantKind = Literal["local_folder"]
 SourceImportState = Literal[
     "queued",
     "importing",
+    "cancelling",
     "completed",
     "cancelled",
     "interrupted",
@@ -117,6 +118,10 @@ class SourceSelectionRecord(BaseModel):
 
 class SourceImportStartRequest(BaseModel):
     selection_id: str = Field(min_length=4)
+
+
+class SourceImportRemoveRequest(BaseModel):
+    confirm_batch_id: str = Field(min_length=4)
 
 
 class SourceImportFileOutcome(BaseModel):

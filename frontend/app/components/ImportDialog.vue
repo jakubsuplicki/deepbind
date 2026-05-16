@@ -127,7 +127,7 @@
 
           <div v-if="folderImport" class="import-dialog__batch">
             <div class="import-dialog__batch-header">
-              <span>{{ folderImportActive ? 'Creating memory' : humanizeReason(folderImport.state) }}</span>
+              <span>{{ folderImportStatusLabel }}</span>
               <strong>
                 {{ folderImport.imported_file_count }}/{{ folderImport.total_file_count }}
               </strong>
@@ -149,6 +149,31 @@
             </div>
             <div class="import-dialog__source-path">
               {{ folderImport.destination_root }}
+            </div>
+            <div
+              v-if="folderImportCanCancel || folderImportCanRemove"
+              class="import-dialog__batch-actions"
+            >
+              <button
+                v-if="folderImportCanCancel"
+                type="button"
+                class="import-dialog__stop-btn"
+                :disabled="folderImportCancelling"
+                @click="cancelFolderImport"
+              >
+                <Icon name="ph:stop-bold" class="icon--sm" />
+                {{ folderImportCancelling ? 'Cancelling...' : 'Cancel import' }}
+              </button>
+              <button
+                v-if="folderImportCanRemove"
+                type="button"
+                class="import-dialog__remove-btn"
+                :disabled="folderImportRemoving"
+                @click="requestRemoveFolderImport"
+              >
+                <Icon name="ph:trash-bold" class="icon--sm" />
+                {{ folderImportRemoving ? 'Removing...' : 'Remove import' }}
+              </button>
             </div>
           </div>
 
@@ -390,6 +415,16 @@
           {{ primaryLabel }}
         </button>
       </div>
+
+      <ConfirmDialog
+        :visible="folderRemoveConfirmOpen"
+        :loading="folderImportRemoving"
+        title="Remove import?"
+        :message="folderRemoveConfirmMessage"
+        confirm-label="Remove"
+        @confirm="confirmRemoveFolderImport"
+        @cancel="folderRemoveConfirmOpen = false"
+      />
     </div>
   </div>
 </template>
@@ -451,6 +486,9 @@ const folderSelection = ref<SourceSelectionSummary | null>(null)
 const folderSelectionLoading = ref(false)
 const folderImport = ref<SourceImportBatchSummary | null>(null)
 const folderImportStarting = ref(false)
+const folderImportCancelling = ref(false)
+const folderImportRemoving = ref(false)
+const folderRemoveConfirmOpen = ref(false)
 const includeHiddenInFolderScan = ref(false)
 const excludedFileIds = ref<string[]>([])
 const excludedExtensions = ref<string[]>([])
@@ -495,14 +533,45 @@ const folderRows = computed(() => {
 
 const folderImportActive = computed(() =>
   folderImportStarting.value ||
+  folderImportCancelling.value ||
+  folderImportRemoving.value ||
   folderImport.value?.state === 'queued' ||
-  folderImport.value?.state === 'importing'
+  folderImport.value?.state === 'importing' ||
+  folderImport.value?.state === 'cancelling' ||
+  folderImport.value?.state === 'removing'
 )
 
 const folderImportTerminal = computed(() =>
   !!folderImport.value &&
-  !['queued', 'importing'].includes(folderImport.value.state)
+  !['queued', 'importing', 'cancelling', 'removing'].includes(folderImport.value.state)
 )
+
+const folderImportCanCancel = computed(() =>
+  !!folderImport.value &&
+  ['queued', 'importing'].includes(folderImport.value.state)
+)
+
+const folderImportCanRemove = computed(() =>
+  !!folderImport.value &&
+  ['completed', 'failed', 'cancelled', 'interrupted'].includes(folderImport.value.state)
+)
+
+const folderImportStatusLabel = computed(() => {
+  if (folderImportRemoving.value || folderImport.value?.state === 'removing') {
+    return 'Removing import'
+  }
+  if (folderImportCancelling.value || folderImport.value?.state === 'cancelling') {
+    return 'Cancelling import'
+  }
+  if (folderImportActive.value) return 'Creating memory'
+  return humanizeReason(folderImport.value?.state ?? '')
+})
+
+const folderRemoveConfirmMessage = computed(() => {
+  const count = folderImport.value?.created_note_count ?? 0
+  const noun = count === 1 ? 'note' : 'notes'
+  return `${count} created ${noun} will be moved out of memory. Unrelated notes will stay.`
+})
 
 const folderImportProgressPercent = computed(() => {
   if (!folderImport.value || folderImport.value.total_file_count <= 0) return '0%'
@@ -537,7 +606,14 @@ const primaryDisabled = computed(() => {
 
 const primaryLabel = computed(() => {
   if (mode.value === 'folder') {
+    if (folderImportRemoving.value || folderImport.value?.state === 'removing') {
+      return 'Removing...'
+    }
+    if (folderImportCancelling.value || folderImport.value?.state === 'cancelling') {
+      return 'Cancelling...'
+    }
     if (folderImportActive.value) return 'Importing...'
+    if (folderImport.value?.state === 'removed') return 'Removed'
     if (folderImportTerminal.value) return 'Imported'
     if (folderScan.value) return 'Import selected'
     if (folderScanning.value) return 'Scanning...'
@@ -554,6 +630,9 @@ function resetFolderReview() {
   folderSelectionLoading.value = false
   folderImport.value = null
   folderImportStarting.value = false
+  folderImportCancelling.value = false
+  folderImportRemoving.value = false
+  folderRemoveConfirmOpen.value = false
   excludedFileIds.value = []
   excludedExtensions.value = []
   excludedFolders.value = []
@@ -730,6 +809,51 @@ async function startFolderImport() {
   }
 }
 
+async function cancelFolderImport() {
+  if (!folderImport.value || !folderImportCanCancel.value || folderImportCancelling.value) return
+  const batch = folderImport.value
+
+  folderImportCancelling.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    folderImport.value = await sourceImport.cancelImport(batch.batch_id)
+    success.value = 'Cancelling import after the current file finishes.'
+    scheduleFolderImportPoll()
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'Failed to cancel import'
+  } finally {
+    folderImportCancelling.value = false
+  }
+}
+
+function requestRemoveFolderImport() {
+  if (!folderImport.value || !folderImportCanRemove.value || folderImportRemoving.value) return
+  folderRemoveConfirmOpen.value = true
+}
+
+async function confirmRemoveFolderImport() {
+  if (!folderImport.value || !folderImportCanRemove.value || folderImportRemoving.value) return
+  const batch = folderImport.value
+
+  folderImportRemoving.value = true
+  error.value = ''
+  success.value = ''
+  clearFolderImportPoll()
+  try {
+    folderImport.value = await sourceImport.removeImport(batch.batch_id, batch.batch_id)
+    success.value =
+      `Removed import: ${folderImport.value.created_note_count} created notes moved out of memory.`
+    emit('imported', folderImport.value as unknown as Record<string, unknown>)
+    folderRemoveConfirmOpen.value = false
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'Failed to remove import'
+    folderRemoveConfirmOpen.value = false
+  } finally {
+    folderImportRemoving.value = false
+  }
+}
+
 function clearFolderImportPoll() {
   if (folderImportPollTimer) {
     clearTimeout(folderImportPollTimer)
@@ -746,6 +870,13 @@ function scheduleFolderImportPoll() {
         `Imported ${folderImport.value.imported_file_count} files ` +
         `and created ${folderImport.value.created_note_count} notes.`
       emit('imported', folderImport.value as unknown as Record<string, unknown>)
+    } else if (folderImport.value?.state === 'cancelled') {
+      success.value =
+        `Import cancelled: ${folderImport.value.imported_file_count} files imported ` +
+        `and ${folderImport.value.skipped_file_count} skipped.`
+      emit('imported', folderImport.value as unknown as Record<string, unknown>)
+    } else if (folderImport.value?.state === 'interrupted') {
+      error.value = 'Import was interrupted. Created notes remain until you remove the import.'
     }
     return
   }
@@ -1256,6 +1387,36 @@ onUnmounted(() => {
   margin-top: 0.45rem;
   font-size: 0.74rem;
   opacity: 0.72;
+}
+.import-dialog__batch-actions {
+  margin-top: 0.65rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+.import-dialog__stop-btn,
+.import-dialog__remove-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #fca5a5;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+}
+.import-dialog__stop-btn {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fbbf24;
+}
+.import-dialog__stop-btn:disabled,
+.import-dialog__remove-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 .import-dialog__scan-section {
   padding-top: 0.25rem;
