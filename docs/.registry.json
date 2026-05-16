@@ -168,6 +168,21 @@
       "_note_2026_04_29": "ADR 013 knob-6 landed: background/lazy embedding for section-split ingest. memory_service.index_note_file gained defer_embedding kwarg; when True, embed_note + embed_note_chunks are skipped. ingest._emit_document_sections now defers embedding for index + every section then schedules ingest_jobs.schedule_embed_for_paths(paths, *, workspace_path, doc_title) which spawns a daemon thread that calls the new ingest_jobs.embed_paths(paths, *, workspace_path, job_id) coroutine sequentially (start_job/update_stage/finish_job for UI badge). User-perceived ingest of 911Report.pdf dropped 25.6s \u2192 1.53s (16.7\u00d7 faster); cumulative since pdfplumber baseline ~60s \u2192 1.53s = ~40\u00d7 user-perceived. Total compute unchanged (~26s); knob-6 is decoupling not optimization. Smart Connect on the index runs sync after the embed job is scheduled \u2014 connect_note embeds query content on the fly and reads embeddings of OTHER notes, doesn't need this document's own embeddings. fast_ingest response now includes embed_job_id alongside section_connect_job_id. Single-file ingest path (memos, short PDFs) untouched \u2014 embedding stays inline. JARVIS_DISABLE_EMBEDDINGS=1 short-circuits the scheduler so tests don't leak daemon threads. Eventual-consistency cost: notes not searchable for ~24s on a 60-section doc while embeddings catch up; UI's existing per-note 'indexing N/M' badge surfaces this. Three new tests in test_embedding_service.py covering defer skip / default regression / embed_paths catch-up.",
       "_note_2026_05_04c": "ADR 017 \u2014 frontend icons migrated to Phosphor + Simple Icons via @nuxt/icon (offline-bundled). Inline SVGs and functional emoji replaced with <Icon> components; design rules in docs/concepts/icon-system.md."
     },
+    "folder-source-import": {
+      "doc": "docs/features/folder-source-import.md",
+      "type": "feature",
+      "sources": [],
+      "depends_on": [
+        "memory",
+        "pdf-section-split",
+        "smart-connect",
+        "retrieval-trace",
+        "desktop-shell-graduation"
+      ],
+      "last_updated": "2026-05-16",
+      "status": "planned",
+      "_note_2026_05_16": "Planned feature doc for Step 29. Sources intentionally empty until implementation files exist; this doc captures the product/architecture contract for consent-based folder/source import, lifecycle actions, dedupe, explicit re-import, safe removal, skipped-file review, cloud-sync placeholder handling, and sample demo data."
+    },
     "jira-ingest": {
       "doc": "docs/features/jira-ingest.md",
       "type": "feature",
