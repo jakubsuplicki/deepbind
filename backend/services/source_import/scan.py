@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import unicodedata
@@ -14,6 +15,7 @@ from services.source_import.models import (
     SourceScanFolderSummary,
     SourceScanLargestFile,
     SourceScanReport,
+    SourceScanResult,
 )
 
 
@@ -79,8 +81,10 @@ def _is_hidden(path: Path, root: Path) -> bool:
 
 
 def _safe_file_id(relpath: str) -> str:
-    # Stable for a scan, readable in tests, and not a content hash.
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", relpath).strip("_") or "root"
+    # Stable for review controls and not a content hash.
+    readable = re.sub(r"[^A-Za-z0-9_.-]+", "_", relpath).strip("_") or "root"
+    digest = hashlib.sha256(relpath.encode("utf-8")).hexdigest()[:10]
+    return f"{readable}-{digest}"
 
 
 def _iter_scandir(path: Path) -> Iterable[os.DirEntry[str]]:
@@ -95,7 +99,7 @@ def scan_folder(
     scan_id: str,
     include_hidden: bool = False,
     max_files: Optional[int] = None,
-) -> SourceScanReport:
+) -> SourceScanResult:
     root = root_path.resolve(strict=True)
     if not root.is_dir():
         raise ValueError("Selected source is not a folder")
@@ -110,7 +114,8 @@ def scan_folder(
     counts_by_extension: Counter[str] = Counter()
     folders: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     largest: list[SourceScanLargestFile] = []
-    files: list[SourceScanFileItem] = []
+    preview_files: list[SourceScanFileItem] = []
+    all_files: list[SourceScanFileItem] = []
     file_list_truncated = False
     limit_hit = False
 
@@ -118,8 +123,9 @@ def scan_folder(
 
     def add_file_item(item: SourceScanFileItem) -> None:
         nonlocal file_list_truncated
-        if len(files) < FILE_LIST_LIMIT:
-            files.append(item)
+        all_files.append(item)
+        if len(preview_files) < FILE_LIST_LIMIT:
+            preview_files.append(item)
         else:
             file_list_truncated = True
 
@@ -242,7 +248,7 @@ def scan_folder(
         )[:FOLDER_SUMMARY_LIMIT]
     ]
 
-    return SourceScanReport(
+    report = SourceScanReport(
         scan_id=scan_id,
         source_kind="local_folder",
         source_display_name=root.name or str(root),
@@ -257,8 +263,9 @@ def scan_folder(
         counts_by_extension=dict(sorted(counts_by_extension.items())),
         largest_files=largest,
         folder_summary=folder_summary,
-        files=files,
+        files=preview_files,
         file_list_truncated=file_list_truncated,
         limit_hit=limit_hit,
         created_at=_now_iso(),
     )
+    return SourceScanResult(report=report, files=all_files)

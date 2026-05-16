@@ -3,9 +3,14 @@ title: Memory System
 status: active
 type: feature
 sources:
+  - backend/models/database.py
   - backend/routers/memory.py
   - backend/services/memory_service.py
   - backend/services/ingest.py
+  - backend/services/structured_ingest.py
+  - backend/services/source_import/extractors.py
+  - backend/services/source_import/manifest.py
+  - backend/services/source_import/worker.py
   - backend/services/url_ingest.py
   - backend/services/embedding_service.py
   - backend/utils/markdown.py
@@ -13,6 +18,7 @@ sources:
   - frontend/app/components/NoteList.vue
   - frontend/app/components/NoteViewer.vue
   - frontend/app/components/ImportDialog.vue
+  - frontend/app/composables/useSourceImport.ts
   - frontend/app/components/LinkIngestDialog.vue
 depends_on: [database, preferences-settings, ingest-benchmark]
 last_reviewed: 2026-04-26
@@ -63,9 +69,9 @@ In the **desktop bundle** (per [ADR 003 §A](../architecture/decisions/003-deskt
 
 ### Ingest pipeline — files
 
-`fast_ingest` accepts `.md`, `.txt`, `.pdf`, `.csv`, and `.xml` files. The core logic:
+`fast_ingest` accepts `.md`, `.txt`, `.pdf`, `.csv`, `.xml`, `.json`, `.docx`, `.xlsx`, `.pptx`, `.html`/`.htm`, `.rtf`, `.eml`, and `.zip` files. The core logic:
 
-1. Text extraction: `.md` files are used as-is (frontmatter added if missing); `.txt` files are wrapped in generated frontmatter and saved as `.md`; `.pdf` files are parsed by `pdfplumber` and also wrapped before saving.
+1. Text extraction: `.md` files are used as-is (frontmatter added if missing); `.txt` files are wrapped in generated frontmatter and saved as `.md`; `.pdf` files are parsed by `pypdfium2`; JSON is pretty-printed; DOCX/XLSX/PPTX/HTML/RTF/EML/ZIP use the business document extractor registry.
 2. The resulting `.md` file is written to `memory/{target_folder}/` using a slug-based filename.
 3. If a filename already exists at the target path a numeric suffix (`-1`, `-2`, ...) is appended rather than overwriting.
 4. The new note is indexed in SQLite (which also auto-embeds it). The ingest then calls `connection_service.connect_note()` which writes a `suggested_related` block to the note's frontmatter and updates the graph incrementally via `graph_service.ingest_note()`. **Per-note ingest no longer triggers a full `rebuild_graph()`** — that remains for batch imports and the manual "Reindex all" / "Repair graph" actions. A failed Smart Connect step logs a warning but does not roll back the ingest.
@@ -78,6 +84,10 @@ For `.csv` and `.xml` files, `fast_ingest` delegates to `structured_ingest.inges
 - **Generic XML**: Converted to a single markdown note with structure analysis and first 200 elements rendered with their attributes and text content.
 - **Large file handling**: Groups with more than 100 issues are split into multiple notes (part 1, part 2, etc.). The graph is rebuilt once after all notes are created, not per-note.
 
+For business document files, `source_import.extractors` converts the approved upload into Markdown before indexing. DOCX/XLSX/PPTX use conservative standard-library ZIP/XML parsing so the desktop bundle does not gain new parser dependencies in this slice. HTML uses the existing `trafilatura` + `markdownify` stack, RTF uses a best-effort control-word stripper, EML uses Python's standard `email` package, and ZIP creates a safe archive inventory note rather than extracting child files.
+
+When `fast_ingest` is called by Folder Source Import, it receives a safe `source_label` and extra frontmatter such as `source_kind`, `source_relpath`, `source_filename`, `source_size`, and `import_batch_id`. That keeps generated Markdown source-relative even though the operational manifest keeps the absolute source root for local lifecycle work. The same provenance path is passed through `structured_ingest.ingest_structured_file` so CSV/XML folder imports do not write absolute local paths into user-facing notes.
+
 The file is received by the router as a multipart upload, written to a temporary file, passed to `fast_ingest`, and the temporary file is always deleted in a `finally` block regardless of outcome.
 
 ### Ingest pipeline — URLs
@@ -89,7 +99,7 @@ The file is received by the router as a multipart upload, written to a temporary
 
 Both paths strip tracking parameters from the URL before storing it in the note's `source` frontmatter field.
 
-An optional `summarize` flag triggers `smart_enrich` after ingest, which calls Claude to add a 1–2 sentence summary and keyword tags to the note's frontmatter. This is the only part of the ingest pipeline that requires an API key and makes external API calls.
+An optional `summarize` flag triggers `smart_enrich` after ingest, which calls the local Ollama runtime to add a 1-2 sentence summary and keyword tags to the note's frontmatter.
 
 URL ingest is gated by the privacy kill-switch (`services/privacy.py`): when offline mode is on or `privacy_url_ingest_enabled` is `false`, the router returns a 403 with the block reason instead of fetching anything. See [preferences-settings.md](preferences-settings.md).
 
@@ -105,7 +115,7 @@ The frontend polls `GET /api/memory/ingest/status` every 5 seconds via `useInges
 
 ### AI enrichment
 
-`smart_enrich` in `ingest.py` sends the first 3,000 characters of a note to Claude with a prompt requesting JSON containing `summary` and `tags`. If Claude returns malformed JSON, the raw response text is stored as the summary and tags are left empty. New tags are merged with any existing tags in the frontmatter (deduplication via `set`).
+`smart_enrich` in `ingest.py` sends the first 3,000 characters of a note to the local Ollama runtime with a prompt requesting JSON containing `summary` and `tags`. If the model returns malformed JSON, the raw response text is stored as the summary and tags are left empty. New tags are merged with any existing tags in the frontmatter (deduplication via `set`).
 
 Note that `smart_enrich` rebuilds the frontmatter block manually using an f-string loop rather than going through `utils/markdown.py`'s `add_frontmatter` (which uses `yaml.dump`). Similarly, `url_ingest._build_frontmatter` constructs YAML with f-strings. `add_frontmatter` is only used by `memory_service` for standard note CRUD. This means title or author strings containing YAML special characters (colons, quotes, newlines) can produce malformed frontmatter in ingested notes.
 
@@ -168,7 +178,7 @@ The memory page is a two-panel layout: a sidebar with `NoteList` for browsing/se
 
 `NoteList` derives the folder list from the current notes array in the parent component — it does not fetch folders independently. Clicking an already-active folder deactivates it (toggles off), returning to the unfiltered view.
 
-`ImportDialog` uses a drag-and-drop zone backed by a hidden `<input type="file">` and submits file imports via `multipart/form-data` using Nuxt's `$fetch`. It also has an in-progress Folder mode for [Folder Source Import](folder-source-import.md): the desktop shell grants a selected folder to `/api/source-import/scan`, and the dialog shows a metadata-only inventory before any content import exists. `LinkIngestDialog` uses `v-model` for open/close state and performs client-side URL type detection with the same regex patterns used on the backend, giving the user immediate visual feedback before submitting.
+`ImportDialog` uses a drag-and-drop zone backed by a hidden `<input type="file">` and submits file imports via `multipart/form-data` using Nuxt's `$fetch`. It also has an in-progress Folder mode for [Folder Source Import](folder-source-import.md): the desktop shell grants a selected folder to `/api/source-import/scan`, the dialog shows a metadata-only inventory plus review exclusions, and the approved selection can start a local import batch with progress/completion counts. `LinkIngestDialog` uses `v-model` for open/close state and performs client-side URL type detection with the same regex patterns used on the backend, giving the user immediate visual feedback before submitting.
 
 `SuggestionsPanel` renders Smart Connect output above the note body. It reads `suggested_related` and `aliases_matched` directly from the note's frontmatter (so it stays in sync with what the backend actually wrote), colour-codes each item by tier (strong / normal / weak), and exposes three actions per suggestion: open the linked note, **Keep** (calls `POST /api/connections/promote` → moves the path into `related:`), and **Dismiss** (calls `POST /api/connections/dismiss` → records the pair so it never returns). A header-level **Re-run** button calls `POST /api/connections/run/{path}?mode=fast` to recompute suggestions on demand. After every action `NoteViewer` emits `changed`; the page reloads the note and refreshes the orphan count. The memory page sidebar shows a small banner with the current semantic-orphan count and a Review button that opens the first orphan.
 
@@ -200,14 +210,18 @@ When a large document (e.g. a PDF) is ingested it is split into many section not
 
 ## Key Files
 
+- `backend/models/database.py` — SQLite schema bootstrap for notes, FTS, embeddings, and operational tables such as source-import manifests
 - `backend/routers/memory.py` — HTTP endpoints for note CRUD, file ingest, URL ingest, reindex, AI enrichment, embedding reindex, and semantic search
 - `backend/services/memory_service.py` — Core note operations: create, read, list, append, delete, reindex; manages Markdown files and SQLite index together; triggers on-write embedding
-- `backend/services/ingest.py` — File ingest pipeline for `.md`, `.txt`, `.pdf`, `.csv`, `.xml`; AI enrichment via `smart_enrich`
+- `backend/services/ingest.py` — File ingest pipeline for Markdown, text, PDF, structured data, and business document uploads; AI enrichment via `smart_enrich`
+- `backend/services/source_import/extractors.py` — Best-effort business document extractors for DOCX, XLSX, PPTX, HTML/HTM, RTF, EML, and safe ZIP inventory notes
 - `backend/services/connection_service.py` — Smart Connect: per-note ingest-time linking; pure scoring + caps; writes `suggested_related` and calls incremental graph update
 - `backend/services/alias_index.py` — Smart Connect alias index: SQLite-backed normalised phrase → note path map; `upsert_note_aliases()` (called from `_index_note`) and `scan_body()` (n-gram lookup, NFKD-normalised, Polish-aware)
 - `backend/services/dismissed_suggestions.py` — Smart Connect dismissal store: SQLite table `dismissed_suggestions(note_path, target_path, dismissed_at)` with `dismiss()`, `undismiss()`, `list_dismissed_for()`, `list_all()`, `remove_note()`
 - `backend/routers/connections.py` — Smart Connect HTTP surface: `GET /api/connections/orphans`, `POST /api/connections/run/{path}` (mode=fast|aggressive), `POST /api/connections/dismiss`, `POST /api/connections/promote`
-- `backend/services/structured_ingest.py` — CSV/XML ingest with Jira export detection; groups issues by epic/project, creates overview + detail notes with wiki-linked people for graph integration
+- `backend/services/structured_ingest.py` — CSV/XML ingest with Jira export detection; groups issues by epic/project, creates overview + detail notes with wiki-linked people for graph integration; accepts folder-import provenance from `fast_ingest`
+- `backend/services/source_import/manifest.py` — SQLite operational manifest for approved folder imports, including batch/file status and generated note paths
+- `backend/services/source_import/worker.py` — Folder import worker that reads approved files, hashes after approval, writes via `fast_ingest`, and updates batch progress
 - `backend/services/url_ingest.py` — URL ingest for YouTube videos (transcript + oEmbed metadata) and general web articles (trafilatura + markdownify); short-circuits when the privacy kill-switch blocks URL ingest.
 - `backend/services/ingest_jobs.py` — Process-local, thread-safe ingest job tracker. Powers the global "Ingesting…" status badge. Includes `schedule_graph_rebuild()` for the one-at-a-time background graph rebuild after each file ingest.
 - `frontend/app/composables/useIngestStatus.ts` — Singleton composable that polls `/api/memory/ingest/status` every 5 s, merges server-tracked jobs with client-side upload progress, and ref-counts subscribers so the timer only runs while at least one component is mounted.
@@ -217,7 +231,8 @@ When a large document (e.g. a PDF) is ingested it is split into many section not
 - `frontend/app/components/NoteList.vue` — Sidebar list with FTS search input, folder filter pills, and per-note delete with confirmation
 - `frontend/app/components/NoteViewer.vue` — Right-panel note reader; renders Markdown via `marked` + `DOMPurify` after stripping frontmatter; embeds `SuggestionsPanel` above the body
 - `frontend/app/components/SuggestionsPanel.vue` — Smart Connect review UI: lists `suggested_related` with confidence + methods, per-item Keep / Dismiss buttons (promote → `related`, dismiss → `dismissed_suggestions`), and a header-level Re-run button
-- `frontend/app/components/ImportDialog.vue` — Drag-and-drop file upload modal; submits to `/api/memory/ingest` as multipart and hosts the in-progress metadata-only folder scan mode
+- `frontend/app/composables/useSourceImport.ts` — Frontend API wrapper for trusted folder selection, scan, review selection, import start, and import status polling
+- `frontend/app/components/ImportDialog.vue` — Drag-and-drop file upload modal; submits to `/api/memory/ingest` as multipart and hosts the in-progress folder scan/review/import-progress mode
 - `frontend/app/components/LinkIngestDialog.vue` — URL import modal with client-side YouTube/article detection, folder selection, and optional AI summary toggle
 
 ## API / Interface
@@ -344,4 +359,4 @@ diffs, production measurement is for realistic UX impact.
 
 **Web page ingest no longer retries without SSL verification.** The earlier `verify=False` retry has been removed. Pages with self-signed or expired certificates will fail ingest rather than being fetched insecurely.
 
-**`smart_enrich` truncates input to 3,000 characters.** For long notes this means Claude only sees the beginning of the document when generating the summary and tags.
+**`smart_enrich` truncates input to 3,000 characters.** For long notes this means the local model only sees the beginning of the document when generating the summary and tags.

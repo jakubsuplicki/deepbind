@@ -6,6 +6,17 @@ from pydantic import BaseModel, Field
 
 
 SourceGrantKind = Literal["local_folder"]
+SourceImportState = Literal[
+    "queued",
+    "importing",
+    "completed",
+    "cancelled",
+    "interrupted",
+    "removing",
+    "removed",
+    "failed",
+]
+SourceImportFileStatus = Literal["queued", "importing", "done", "skipped", "failed"]
 
 
 class SourceGrantRequest(BaseModel):
@@ -69,3 +80,77 @@ class SourceScanReport(BaseModel):
     file_list_truncated: bool = False
     limit_hit: bool = False
     created_at: str
+
+
+class SourceScanResult(BaseModel):
+    report: SourceScanReport
+    files: list[SourceScanFileItem] = Field(default_factory=list)
+
+
+class SourceSelectionRequest(BaseModel):
+    excluded_file_ids: list[str] = Field(default_factory=list)
+    excluded_extensions: list[str] = Field(default_factory=list)
+    excluded_folders: list[str] = Field(default_factory=list)
+
+
+class SourceSelectionSummary(BaseModel):
+    selection_id: str
+    scan_id: str
+    source_display_name: str
+    proposed_destination_root: str
+    approved_file_count: int
+    approved_total_size: int
+    excluded_file_count: int
+    excluded_total_size: int
+    unsupported_file_count: int
+    skipped_file_count: int
+    excluded_by_rule: dict[str, int]
+    approved_files: list[SourceScanFileItem]
+    approved_file_list_truncated: bool = False
+    created_at: str
+
+
+class SourceSelectionRecord(BaseModel):
+    summary: SourceSelectionSummary
+    approved_file_ids: list[str] = Field(default_factory=list)
+
+
+class SourceImportStartRequest(BaseModel):
+    selection_id: str = Field(min_length=4)
+
+
+class SourceImportFileOutcome(BaseModel):
+    file_id: str
+    relpath: str
+    filename: str
+    extension: str
+    size: int
+    modified_at: Optional[str] = None
+    status: SourceImportFileStatus
+    stage: Optional[str] = None
+    reason: Optional[str] = None
+    duplicate_of: Optional[str] = None
+    content_hash: Optional[str] = None
+    note_paths: list[str] = Field(default_factory=list)
+
+
+class SourceImportBatchSummary(BaseModel):
+    batch_id: str
+    scan_id: str
+    selection_id: str
+    source_kind: SourceGrantKind = "local_folder"
+    source_display_name: str
+    destination_root: str
+    state: SourceImportState
+    total_file_count: int
+    imported_file_count: int = 0
+    skipped_file_count: int = 0
+    failed_file_count: int = 0
+    created_note_count: int = 0
+    total_bytes: int = 0
+    processed_bytes: int = 0
+    current_file: Optional[str] = None
+    files: list[SourceImportFileOutcome] = Field(default_factory=list)
+    started_at: str
+    updated_at: str
+    finished_at: Optional[str] = None

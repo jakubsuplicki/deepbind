@@ -9,10 +9,23 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from config import get_settings
+from services.source_import.extractors import (
+    BUSINESS_EXTRACTOR_EXTENSIONS,
+    ExtractorError,
+    extract_business_document,
+)
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".md", ".txt", ".pdf", ".csv", ".xml", ".json"}
+SUPPORTED_EXTENSIONS = {
+    ".md",
+    ".txt",
+    ".pdf",
+    ".csv",
+    ".xml",
+    ".json",
+    *BUSINESS_EXTRACTOR_EXTENSIONS,
+}
 
 # ── Document section split (steps 27a / 27d) ─────────────────────────────────
 # When a document is long enough AND has enough natural break points, split
@@ -392,10 +405,25 @@ def _detect_json_sections(parsed) -> List["_DocumentSection"]:
     return sections
 
 
-def _make_frontmatter(title: str, source: str, tags: Optional[list] = None) -> str:
+def _merge_frontmatter(base: dict, extra: Optional[dict] = None) -> dict:
+    merged = dict(base)
+    if extra:
+        merged.update(extra)
+    return merged
+
+
+def _make_frontmatter(
+    title: str,
+    source: str,
+    tags: Optional[list] = None,
+    extra: Optional[dict] = None,
+) -> str:
     from utils.markdown import add_frontmatter
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    fm = {"title": title, "date": now, "source": source, "tags": tags or []}
+    fm = _merge_frontmatter(
+        {"title": title, "date": now, "source": source, "tags": tags or []},
+        extra,
+    )
     # add_frontmatter prepends to body; we just want the frontmatter
     return add_frontmatter("", fm)
 
@@ -410,6 +438,7 @@ def _make_section_frontmatter(
     tags: Optional[list] = None,
     section_type: Optional[str] = None,
     section_type_confidence: Optional[float] = None,
+    extra: Optional[dict] = None,
 ) -> str:
     """Frontmatter for a per-section note created by document section split."""
     from utils.markdown import add_frontmatter
@@ -427,10 +456,16 @@ def _make_section_frontmatter(
         fm["section_type"] = section_type
     if section_type_confidence is not None:
         fm["section_type_confidence"] = section_type_confidence
+    fm = _merge_frontmatter(fm, extra)
     return add_frontmatter("", fm)
 
 
-def _make_index_frontmatter(title: str, source: str, doc_type: str = "pdf") -> str:
+def _make_index_frontmatter(
+    title: str,
+    source: str,
+    doc_type: str = "pdf",
+    extra: Optional[dict] = None,
+) -> str:
     """Frontmatter for the index note that links all sections."""
     from utils.markdown import add_frontmatter
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -441,6 +476,7 @@ def _make_index_frontmatter(title: str, source: str, doc_type: str = "pdf") -> s
         "source_type": f"index/{doc_type}",
         "document_type": f"{doc_type}-document",
     }
+    fm = _merge_frontmatter(fm, extra)
     return add_frontmatter("", fm)
 
 
@@ -492,6 +528,8 @@ async def _emit_document_sections(
     workspace_path: Optional[Path],
     sections: List[_DocumentSection],
     job_id: Optional[str],
+    source_label: Optional[str] = None,
+    extra_frontmatter: Optional[dict] = None,
 ) -> Dict:
     """Write index + per-section notes for a long document and wire them up.
 
@@ -558,12 +596,13 @@ async def _emit_document_sections(
 
         section_fm = _make_section_frontmatter(
             title=section.title,
-            source=str(source_path),
+            source=source_label or str(source_path),
             parent_path=index_rel_path,
             section_index=i,
             doc_type=doc_type,
             section_type=stype,
             section_type_confidence=stype_conf,
+            extra=extra_frontmatter,
         )
         await asyncio.to_thread(
             target.write_text, section_fm + section.body + "\n", encoding="utf-8"
@@ -578,7 +617,12 @@ async def _emit_document_sections(
         rel = sf.relative_to(mem).with_suffix("").as_posix()
         index_lines.append(f"{i}. [[{rel}]] — {section_titles[i - 1]}")
     index_body = "\n".join(index_lines) + "\n"
-    index_fm = _make_index_frontmatter(title, str(source_path), doc_type=doc_type)
+    index_fm = _make_index_frontmatter(
+        title,
+        source_label or str(source_path),
+        doc_type=doc_type,
+        extra=extra_frontmatter,
+    )
     index_path = doc_dir / "index.md"
     await asyncio.to_thread(
         index_path.write_text, index_fm + index_body, encoding="utf-8"
@@ -724,6 +768,8 @@ async def fast_ingest(
     workspace_path: Optional[Path] = None,
     original_name: Optional[str] = None,
     job_id: Optional[str] = None,
+    source_label: Optional[str] = None,
+    extra_frontmatter: Optional[dict] = None,
 ) -> Dict:
     """Import a file into memory without AI."""
     from services import ingest_jobs
@@ -741,6 +787,7 @@ async def fast_ingest(
         raise IngestError(f"Unsupported file type: {ext}")
 
     title = Path(display_name).stem
+    frontmatter_source = source_label or str(file_path)
     mem = _memory_dir(workspace_path)
     folder = mem / target_folder
     folder.mkdir(parents=True, exist_ok=True)
@@ -748,7 +795,25 @@ async def fast_ingest(
     if ext == ".md":
         content = await asyncio.to_thread(file_path.read_text, encoding="utf-8")
         if not content.strip().startswith("---"):
-            content = _make_frontmatter(title, str(file_path)) + content
+            content = _make_frontmatter(
+                title,
+                frontmatter_source,
+                extra=extra_frontmatter,
+            ) + content
+        elif extra_frontmatter or source_label:
+            from utils.markdown import add_frontmatter, parse_frontmatter
+            fm, body = parse_frontmatter(content)
+            if fm:
+                fm.setdefault("title", title)
+                fm.setdefault("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+                fm["source"] = frontmatter_source
+                content = add_frontmatter(body, _merge_frontmatter(fm, extra_frontmatter))
+            else:
+                content = _make_frontmatter(
+                    title,
+                    frontmatter_source,
+                    extra=extra_frontmatter,
+                ) + content
 
         # Step 27d — split long markdown documents on top-level headings.
         # Only the body (after frontmatter) is fed into the detector so we
@@ -767,6 +832,8 @@ async def fast_ingest(
                     workspace_path=workspace_path,
                     sections=md_sections,
                     job_id=job_id,
+                    source_label=frontmatter_source,
+                    extra_frontmatter=extra_frontmatter,
                 )
 
         target = _unique_path(folder / display_name)
@@ -789,10 +856,16 @@ async def fast_ingest(
                     workspace_path=workspace_path,
                     sections=txt_sections,
                     job_id=job_id,
+                    source_label=frontmatter_source,
+                    extra_frontmatter=extra_frontmatter,
                 )
 
         md_name = f"{_slugify(title)}.md"
-        fm = _make_frontmatter(title, str(file_path))
+        fm = _make_frontmatter(
+            title,
+            frontmatter_source,
+            extra=extra_frontmatter,
+        )
         target = _unique_path(folder / md_name)
         await asyncio.to_thread(target.write_text, fm + content, encoding="utf-8")
 
@@ -818,10 +891,16 @@ async def fast_ingest(
                 workspace_path=workspace_path,
                 sections=sections,
                 job_id=job_id,
+                source_label=frontmatter_source,
+                extra_frontmatter=extra_frontmatter,
             )
 
         md_name = f"{_slugify(title)}.md"
-        fm = _make_frontmatter(title, str(file_path))
+        fm = _make_frontmatter(
+            title,
+            frontmatter_source,
+            extra=extra_frontmatter,
+        )
         target = _unique_path(folder / md_name)
         await asyncio.to_thread(target.write_text, fm + text, encoding="utf-8")
 
@@ -853,10 +932,17 @@ async def fast_ingest(
                     workspace_path=workspace_path,
                     sections=json_sections,
                     job_id=job_id,
+                    source_label=frontmatter_source,
+                    extra_frontmatter=extra_frontmatter,
                 )
 
         md_name = f"{_slugify(title)}.md"
-        fm = _make_frontmatter(title, str(file_path), tags=[])
+        fm = _make_frontmatter(
+            title,
+            frontmatter_source,
+            tags=[],
+            extra=extra_frontmatter,
+        )
         content = f"{fm}```json\n{body}\n```\n"
         target = _unique_path(folder / md_name)
         await asyncio.to_thread(target.write_text, content, encoding="utf-8")
@@ -868,9 +954,41 @@ async def fast_ingest(
             target_folder=target_folder,
             workspace_path=workspace_path,
             original_name=display_name,
+            source_label=frontmatter_source,
+            extra_frontmatter=extra_frontmatter,
         )
         # Structured ingest handles its own indexing and graph rebuild
         return result
+
+    elif ext in BUSINESS_EXTRACTOR_EXTENSIONS:
+        from utils.markdown import add_frontmatter
+
+        _stage("extracting")
+        try:
+            extracted = await asyncio.to_thread(
+                extract_business_document,
+                file_path,
+                display_name,
+            )
+        except ExtractorError as exc:
+            raise IngestError(str(exc)) from exc
+        md_name = f"{_slugify(extracted.title) or _slugify(title) or 'document'}.md"
+        target = _unique_path(folder / md_name)
+        fm = {
+            "title": extracted.title,
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "source": frontmatter_source,
+            "source_type": f"business/{extracted.source_type}",
+            "tags": ["import", extracted.source_type],
+        }
+        fm = _merge_frontmatter(fm, extra_frontmatter)
+        if extracted.warnings:
+            fm["extractor_warnings"] = extracted.warnings
+        content = add_frontmatter(extracted.markdown.strip() + "\n", fm)
+        if extracted.warnings:
+            warning_lines = "\n".join(f"- {warning}" for warning in extracted.warnings)
+            content += f"\n## Import warnings\n\n{warning_lines}\n"
+        await asyncio.to_thread(target.write_text, content, encoding="utf-8")
 
     else:
         raise IngestError(f"Unsupported: {ext}")

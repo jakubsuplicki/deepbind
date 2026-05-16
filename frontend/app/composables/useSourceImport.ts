@@ -38,6 +38,74 @@ export interface SourceScanReport {
   created_at: string
 }
 
+export interface SourceSelectionSummary {
+  selection_id: string
+  scan_id: string
+  source_display_name: string
+  proposed_destination_root: string
+  approved_file_count: number
+  approved_total_size: number
+  excluded_file_count: number
+  excluded_total_size: number
+  unsupported_file_count: number
+  skipped_file_count: number
+  excluded_by_rule: Record<string, number>
+  approved_files: SourceScanFileItem[]
+  approved_file_list_truncated: boolean
+  created_at: string
+}
+
+export interface SourceImportFileOutcome {
+  file_id: string
+  relpath: string
+  filename: string
+  extension: string
+  size: number
+  modified_at?: string | null
+  status: 'queued' | 'importing' | 'done' | 'skipped' | 'failed'
+  stage?: string | null
+  reason?: string | null
+  duplicate_of?: string | null
+  content_hash?: string | null
+  note_paths: string[]
+}
+
+export interface SourceImportBatchSummary {
+  batch_id: string
+  scan_id: string
+  selection_id: string
+  source_kind: 'local_folder'
+  source_display_name: string
+  destination_root: string
+  state:
+    | 'queued'
+    | 'importing'
+    | 'completed'
+    | 'cancelled'
+    | 'interrupted'
+    | 'removing'
+    | 'removed'
+    | 'failed'
+  total_file_count: number
+  imported_file_count: number
+  skipped_file_count: number
+  failed_file_count: number
+  created_note_count: number
+  total_bytes: number
+  processed_bytes: number
+  current_file?: string | null
+  files: SourceImportFileOutcome[]
+  started_at: string
+  updated_at: string
+  finished_at?: string | null
+}
+
+export interface SourceSelectionOptions {
+  excludedFileIds?: string[]
+  excludedExtensions?: string[]
+  excludedFolders?: string[]
+}
+
 export function useSourceImport() {
   async function pickFolderSource(): Promise<SourceGrantResponse> {
     const tauriWindow = typeof window === 'undefined'
@@ -64,8 +132,49 @@ export function useSourceImport() {
     })
   }
 
+  async function createSelection(
+    scanId: string,
+    options: SourceSelectionOptions = {},
+  ): Promise<SourceSelectionSummary> {
+    return await $fetch<SourceSelectionSummary>(
+      apiUrl(`/api/source-import/scans/${encodeURIComponent(scanId)}/selection`),
+      {
+        method: 'POST',
+        body: {
+          excluded_file_ids: options.excludedFileIds ?? [],
+          excluded_extensions: options.excludedExtensions ?? [],
+          excluded_folders: options.excludedFolders ?? [],
+        },
+      },
+    )
+  }
+
+  async function startImport(
+    scanId: string,
+    selectionId: string,
+  ): Promise<SourceImportBatchSummary> {
+    return await $fetch<SourceImportBatchSummary>(
+      apiUrl(`/api/source-import/scans/${encodeURIComponent(scanId)}/start`),
+      {
+        method: 'POST',
+        body: {
+          selection_id: selectionId,
+        },
+      },
+    )
+  }
+
+  async function getImport(batchId: string): Promise<SourceImportBatchSummary> {
+    return await $fetch<SourceImportBatchSummary>(
+      apiUrl(`/api/source-import/imports/${encodeURIComponent(batchId)}`),
+    )
+  }
+
   return {
+    createSelection,
+    getImport,
     pickFolderSource,
     scanSource,
+    startImport,
   }
 }

@@ -344,4 +344,7 @@ async def init_database(db_path: Path) -> None:
         # Step 26c: connection event log.
         from services.connection_events import CONNECTION_EVENTS_SQL
         await db.executescript(CONNECTION_EVENTS_SQL)
+        # Step 29c: local-folder source import operational manifests.
+        from services.source_import.manifest import SOURCE_IMPORT_SQL
+        await db.executescript(SOURCE_IMPORT_SQL)
         await db.commit()

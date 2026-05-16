@@ -3,11 +3,20 @@ title: Folder Source Import
 status: in-progress
 type: feature
 sources:
+  - backend/models/database.py
   - backend/routers/source_import.py
+  - backend/services/ingest.py
+  - backend/services/structured_ingest.py
+  - backend/services/source_import/__init__.py
+  - backend/services/source_import/extractors.py
   - backend/services/source_import/grants.py
+  - backend/services/source_import/manifest.py
   - backend/services/source_import/models.py
   - backend/services/source_import/scan.py
+  - backend/services/source_import/selection.py
   - backend/services/source_import/store.py
+  - backend/services/source_import/worker.py
+  - backend/tests/test_ingest_service.py
   - backend/tests/test_source_import_scan.py
   - desktop/src-tauri/Cargo.toml
   - desktop/src-tauri/src/lib.rs
@@ -57,7 +66,11 @@ This feature complements the existing single-file upload path documented in [mem
 
 ## Implementation Status
 
-Step 29a is implemented as the first vertical slice: the desktop shell can grant a native folder selection to the backend, the backend rejects untrusted raw scan paths, and the import dialog can show a metadata-only folder inventory. Content import, exclusions, expanded document extractors, import manifests, removal, re-import, dedupe, and batch-scoped chat are still planned work.
+Step 29a and 29b are implemented as the first reviewable slice: the desktop shell can grant a native folder selection to the backend, the backend rejects untrusted raw scan paths, and the import dialog can show a metadata-only folder inventory with exclude-by-file, exclude-by-type, and exclude-by-folder review controls. The backend now creates a temporary approved-file selection ID from those exclusion rules.
+
+Step 29c now has a first approved-import path. Reusable business document extractors are wired into `fast_ingest`, folder scans count DOCX, XLSX, PPTX, HTML/HTM, RTF, EML, and ZIP inventory as supported, and `POST /api/source-import/scans/{scan_id}/start` creates a SQLite-backed import manifest before a background worker reads only the approved files. Imported notes receive safe source-relative provenance, destination folders get a short batch disambiguator, and duplicate files inside the batch are skipped by content hash after approval.
+
+Still planned: full ZIP-as-container child extraction, remove-import, explicit re-import/rescan, cancellation/interruption recovery, richer skipped/failed review, sample dataset, and batch-scoped chat/retrieval actions.
 
 ## How It Works
 
@@ -95,6 +108,8 @@ Default exclusions should skip system/temp folders such as `.git`, `.svn`, `.hg`
 
 The review screen is the user's control point. It should show what will be imported, what will be skipped, and why. Users can exclude folders, file types, and selected files, then approve the final set.
 
+The current implementation keeps the full scan index in the backend's temporary scan cache and returns only a capped preview to the UI. When the user changes exclusions, `POST /api/source-import/scans/{scan_id}/selection` applies those rules against the full scan and returns an approved-file summary plus a temporary `selection_id`. That keeps large folder behavior honest: the preview can be truncated without losing the approved-file handoff.
+
 Large scans need virtualized or paged tables. The importer should not render thousands of file rows directly.
 
 ### Approved import
@@ -128,11 +143,15 @@ source_size: ...
 
 Do not write absolute local source paths into Markdown by default. Absolute paths can reveal usernames, company names, mount names, and client structure.
 
+The current worker uses the selected batch manifest to preserve relative subfolders and writes to `memory/imports/<source-slug>-<short-batch-id>/` so two folders with the same friendly name cannot overwrite each other. It passes `source_label` and extra provenance into `fast_ingest`, including the CSV/XML structured ingest branch, so generated Markdown stores source-relative values rather than the absolute local source root.
+
 ### Batch manifest
 
 Every import should create a local operational manifest keyed by `import_batch_id`. This manifest is app metadata, not the user's knowledge source of truth. It can store the selected source root, scan options, approved file ids, content hashes after approval, generated note paths, skipped files, warnings, and per-file outcomes.
 
 SQLite operational tables are the preferred storage for this manifest. Markdown remains canonical for user knowledge; the manifest exists for lifecycle, progress, dedupe, and recovery. If the manifest is lost, imported Markdown should still be usable after reindex, but remove/re-import history may be unavailable.
+
+The first manifest implementation lives in `source_import_batches` and `source_import_files`, created by `models.database.init_database()`. It stores the local source root as operational metadata, the approved relative paths, per-file status/stage/reason, content hashes after approval, generated note paths, and batch-level counts. The frontend polls `GET /api/source-import/imports/{batch_id}` for progress.
 
 The manifest exists so the app can:
 
@@ -162,6 +181,8 @@ Re-import should compare source-relative path, size, modified time, and content 
 - duplicate files are detected by content hash after approval
 
 Do not hash during metadata scan, because hashing reads file contents. Hashing is allowed during the approved import.
+
+The current worker performs first-slice duplicate handling inside one batch: once an approved file is successfully imported, later approved files with the same SHA-256 content hash are marked `skipped` with `duplicate_content` and a `duplicate_of` relative path. Cross-batch dedupe and explicit "import duplicates anyway" remain future policy work.
 
 ### Crash recovery and cancellation
 
@@ -193,15 +214,9 @@ When a limit is hit, the file or batch should show a visible skipped/limited rea
 
 ### Document type coverage
 
-The current memory ingest path already supports `.md`, `.txt`, `.pdf`, `.csv`, `.xml`, and `.json`. Folder Source Import should add practical business document support:
+The current memory ingest path supports `.md`, `.txt`, `.pdf`, `.csv`, `.xml`, `.json`, `.docx`, `.xlsx`, `.pptx`, `.html`, `.htm`, `.rtf`, `.eml`, and `.zip`.
 
-- `.docx` via `python-docx`, pending license and bundle-size review
-- `.xlsx` via `openpyxl`, pending license and bundle-size review
-- `.pptx` via `python-pptx`, pending license and bundle-size review
-- `.html` and `.htm` via the existing `trafilatura` plus `markdownify` stack
-- `.rtf` via `striprtf`, pending license and bundle-size review
-- `.eml` via Python's standard `email` package, with attachments recorded as metadata only
-- `.zip` as a container source with scan-before-extract, zip-slip protection, decompression limits, file count limits, depth limits, and nested archives disabled by default
+The first 29c extractor work deliberately avoids adding Office parser dependencies. DOCX, XLSX, and PPTX are ZIP/XML formats, so DeepFilesAI reads their safe text/table/slide parts with the Python standard library plus `defusedxml`. HTML/HTM uses the existing `trafilatura` plus `markdownify` stack. RTF uses a best-effort control-word stripper. EML uses Python's standard `email` package and records attachments as metadata only. ZIP currently imports as a safe archive inventory note; extracting approved archive children is still part of a later archive-specific source workflow.
 
 Extractor quality should be honest. These formats are best-effort conversions, not a guarantee that every vendor-specific document layout converts perfectly. Completion states should distinguish imported successfully, imported with warnings, skipped before extraction, and failed during extraction.
 
@@ -229,38 +244,50 @@ Sample data must be clearly labeled and must not auto-import without user action
 
 ## Key Files
 
-- `backend/routers/source_import.py` - REST API for trusted source grants, metadata scans, and cached scan reports.
+- `backend/models/database.py` - Creates the SQLite operational manifest tables used by source import batches and per-file outcomes.
+- `backend/routers/source_import.py` - REST API for trusted source grants, metadata scans, cached scan reports, review selections, import start, import listing, and batch status.
+- `backend/services/ingest.py` - Existing single-file ingest path now delegates business document formats to the reusable extractor registry and accepts source-relative provenance for approved folder imports.
+- `backend/services/structured_ingest.py` - CSV/XML ingest path; applies folder-import provenance to generated structured-data notes when called through `fast_ingest`.
+- `backend/services/source_import/__init__.py` - Source-import package note that tracks the current slice boundaries.
+- `backend/services/source_import/extractors.py` - Best-effort business document extractor registry for DOCX, XLSX, PPTX, HTML/HTM, RTF, EML, and safe ZIP inventory notes.
 - `backend/services/source_import/grants.py` - Short-lived in-memory source grants created only from the trusted desktop picker path.
+- `backend/services/source_import/manifest.py` - SQLite-backed import batch manifest, progress summary, per-file status, generated note path, and content-hash storage.
 - `backend/services/source_import/scan.py` - Metadata-only directory scanner; counts supported/skipped/unsupported files without opening file contents.
-- `backend/services/source_import/store.py` - Temporary in-memory scan report cache for the review screen.
-- `backend/services/source_import/models.py` - Pydantic request/response models for grants and scan reports.
+- `backend/services/source_import/selection.py` - Applies review exclusions to the full cached scan and creates the approved-file handoff record.
+- `backend/services/source_import/store.py` - Temporary in-memory scan and selection cache for the review screen.
+- `backend/services/source_import/models.py` - Pydantic request/response models for grants, scans, review selections, and import batch summaries.
+- `backend/services/source_import/worker.py` - Background approved-file importer; hashes only after approval, skips same-batch duplicates, writes safe provenance, and updates the manifest.
 - `desktop/src-tauri/Cargo.toml` - Adds `getrandom` for strong shell-to-sidecar grant token generation.
 - `desktop/src-tauri/src/lib.rs` - `source_import_pick_folder` command: native macOS folder picker plus shell-authenticated grant registration.
 - `desktop/scripts/dev.sh` - Shares the dev source-import grant token between the sidecar and Tauri shell.
-- `frontend/app/composables/useSourceImport.ts` - Frontend wrapper for desktop folder picking and `/api/source-import/scan`.
-- `frontend/app/components/ImportDialog.vue` - Adds the Folder mode and metadata review summary to the existing import dialog.
-- `backend/tests/test_source_import_scan.py` - Backend coverage for grant auth, metadata-only scanning, single-use tokens, limits, and symlink skips.
-- `frontend/tests/components/ImportDialog.test.ts` - Frontend coverage for the new Folder mode surface.
+- `frontend/app/composables/useSourceImport.ts` - Frontend wrapper for desktop folder picking, scan, review selection creation, import start, and import status polling.
+- `frontend/app/components/ImportDialog.vue` - Adds Folder mode, metadata review summary, exclusion controls, approved import start, and batch progress/completion UI to the existing import dialog.
+- `backend/tests/test_ingest_service.py` - Backend coverage for business document extraction into Markdown.
+- `backend/tests/test_source_import_scan.py` - Backend coverage for grant auth, metadata-only scanning, single-use tokens, limits, symlink skips, full-scan review selection, business document support counts, approved import start, duplicate skip, and safe provenance.
+- `frontend/tests/components/ImportDialog.test.ts` - Frontend coverage for Folder mode, review exclusion updates, and approved import start.
 
 Planned later files:
 
-- `backend/services/source_import/extractors.py` - Extension-to-Markdown extractor registry.
-- `backend/services/source_import/manifest.py` - Import batch manifest, provenance, and lifecycle metadata.
 - `backend/services/source_import/dedupe.py` - Approved-file hashing and duplicate/re-import comparison.
 - `backend/services/source_import/limits.py` - Scan, file, archive, and concurrency limits.
-- `backend/services/source_import/worker.py` - Bulk import queue, progress updates, cancellation, and per-file outcomes.
 
 ## API / Interface
 
-Planned REST surface:
+Implemented REST surface:
 
 ```text
 POST   /api/source-import/grants
 POST   /api/source-import/scan
 GET    /api/source-import/scans/{scan_id}
+POST   /api/source-import/scans/{scan_id}/selection
 POST   /api/source-import/scans/{scan_id}/start
 GET    /api/source-import/imports
 GET    /api/source-import/imports/{batch_id}
+```
+
+Planned lifecycle surface:
+
+```text
 POST   /api/source-import/imports/{batch_id}/rescan
 POST   /api/source-import/imports/{batch_id}/cancel
 DELETE /api/source-import/imports/{batch_id}
@@ -293,6 +320,8 @@ Backend internals may keep more technical stage names, but the frontend should p
 
 **Metadata scan cannot hash files.** Hashing reads contents, so it belongs after approval. Use metadata for pre-approval inventory and content hash for approved dedupe/re-import.
 
+**The UI preview is not the approved set.** Scan responses cap visible files for performance. The temporary backend scan record is the source for review selections so a truncated preview does not silently drop files from the approved set.
+
 **Raw local paths are too powerful for the scan API.** Even in a local-only app, a localhost endpoint that scans arbitrary paths is risky. Production scans should be tied to a trusted desktop picker grant.
 
 **Operational manifests may be more sensitive than notes.** The manifest can store absolute source roots for lifecycle actions, but Markdown notes should only store safe relative provenance by default.
@@ -313,7 +342,9 @@ Backend internals may keep more technical stage names, but the frontend should p
 
 **ZIP is a source, not just a file.** Archives need the same scan, review, approval, and guardrail model as folders. Never extract archive entries blindly.
 
-**This doc is in progress.** Step 29a exists, but later slices still own exclusions, content import, lifecycle actions, richer extractors, and batch-scoped chat.
+**Current ZIP support is inventory-only.** Single-file ZIP ingest creates a safe listing note and does not extract child files. Full archive-as-source import still needs its own scan, review, temporary extraction, and archive-child manifest behavior.
+
+**This doc is in progress.** Step 29a and 29b exist, and 29c now has reusable extractors plus the first approved folder import worker. Later slices still own full archive extraction, remove/re-import/cancel lifecycle actions, richer extractor quality, sample data, and batch-scoped chat.
 
 ## Related
 

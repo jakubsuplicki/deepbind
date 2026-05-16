@@ -10,13 +10,29 @@ from services.source_import.grants import (
     create_grant,
 )
 from services.source_import.models import (
+    SourceImportBatchSummary,
+    SourceImportStartRequest,
     SourceGrantRequest,
     SourceGrantResponse,
+    SourceSelectionRequest,
+    SourceSelectionSummary,
     SourceScanReport,
     SourceScanRequest,
 )
+from services.source_import.manifest import get_batch_summary, list_batch_summaries
 from services.source_import.scan import scan_folder
-from services.source_import.store import get_scan, new_scan_id, save_scan
+from services.source_import.selection import build_selection
+from services.source_import.store import (
+    get_scan,
+    get_scan_record,
+    get_selection,
+    new_import_batch_id,
+    new_scan_id,
+    new_selection_id,
+    save_scan,
+    save_selection,
+)
+from services.source_import.worker import start_import_batch
 
 
 router = APIRouter(prefix="/api/source-import", tags=["source-import"])
@@ -72,7 +88,7 @@ async def scan_source_endpoint(body: SourceScanRequest) -> SourceScanReport:
 
     scan_id = new_scan_id()
     try:
-        report = scan_folder(
+        scan = scan_folder(
             grant.root_path,
             scan_id=scan_id,
             include_hidden=body.include_hidden,
@@ -83,13 +99,91 @@ async def scan_source_endpoint(body: SourceScanRequest) -> SourceScanReport:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    save_scan(report)
-    return report
+    save_scan(scan)
+    return scan.report
 
 
-@router.get("/scans/{scan_id}", response_model=SourceScanReport)
+@router.get(
+    "/scans/{scan_id}",
+    response_model=SourceScanReport,
+    dependencies=[Depends(require_functional)],
+)
 async def get_source_scan_endpoint(scan_id: str) -> SourceScanReport:
     try:
         return get_scan(scan_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Scan not found")
+
+
+@router.post(
+    "/scans/{scan_id}/selection",
+    response_model=SourceSelectionSummary,
+    dependencies=[Depends(require_functional)],
+)
+async def create_source_selection_endpoint(
+    scan_id: str,
+    body: SourceSelectionRequest,
+) -> SourceSelectionSummary:
+    try:
+        scan = get_scan_record(scan_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    selection = build_selection(
+        scan,
+        body,
+        selection_id=new_selection_id(),
+    )
+    save_selection(selection)
+    return selection.summary
+
+
+@router.post(
+    "/scans/{scan_id}/start",
+    response_model=SourceImportBatchSummary,
+    dependencies=[Depends(require_functional)],
+)
+async def start_source_import_endpoint(
+    scan_id: str,
+    body: SourceImportStartRequest,
+) -> SourceImportBatchSummary:
+    try:
+        scan = get_scan_record(scan_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    try:
+        selection = get_selection(body.selection_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Selection not found")
+    if selection.summary.scan_id != scan_id:
+        raise HTTPException(status_code=400, detail="Selection does not belong to scan")
+
+    try:
+        return await start_import_batch(
+            batch_id=new_import_batch_id(),
+            scan=scan,
+            selection=selection,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get(
+    "/imports",
+    response_model=list[SourceImportBatchSummary],
+    dependencies=[Depends(require_functional)],
+)
+async def list_source_imports_endpoint() -> list[SourceImportBatchSummary]:
+    return await list_batch_summaries()
+
+
+@router.get(
+    "/imports/{batch_id}",
+    response_model=SourceImportBatchSummary,
+    dependencies=[Depends(require_functional)],
+)
+async def get_source_import_endpoint(batch_id: str) -> SourceImportBatchSummary:
+    try:
+        return await get_batch_summary(batch_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Import batch not found")

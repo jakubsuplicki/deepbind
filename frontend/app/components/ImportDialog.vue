@@ -69,6 +69,15 @@
           <span class="import-dialog__source-badge">metadata only</span>
         </div>
 
+        <label class="import-dialog__toggle">
+          <input
+            v-model="includeHiddenInFolderScan"
+            type="checkbox"
+            :disabled="folderScanning || !!folderScan"
+          />
+          <span>Include hidden files and folders</span>
+        </label>
+
         <div v-if="folderScanning" class="import-dialog__progress">
           Scanning file names, types, sizes, and folders...
         </div>
@@ -93,6 +102,56 @@
             </div>
           </div>
 
+          <div v-if="folderSelection" class="import-dialog__approval">
+            <div class="import-dialog__approval-stat">
+              <span>Selected for import</span>
+              <strong>
+                {{ folderSelection.approved_file_count }}
+                <small>{{ formatBytes(folderSelection.approved_total_size) }}</small>
+              </strong>
+            </div>
+            <div class="import-dialog__approval-stat">
+              <span>Excluded by review</span>
+              <strong>
+                {{ folderSelection.excluded_file_count }}
+                <small>{{ formatBytes(folderSelection.excluded_total_size) }}</small>
+              </strong>
+            </div>
+            <p class="import-dialog__sublabel">
+              File contents stay unread until the approved import step.
+            </p>
+          </div>
+          <div v-else-if="folderSelectionLoading" class="import-dialog__progress">
+            Updating review...
+          </div>
+
+          <div v-if="folderImport" class="import-dialog__batch">
+            <div class="import-dialog__batch-header">
+              <span>{{ folderImportActive ? 'Creating memory' : humanizeReason(folderImport.state) }}</span>
+              <strong>
+                {{ folderImport.imported_file_count }}/{{ folderImport.total_file_count }}
+              </strong>
+            </div>
+            <div class="import-dialog__batch-bar">
+              <span :style="{ width: folderImportProgressPercent }" />
+            </div>
+            <div class="import-dialog__batch-meta">
+              {{ folderImport.created_note_count }} notes
+              <span v-if="folderImport.skipped_file_count">
+                · {{ folderImport.skipped_file_count }} skipped
+              </span>
+              <span v-if="folderImport.failed_file_count">
+                · {{ folderImport.failed_file_count }} failed
+              </span>
+            </div>
+            <div v-if="folderImport.current_file" class="import-dialog__source-path">
+              {{ folderImport.current_file }}
+            </div>
+            <div class="import-dialog__source-path">
+              {{ folderImport.destination_root }}
+            </div>
+          </div>
+
           <div class="import-dialog__scan-section">
             <div class="import-dialog__scan-heading">Destination</div>
             <div class="import-dialog__source-path">{{ folderScan.proposed_destination_root }}</div>
@@ -101,13 +160,34 @@
           <div v-if="extensionRows.length" class="import-dialog__scan-section">
             <div class="import-dialog__scan-heading">File types</div>
             <div class="import-dialog__chips">
-              <span
+              <button
                 v-for="row in extensionRows"
                 :key="row.extension"
-                class="import-dialog__chip"
+                type="button"
+                class="import-dialog__chip-btn"
+                :class="{ 'import-dialog__chip-btn--excluded': isExcludedExtension(row.extension) }"
+                :disabled="folderReviewLocked"
+                @click="toggleExtensionExclusion(row.extension)"
               >
                 {{ row.extension }} {{ row.count }}
-              </span>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="folderRows.length" class="import-dialog__scan-section">
+            <div class="import-dialog__scan-heading">Folders</div>
+            <div class="import-dialog__chips">
+              <button
+                v-for="row in folderRows"
+                :key="row.relpath"
+                type="button"
+                class="import-dialog__chip-btn"
+                :class="{ 'import-dialog__chip-btn--excluded': isExcludedFolder(row.relpath) }"
+                :disabled="folderReviewLocked"
+                @click="toggleFolderExclusion(row.relpath)"
+              >
+                {{ row.relpath }} {{ row.file_count }}
+              </button>
             </div>
           </div>
 
@@ -126,11 +206,23 @@
 
           <ul class="import-dialog__scan-files">
             <li
-              v-for="file in folderScan.files.slice(0, 8)"
+              v-for="file in folderScan.files"
               :key="file.id"
               class="import-dialog__scan-file"
               :class="`import-dialog__scan-file--${file.status}`"
             >
+              <label
+                v-if="file.status === 'supported'"
+                class="import-dialog__file-toggle"
+                :title="isExcludedFile(file.id) ? 'Excluded' : 'Included'"
+              >
+                <input
+                  type="checkbox"
+                  :checked="!isExcludedFile(file.id)"
+                  :disabled="folderReviewLocked"
+                  @change="toggleFileExclusion(file.id)"
+                />
+              </label>
               <span class="import-dialog__file-name" :title="file.relpath">{{ file.relpath }}</span>
               <span class="import-dialog__file-meta">
                 {{ formatBytes(file.size) }}
@@ -218,7 +310,7 @@
       </div>
 
       <!-- Jira options -->
-      <div v-else class="import-dialog__options">
+      <div v-else-if="mode === 'jira'" class="import-dialog__options">
         <label class="import-dialog__label">Project filter (optional)</label>
         <input
           v-model="projectFilter"
@@ -303,10 +395,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useIngestStatus } from '~/composables/useIngestStatus'
 import { useSourceImport } from '~/composables/useSourceImport'
-import type { SourceGrantResponse, SourceScanReport } from '~/composables/useSourceImport'
+import type {
+  SourceGrantResponse,
+  SourceImportBatchSummary,
+  SourceScanReport,
+  SourceSelectionSummary,
+} from '~/composables/useSourceImport'
 
 const ingest = useIngestStatus()
 const sourceImport = useSourceImport()
@@ -350,6 +447,15 @@ const folderPicking = ref(false)
 const folderScanning = ref(false)
 const folderGrant = ref<SourceGrantResponse | null>(null)
 const folderScan = ref<SourceScanReport | null>(null)
+const folderSelection = ref<SourceSelectionSummary | null>(null)
+const folderSelectionLoading = ref(false)
+const folderImport = ref<SourceImportBatchSummary | null>(null)
+const folderImportStarting = ref(false)
+const includeHiddenInFolderScan = ref(false)
+const excludedFileIds = ref<string[]>([])
+const excludedExtensions = ref<string[]>([])
+const excludedFolders = ref<string[]>([])
+let folderImportPollTimer: ReturnType<typeof setTimeout> | null = null
 
 type FileState = 'pending' | 'uploading' | 'ok' | 'error'
 interface FileStatus { state: FileState; error?: string }
@@ -361,7 +467,9 @@ const recentLoading = ref(false)
 const recentError = ref('')
 
 const acceptAttr = computed(() =>
-  mode.value === 'jira' ? '.xml,.csv' : '.md,.txt,.pdf,.csv,.xml,.json'
+  mode.value === 'jira'
+    ? '.xml,.csv'
+    : '.md,.txt,.pdf,.csv,.xml,.json,.docx,.xlsx,.pptx,.html,.htm,.rtf,.eml,.zip'
 )
 
 const extensionRows = computed(() => {
@@ -378,22 +486,78 @@ const skipRows = computed(() => {
     .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
 })
 
+const folderRows = computed(() => {
+  if (!folderScan.value) return []
+  return folderScan.value.folder_summary
+    .filter(row => row.relpath !== '.')
+    .slice(0, 12)
+})
+
+const folderImportActive = computed(() =>
+  folderImportStarting.value ||
+  folderImport.value?.state === 'queued' ||
+  folderImport.value?.state === 'importing'
+)
+
+const folderImportTerminal = computed(() =>
+  !!folderImport.value &&
+  !['queued', 'importing'].includes(folderImport.value.state)
+)
+
+const folderImportProgressPercent = computed(() => {
+  if (!folderImport.value || folderImport.value.total_file_count <= 0) return '0%'
+  const done =
+    folderImport.value.imported_file_count +
+    folderImport.value.skipped_file_count +
+    folderImport.value.failed_file_count
+  return `${Math.min(100, Math.round((done / folderImport.value.total_file_count) * 100))}%`
+})
+
+const folderReviewLocked = computed(() =>
+  folderSelectionLoading.value || folderImportActive.value || folderImportTerminal.value
+)
+
 const primaryDisabled = computed(() => {
   if (mode.value === 'folder') {
-    return !folderGrant.value || folderScanning.value || folderPicking.value || !!folderScan.value
+    if (!folderGrant.value || folderScanning.value || folderPicking.value || folderImportActive.value) {
+      return true
+    }
+    if (folderScan.value) {
+      return (
+        !folderSelection.value ||
+        folderSelectionLoading.value ||
+        folderSelection.value.approved_file_count === 0 ||
+        folderImportTerminal.value
+      )
+    }
+    return false
   }
   return selectedFiles.value.length === 0 || uploading.value
 })
 
 const primaryLabel = computed(() => {
   if (mode.value === 'folder') {
-    if (folderScan.value) return 'Scan complete'
+    if (folderImportActive.value) return 'Importing...'
+    if (folderImportTerminal.value) return 'Imported'
+    if (folderScan.value) return 'Import selected'
     if (folderScanning.value) return 'Scanning...'
     return 'Scan folder'
   }
   if (selectedFiles.value.length > 1) return `Import ${selectedFiles.value.length} files`
   return 'Import'
 })
+
+function resetFolderReview() {
+  clearFolderImportPoll()
+  folderScan.value = null
+  folderSelection.value = null
+  folderSelectionLoading.value = false
+  folderImport.value = null
+  folderImportStarting.value = false
+  excludedFileIds.value = []
+  excludedExtensions.value = []
+  excludedFolders.value = []
+}
 
 function setMode(next: Mode) {
   if (mode.value === next) return
@@ -404,7 +568,8 @@ function setMode(next: Mode) {
   error.value = ''
   success.value = ''
   folderGrant.value = null
-  folderScan.value = null
+  includeHiddenInFolderScan.value = false
+  resetFolderReview()
   if (next === 'jira' && recentImports.value.length === 0) {
     loadRecentImports()
   }
@@ -482,6 +647,10 @@ async function handleImport() {
 
 async function handlePrimaryAction() {
   if (mode.value === 'folder') {
+    if (folderScan.value) {
+      await startFolderImport()
+      return
+    }
     await scanFolderSource()
     return
   }
@@ -492,7 +661,7 @@ async function chooseFolderSource() {
   folderPicking.value = true
   error.value = ''
   success.value = ''
-  folderScan.value = null
+  resetFolderReview()
   try {
     folderGrant.value = await sourceImport.pickFolderSource()
   } catch (err: unknown) {
@@ -507,8 +676,12 @@ async function scanFolderSource() {
   folderScanning.value = true
   error.value = ''
   success.value = ''
+  resetFolderReview()
   try {
-    folderScan.value = await sourceImport.scanSource(folderGrant.value.source_token)
+    folderScan.value = await sourceImport.scanSource(folderGrant.value.source_token, {
+      includeHidden: includeHiddenInFolderScan.value,
+    })
+    await refreshFolderSelection()
     success.value =
       `Scan ready: ${folderScan.value.supported_file_count} supported files, ` +
       `${folderScan.value.skipped_file_count} skipped.`
@@ -517,6 +690,109 @@ async function scanFolderSource() {
   } finally {
     folderScanning.value = false
   }
+}
+
+async function refreshFolderSelection() {
+  if (!folderScan.value) return
+  folderSelectionLoading.value = true
+  error.value = ''
+  folderImport.value = null
+  clearFolderImportPoll()
+  try {
+    folderSelection.value = await sourceImport.createSelection(folderScan.value.scan_id, {
+      excludedFileIds: excludedFileIds.value,
+      excludedExtensions: excludedExtensions.value,
+      excludedFolders: excludedFolders.value,
+    })
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'Failed to update folder review'
+  } finally {
+    folderSelectionLoading.value = false
+  }
+}
+
+async function startFolderImport() {
+  if (!folderScan.value || !folderSelection.value) return
+  folderImportStarting.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    folderImport.value = await sourceImport.startImport(
+      folderScan.value.scan_id,
+      folderSelection.value.selection_id,
+    )
+    success.value = `Import started: ${folderImport.value.total_file_count} files approved.`
+    scheduleFolderImportPoll()
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'Folder import failed to start'
+  } finally {
+    folderImportStarting.value = false
+  }
+}
+
+function clearFolderImportPoll() {
+  if (folderImportPollTimer) {
+    clearTimeout(folderImportPollTimer)
+    folderImportPollTimer = null
+  }
+}
+
+function scheduleFolderImportPoll() {
+  clearFolderImportPoll()
+  const batchId = folderImport.value?.batch_id
+  if (!batchId || folderImportTerminal.value) {
+    if (folderImport.value?.state === 'completed') {
+      success.value =
+        `Imported ${folderImport.value.imported_file_count} files ` +
+        `and created ${folderImport.value.created_note_count} notes.`
+      emit('imported', folderImport.value as unknown as Record<string, unknown>)
+    }
+    return
+  }
+  folderImportPollTimer = setTimeout(async () => {
+    try {
+      folderImport.value = await sourceImport.getImport(batchId)
+      scheduleFolderImportPoll()
+    } catch (err: unknown) {
+      error.value = err instanceof Error ? err.message : 'Failed to refresh import progress'
+    }
+  }, 900)
+}
+
+function isExcludedFile(id: string): boolean {
+  return excludedFileIds.value.includes(id)
+}
+
+function isExcludedExtension(extension: string): boolean {
+  return excludedExtensions.value.includes(extension)
+}
+
+function isExcludedFolder(relpath: string): boolean {
+  return excludedFolders.value.includes(relpath)
+}
+
+async function toggleFileExclusion(id: string) {
+  if (folderReviewLocked.value) return
+  excludedFileIds.value = toggleListValue(excludedFileIds.value, id)
+  await refreshFolderSelection()
+}
+
+async function toggleExtensionExclusion(extension: string) {
+  if (folderReviewLocked.value) return
+  excludedExtensions.value = toggleListValue(excludedExtensions.value, extension)
+  await refreshFolderSelection()
+}
+
+async function toggleFolderExclusion(relpath: string) {
+  if (folderReviewLocked.value) return
+  excludedFolders.value = toggleListValue(excludedFolders.value, relpath)
+  await refreshFolderSelection()
+}
+
+function toggleListValue(values: string[], value: string): string[] {
+  return values.includes(value)
+    ? values.filter(item => item !== value)
+    : [...values, value]
 }
 
 async function importGenericBatch() {
@@ -669,6 +945,10 @@ watch(
     }
   }
 )
+
+onUnmounted(() => {
+  clearFolderImportPoll()
+})
 </script>
 
 <style scoped>
@@ -878,6 +1158,16 @@ watch(
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.import-dialog__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  opacity: 0.78;
+}
+.import-dialog__toggle input {
+  margin: 0;
+}
 .import-dialog__scan {
   display: flex;
   flex-direction: column;
@@ -904,6 +1194,69 @@ watch(
   margin-top: 0.2rem;
   font-size: 1rem;
 }
+.import-dialog__approval {
+  padding: 0.7rem;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border-radius: 6px;
+  background: rgba(34, 197, 94, 0.045);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+.import-dialog__approval .import-dialog__sublabel {
+  grid-column: 1 / -1;
+}
+.import-dialog__approval-stat span {
+  display: block;
+  font-size: 0.68rem;
+  opacity: 0.65;
+}
+.import-dialog__approval-stat strong {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-top: 0.2rem;
+  font-size: 1rem;
+}
+.import-dialog__approval-stat small {
+  font-size: 0.68rem;
+  font-weight: 400;
+  opacity: 0.65;
+}
+.import-dialog__batch {
+  padding: 0.7rem;
+  border: 1px solid rgba(96, 165, 250, 0.38);
+  border-radius: 6px;
+  background: rgba(96, 165, 250, 0.045);
+}
+.import-dialog__batch-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.82rem;
+}
+.import-dialog__batch-header strong {
+  flex: 0 0 auto;
+}
+.import-dialog__batch-bar {
+  height: 6px;
+  margin-top: 0.5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.import-dialog__batch-bar span {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  background: #60a5fa;
+  transition: width 0.2s ease;
+}
+.import-dialog__batch-meta {
+  margin-top: 0.45rem;
+  font-size: 0.74rem;
+  opacity: 0.72;
+}
 .import-dialog__scan-section {
   padding-top: 0.25rem;
 }
@@ -923,6 +1276,25 @@ watch(
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.025);
   font-size: 0.72rem;
+}
+.import-dialog__chip-btn {
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+}
+.import-dialog__chip-btn--excluded {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
+  text-decoration: line-through;
+}
+.import-dialog__chip-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 .import-dialog__chip--warn {
   border-color: rgba(245, 158, 11, 0.45);
@@ -957,6 +1329,14 @@ watch(
 }
 .import-dialog__scan-file--skipped {
   border-left: 3px solid #64748b;
+}
+.import-dialog__file-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+.import-dialog__file-toggle input {
+  margin: 0;
 }
 .import-dialog__select,
 .import-dialog__input {

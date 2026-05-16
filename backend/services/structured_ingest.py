@@ -990,6 +990,8 @@ async def ingest_structured_file(
     target_folder: str = "knowledge",
     workspace_path: Optional[Path] = None,
     original_name: Optional[str] = None,
+    source_label: Optional[str] = None,
+    extra_frontmatter: Optional[dict] = None,
 ) -> Dict:
     """Ingest a CSV or XML file into Jarvis memory.
 
@@ -1013,6 +1015,15 @@ async def ingest_structured_file(
 
     def _write_note(filename: str, content: str) -> Path:
         from services.ingest import _unique_path
+        if extra_frontmatter or source_label:
+            from utils.markdown import add_frontmatter, parse_frontmatter
+            fm, body = parse_frontmatter(content)
+            if fm:
+                if source_label:
+                    fm["source"] = source_label
+                if extra_frontmatter:
+                    fm.update(extra_frontmatter)
+                content = add_frontmatter(body, fm)
         target = _unique_path(folder / filename)
         target.write_text(content, encoding="utf-8")
         return target
@@ -1071,6 +1082,8 @@ async def ingest_structured_file(
                     workspace_path=workspace_path,
                     sections=xml_sections,
                     job_id=None,
+                    source_label=source_label,
+                    extra_frontmatter=extra_frontmatter,
                 )
                 # Skip the global rebuild_graph below — _emit_document_sections
                 # already runs Smart Connect on the index note.
