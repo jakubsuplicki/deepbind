@@ -1,8 +1,20 @@
 ---
 title: Folder Source Import
-status: planned
+status: in-progress
 type: feature
-sources: []
+sources:
+  - backend/routers/source_import.py
+  - backend/services/source_import/grants.py
+  - backend/services/source_import/models.py
+  - backend/services/source_import/scan.py
+  - backend/services/source_import/store.py
+  - backend/tests/test_source_import_scan.py
+  - desktop/src-tauri/Cargo.toml
+  - desktop/src-tauri/src/lib.rs
+  - desktop/scripts/dev.sh
+  - frontend/app/composables/useSourceImport.ts
+  - frontend/app/components/ImportDialog.vue
+  - frontend/tests/components/ImportDialog.test.ts
 depends_on: [memory, pdf-section-split, smart-connect, retrieval-trace, desktop-shell-graduation]
 last_reviewed: 2026-05-16
 last_updated: 2026-05-16
@@ -42,6 +54,10 @@ This feature complements the existing single-file upload path documented in [mem
 - No legacy binary Office parsing for `.doc`, `.xls`, or `.ppt` in the first slice.
 - No hidden background import of every file in a selected folder without review.
 - No formal compliance claim. The feature supports a local-first privacy posture, not certification.
+
+## Implementation Status
+
+Step 29a is implemented as the first vertical slice: the desktop shell can grant a native folder selection to the backend, the backend rejects untrusted raw scan paths, and the import dialog can show a metadata-only folder inventory. Content import, exclusions, expanded document extractors, import manifests, removal, re-import, dedupe, and batch-scoped chat are still planned work.
 
 ## How It Works
 
@@ -211,28 +227,35 @@ The product should include or plan a small fictional sample business folder so d
 
 Sample data must be clearly labeled and must not auto-import without user action.
 
-## Planned Key Files
+## Key Files
 
-These files do not exist yet; they are the intended implementation shape from [Step 29](../steps/step-29-folder-source-import-demo-flow.spec.md).
+- `backend/routers/source_import.py` - REST API for trusted source grants, metadata scans, and cached scan reports.
+- `backend/services/source_import/grants.py` - Short-lived in-memory source grants created only from the trusted desktop picker path.
+- `backend/services/source_import/scan.py` - Metadata-only directory scanner; counts supported/skipped/unsupported files without opening file contents.
+- `backend/services/source_import/store.py` - Temporary in-memory scan report cache for the review screen.
+- `backend/services/source_import/models.py` - Pydantic request/response models for grants and scan reports.
+- `desktop/src-tauri/Cargo.toml` - Adds `getrandom` for strong shell-to-sidecar grant token generation.
+- `desktop/src-tauri/src/lib.rs` - `source_import_pick_folder` command: native macOS folder picker plus shell-authenticated grant registration.
+- `desktop/scripts/dev.sh` - Shares the dev source-import grant token between the sidecar and Tauri shell.
+- `frontend/app/composables/useSourceImport.ts` - Frontend wrapper for desktop folder picking and `/api/source-import/scan`.
+- `frontend/app/components/ImportDialog.vue` - Adds the Folder mode and metadata review summary to the existing import dialog.
+- `backend/tests/test_source_import_scan.py` - Backend coverage for grant auth, metadata-only scanning, single-use tokens, limits, and symlink skips.
+- `frontend/tests/components/ImportDialog.test.ts` - Frontend coverage for the new Folder mode surface.
 
-- `backend/routers/source_import.py` - REST API for scans, import batches, cancellation, removal, and re-import.
-- `backend/services/source_import/scan.py` - Metadata-only directory and archive scanner.
+Planned later files:
+
 - `backend/services/source_import/extractors.py` - Extension-to-Markdown extractor registry.
 - `backend/services/source_import/manifest.py` - Import batch manifest, provenance, and lifecycle metadata.
 - `backend/services/source_import/dedupe.py` - Approved-file hashing and duplicate/re-import comparison.
 - `backend/services/source_import/limits.py` - Scan, file, archive, and concurrency limits.
 - `backend/services/source_import/worker.py` - Bulk import queue, progress updates, cancellation, and per-file outcomes.
-- `backend/services/source_import/models.py` - Scan report, file item, import batch, and progress models.
-- `frontend/app/components/SourceImportDialog.vue` - Import flow UI for source choice, scan progress, review, import progress, completion, and lifecycle actions.
-- `frontend/app/composables/useSourceImport.ts` - API wrapper and polling/state model for scans and import batches.
-- `frontend/tests/components/SourceImportDialog.test.ts` - Frontend coverage for consent copy, review counts, exclusions, progress, skipped-file review, and lifecycle actions.
-- `backend/tests/test_source_import*.py` - Backend coverage for scan consent, extractors, duplicate handling, re-import, removal, archive guards, and provenance.
 
 ## API / Interface
 
 Planned REST surface:
 
 ```text
+POST   /api/source-import/grants
 POST   /api/source-import/scan
 GET    /api/source-import/scans/{scan_id}
 POST   /api/source-import/scans/{scan_id}/start
@@ -290,7 +313,7 @@ Backend internals may keep more technical stage names, but the frontend should p
 
 **ZIP is a source, not just a file.** Archives need the same scan, review, approval, and guardrail model as folders. Never extract archive entries blindly.
 
-**This doc is planned.** `sources` is intentionally empty in frontmatter and the registry until implementation files exist. The Step 29 spec remains the execution checklist.
+**This doc is in progress.** Step 29a exists, but later slices still own exclusions, content import, lifecycle actions, richer extractors, and batch-scoped chat.
 
 ## Related
 

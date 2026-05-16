@@ -8,7 +8,7 @@ describe('components/ImportDialog.vue', () => {
       props: { visible: true },
     })
     expect(wrapper.find('.import-dialog').exists()).toBe(true)
-    expect(wrapper.find('.import-dialog__title').text()).toBe('Import File')
+    expect(wrapper.find('.import-dialog__title').text()).toBe('Import')
   })
 
   it('does not render when visible=false', async () => {
@@ -40,6 +40,16 @@ describe('components/ImportDialog.vue', () => {
       props: { visible: true },
     })
     expect(wrapper.find('.import-dialog__dropzone').exists()).toBe(true)
+  })
+
+  it('folder mode shows source picker and hides file dropzone', async () => {
+    const wrapper = await mountSuspended(ImportDialog, {
+      props: { visible: true },
+    })
+    await wrapper.findAll('.import-dialog__mode-btn')[1]!.trigger('click')
+    expect(wrapper.find('.import-dialog__source').exists()).toBe(true)
+    expect(wrapper.find('.import-dialog__dropzone').exists()).toBe(false)
+    expect(wrapper.find('.import-dialog__hint').text()).toContain('File contents are imported only after you approve')
   })
 
   it('import button disabled when no file selected', async () => {

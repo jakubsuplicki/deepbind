@@ -162,16 +162,30 @@
         "preferences-settings",
         "ingest-benchmark"
       ],
-      "last_updated": "2026-05-05",
+      "last_updated": "2026-05-16",
       "status": "current",
       "_note_2026_04_28": "Cross-link added to ingest-benchmark (ADR 013) \u2014 sibling harness to ADR 011 latency-benchmark and ADR 010 conversation-eval, captures per-stage durations for the document-ingest pipeline (extract \u2192 section_detect \u2192 chunk \u2192 embed_batch \u2192 entity_extract) plus end-to-end wall clock under a paired bootstrap-CI gate. Baseline-0 (pdfplumber, 2026-04-28T124627Z) showed extract was 97% of end-to-end wall clock (19.7s of 20.3s on the 585-page 911 Report). Knob-1 landed: backend/services/ingest.py::_extract_pdf_text swapped pdfplumber \u2192 pypdfium2 (Apache-2.0/BSD-3, Python bindings to Google's PDFium); PyMuPDF disqualified on AGPL/commercial license. Baseline-2 honest measurement (apple-m5-20260428T135114Z.json) revealed harness was under-reporting end-to-end due to embed_batch_size=64 cap; with cap removed end-to-end is 43.1s (extract 0.9% / embed 98.8%), pypdfium2 swap saved ~17s (~30% e2e), not the 21\u00d7 the cap-bug number suggested. Quality verified \u2014 pypdfium2 produces 2.6% more chars, 15% fewer arbitrary line breaks, identical page count and key content; on multi-column tables better than pdfplumber. Knob-2 landed: chunk-level content-hash skip in embed_note_chunks reuses binary embedding blobs for unchanged chunks, only embeds new/changed text. Production fast_ingest measurements on 911Report: first ingest 25.6s (cold), re-ingest unchanged 1.4s (18.6\u00d7 faster), re-ingest with edits 2.0s (12.9\u00d7 faster). Production end-to-end (25.6s) is lighter than harness measurement (43s) because production section-splits PDFs first \u2192 3,023 chunks vs harness's 5,546-chunk whole-doc treatment; both numbers are real but measure different things.",
       "_note_2026_04_29": "ADR 013 knob-6 landed: background/lazy embedding for section-split ingest. memory_service.index_note_file gained defer_embedding kwarg; when True, embed_note + embed_note_chunks are skipped. ingest._emit_document_sections now defers embedding for index + every section then schedules ingest_jobs.schedule_embed_for_paths(paths, *, workspace_path, doc_title) which spawns a daemon thread that calls the new ingest_jobs.embed_paths(paths, *, workspace_path, job_id) coroutine sequentially (start_job/update_stage/finish_job for UI badge). User-perceived ingest of 911Report.pdf dropped 25.6s \u2192 1.53s (16.7\u00d7 faster); cumulative since pdfplumber baseline ~60s \u2192 1.53s = ~40\u00d7 user-perceived. Total compute unchanged (~26s); knob-6 is decoupling not optimization. Smart Connect on the index runs sync after the embed job is scheduled \u2014 connect_note embeds query content on the fly and reads embeddings of OTHER notes, doesn't need this document's own embeddings. fast_ingest response now includes embed_job_id alongside section_connect_job_id. Single-file ingest path (memos, short PDFs) untouched \u2014 embedding stays inline. JARVIS_DISABLE_EMBEDDINGS=1 short-circuits the scheduler so tests don't leak daemon threads. Eventual-consistency cost: notes not searchable for ~24s on a 60-section doc while embeddings catch up; UI's existing per-note 'indexing N/M' badge surfaces this. Three new tests in test_embedding_service.py covering defer skip / default regression / embed_paths catch-up.",
-      "_note_2026_05_04c": "ADR 017 \u2014 frontend icons migrated to Phosphor + Simple Icons via @nuxt/icon (offline-bundled). Inline SVGs and functional emoji replaced with <Icon> components; design rules in docs/concepts/icon-system.md."
+      "_note_2026_05_04c": "ADR 017 \u2014 frontend icons migrated to Phosphor + Simple Icons via @nuxt/icon (offline-bundled). Inline SVGs and functional emoji replaced with <Icon> components; design rules in docs/concepts/icon-system.md.",
+      "_note_2026_05_16": "ImportDialog now hosts the Step 29a Folder Source Import review surface. Existing file upload behavior is unchanged; Folder mode uses the Tauri-backed source-import grant flow and `/api/source-import/scan` to show a metadata-only inventory before any content import is implemented. Durable feature details live in docs/features/folder-source-import.md."
     },
     "folder-source-import": {
       "doc": "docs/features/folder-source-import.md",
       "type": "feature",
-      "sources": [],
+      "sources": [
+        "backend/routers/source_import.py",
+        "backend/services/source_import/grants.py",
+        "backend/services/source_import/models.py",
+        "backend/services/source_import/scan.py",
+        "backend/services/source_import/store.py",
+        "backend/tests/test_source_import_scan.py",
+        "desktop/src-tauri/Cargo.toml",
+        "desktop/src-tauri/src/lib.rs",
+        "desktop/scripts/dev.sh",
+        "frontend/app/composables/useSourceImport.ts",
+        "frontend/app/components/ImportDialog.vue",
+        "frontend/tests/components/ImportDialog.test.ts"
+      ],
       "depends_on": [
         "memory",
         "pdf-section-split",
@@ -180,8 +194,8 @@
         "desktop-shell-graduation"
       ],
       "last_updated": "2026-05-16",
-      "status": "planned",
-      "_note_2026_05_16": "Planned feature doc for Step 29. Sources intentionally empty until implementation files exist; this doc captures the product/architecture contract for consent-based folder/source import, lifecycle actions, dedupe, explicit re-import, safe removal, skipped-file review, cloud-sync placeholder handling, and sample demo data."
+      "status": "in-progress",
+      "_note_2026_05_16": "Step 29a landed: shell-authenticated source grants, metadata-only scan API, cached scan reports, macOS Tauri folder picker, basic Folder mode in ImportDialog, and focused backend/frontend tests. Later slices still own exclusions, content import, import manifests, dedupe/re-import/remove lifecycle, richer extractors, and batch-scoped chat."
     },
     "jira-ingest": {
       "doc": "docs/features/jira-ingest.md",

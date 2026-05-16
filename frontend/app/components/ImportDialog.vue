@@ -2,7 +2,7 @@
   <div class="import-dialog" v-if="visible">
     <div class="import-dialog__backdrop" @click="$emit('close')" />
     <div class="import-dialog__panel">
-      <h2 class="import-dialog__title">Import File</h2>
+      <h2 class="import-dialog__title">Import</h2>
 
       <!-- Mode switch -->
       <div class="import-dialog__modes">
@@ -12,7 +12,15 @@
           :class="{ 'import-dialog__mode-btn--active': mode === 'generic' }"
           @click="setMode('generic')"
         >
-          Generic
+          Files
+        </button>
+        <button
+          type="button"
+          class="import-dialog__mode-btn"
+          :class="{ 'import-dialog__mode-btn--active': mode === 'folder' }"
+          @click="setMode('folder')"
+        >
+          Folder
         </button>
         <button
           type="button"
@@ -29,6 +37,10 @@
           Saves the file as a note in your memory. Works for Markdown, text, PDF, CSV/XML.
           Embeddings + FTS are generated automatically.
         </template>
+        <template v-else-if="mode === 'folder'">
+          DeepFilesAI will first scan file names, types, sizes, and folders.
+          File contents are imported only after you approve.
+        </template>
         <template v-else>
           Full Jira pipeline: per-issue notes under <code>memory/jira/{PROJECT}/</code>,
           structured DB (issues, links, history), embeddings, and graph relations.
@@ -36,7 +48,106 @@
         </template>
       </p>
 
+      <div v-if="mode === 'folder'" class="import-dialog__source">
+        <div class="import-dialog__source-actions">
+          <button
+            type="button"
+            class="import-dialog__browse-btn"
+            :disabled="folderPicking || folderScanning"
+            @click="chooseFolderSource"
+          >
+            <Icon name="ph:folder-open-bold" class="icon--sm" />
+            {{ folderPicking ? 'Opening...' : 'Choose folder' }}
+          </button>
+        </div>
+
+        <div v-if="folderGrant" class="import-dialog__source-card">
+          <div>
+            <div class="import-dialog__source-name">{{ folderGrant.display_name }}</div>
+            <div class="import-dialog__source-path">{{ folderGrant.root_path }}</div>
+          </div>
+          <span class="import-dialog__source-badge">metadata only</span>
+        </div>
+
+        <div v-if="folderScanning" class="import-dialog__progress">
+          Scanning file names, types, sizes, and folders...
+        </div>
+
+        <div v-if="folderScan" class="import-dialog__scan">
+          <div class="import-dialog__scan-grid">
+            <div class="import-dialog__scan-stat">
+              <span>Supported</span>
+              <strong>{{ folderScan.supported_file_count }}</strong>
+            </div>
+            <div class="import-dialog__scan-stat">
+              <span>Unsupported</span>
+              <strong>{{ folderScan.unsupported_file_count }}</strong>
+            </div>
+            <div class="import-dialog__scan-stat">
+              <span>Skipped</span>
+              <strong>{{ folderScan.skipped_file_count }}</strong>
+            </div>
+            <div class="import-dialog__scan-stat">
+              <span>Total size</span>
+              <strong>{{ formatBytes(folderScan.total_size_seen) }}</strong>
+            </div>
+          </div>
+
+          <div class="import-dialog__scan-section">
+            <div class="import-dialog__scan-heading">Destination</div>
+            <div class="import-dialog__source-path">{{ folderScan.proposed_destination_root }}</div>
+          </div>
+
+          <div v-if="extensionRows.length" class="import-dialog__scan-section">
+            <div class="import-dialog__scan-heading">File types</div>
+            <div class="import-dialog__chips">
+              <span
+                v-for="row in extensionRows"
+                :key="row.extension"
+                class="import-dialog__chip"
+              >
+                {{ row.extension }} {{ row.count }}
+              </span>
+            </div>
+          </div>
+
+          <div v-if="skipRows.length" class="import-dialog__scan-section">
+            <div class="import-dialog__scan-heading">Skipped</div>
+            <div class="import-dialog__chips">
+              <span
+                v-for="row in skipRows"
+                :key="row.reason"
+                class="import-dialog__chip import-dialog__chip--warn"
+              >
+                {{ humanizeReason(row.reason) }} {{ row.count }}
+              </span>
+            </div>
+          </div>
+
+          <ul class="import-dialog__scan-files">
+            <li
+              v-for="file in folderScan.files.slice(0, 8)"
+              :key="file.id"
+              class="import-dialog__scan-file"
+              :class="`import-dialog__scan-file--${file.status}`"
+            >
+              <span class="import-dialog__file-name" :title="file.relpath">{{ file.relpath }}</span>
+              <span class="import-dialog__file-meta">
+                {{ formatBytes(file.size) }}
+                <span v-if="file.reason">{{ humanizeReason(file.reason) }}</span>
+                <span v-else>{{ file.status }}</span>
+              </span>
+            </li>
+          </ul>
+
+          <p v-if="folderScan.file_list_truncated" class="import-dialog__sublabel">
+            Showing the first {{ folderScan.files.length }} files from a larger scan.
+          </p>
+        </div>
+      </div>
+
       <div
+        v-else
         class="import-dialog__dropzone"
         @dragover.prevent
         @drop.prevent="handleDrop"
@@ -181,11 +292,10 @@
         <button class="import-dialog__cancel-btn" @click="$emit('close')">Cancel</button>
         <button
           class="import-dialog__import-btn"
-          :disabled="selectedFiles.length === 0 || uploading"
-          @click="handleImport"
+          :disabled="primaryDisabled"
+          @click="handlePrimaryAction"
         >
-          <template v-if="selectedFiles.length > 1">Import {{ selectedFiles.length }} files</template>
-          <template v-else>Import</template>
+          {{ primaryLabel }}
         </button>
       </div>
     </div>
@@ -195,8 +305,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useIngestStatus } from '~/composables/useIngestStatus'
+import { useSourceImport } from '~/composables/useSourceImport'
+import type { SourceGrantResponse, SourceScanReport } from '~/composables/useSourceImport'
 
 const ingest = useIngestStatus()
+const sourceImport = useSourceImport()
 
 defineProps<{
   visible: boolean
@@ -207,7 +320,7 @@ const emit = defineEmits<{
   imported: [result: Record<string, unknown>]
 }>()
 
-type Mode = 'generic' | 'jira'
+type Mode = 'generic' | 'folder' | 'jira'
 
 interface JiraImportRow {
   id: number
@@ -233,6 +346,10 @@ const projectFilter = ref('')
 const uploading = ref(false)
 const error = ref('')
 const success = ref('')
+const folderPicking = ref(false)
+const folderScanning = ref(false)
+const folderGrant = ref<SourceGrantResponse | null>(null)
+const folderScan = ref<SourceScanReport | null>(null)
 
 type FileState = 'pending' | 'uploading' | 'ok' | 'error'
 interface FileStatus { state: FileState; error?: string }
@@ -247,6 +364,37 @@ const acceptAttr = computed(() =>
   mode.value === 'jira' ? '.xml,.csv' : '.md,.txt,.pdf,.csv,.xml,.json'
 )
 
+const extensionRows = computed(() => {
+  if (!folderScan.value) return []
+  return Object.entries(folderScan.value.counts_by_extension)
+    .map(([extension, count]) => ({ extension, count }))
+    .sort((a, b) => b.count - a.count || a.extension.localeCompare(b.extension))
+})
+
+const skipRows = computed(() => {
+  if (!folderScan.value) return []
+  return Object.entries(folderScan.value.skipped_by_reason)
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
+})
+
+const primaryDisabled = computed(() => {
+  if (mode.value === 'folder') {
+    return !folderGrant.value || folderScanning.value || folderPicking.value || !!folderScan.value
+  }
+  return selectedFiles.value.length === 0 || uploading.value
+})
+
+const primaryLabel = computed(() => {
+  if (mode.value === 'folder') {
+    if (folderScan.value) return 'Scan complete'
+    if (folderScanning.value) return 'Scanning...'
+    return 'Scan folder'
+  }
+  if (selectedFiles.value.length > 1) return `Import ${selectedFiles.value.length} files`
+  return 'Import'
+})
+
 function setMode(next: Mode) {
   if (mode.value === next) return
   mode.value = next
@@ -255,6 +403,8 @@ function setMode(next: Mode) {
   fileStatuses.value = []
   error.value = ''
   success.value = ''
+  folderGrant.value = null
+  folderScan.value = null
   if (next === 'jira' && recentImports.value.length === 0) {
     loadRecentImports()
   }
@@ -327,6 +477,45 @@ async function handleImport() {
     error.value = err instanceof Error ? err.message : 'Import failed'
   } finally {
     uploading.value = false
+  }
+}
+
+async function handlePrimaryAction() {
+  if (mode.value === 'folder') {
+    await scanFolderSource()
+    return
+  }
+  await handleImport()
+}
+
+async function chooseFolderSource() {
+  folderPicking.value = true
+  error.value = ''
+  success.value = ''
+  folderScan.value = null
+  try {
+    folderGrant.value = await sourceImport.pickFolderSource()
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'Folder selection failed'
+  } finally {
+    folderPicking.value = false
+  }
+}
+
+async function scanFolderSource() {
+  if (!folderGrant.value) return
+  folderScanning.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    folderScan.value = await sourceImport.scanSource(folderGrant.value.source_token)
+    success.value =
+      `Scan ready: ${folderScan.value.supported_file_count} supported files, ` +
+      `${folderScan.value.skipped_file_count} skipped.`
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'Folder scan failed'
+  } finally {
+    folderScanning.value = false
   }
 }
 
@@ -452,6 +641,25 @@ function formatDate(iso: string): string {
   }
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  const precision = value >= 10 || unit === 0 ? 0 : 1
+  return `${value.toFixed(precision)} ${units[unit]}`
+}
+
+function humanizeReason(reason: string): string {
+  return reason
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (ch) => ch.toUpperCase())
+}
+
 // Lazy-load history when dialog becomes visible while in Jira mode.
 watch(
   () => mode.value,
@@ -537,6 +745,13 @@ watch(
   background: transparent;
   color: inherit;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.import-dialog__browse-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .import-dialog__selected {
   margin-top: 0.75rem;
@@ -623,6 +838,125 @@ watch(
   font-size: 0.75rem;
   opacity: 0.6;
   margin: 0.35rem 0 0;
+}
+.import-dialog__source {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.import-dialog__source-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+.import-dialog__source-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.import-dialog__source-name {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+.import-dialog__source-path {
+  margin-top: 0.2rem;
+  font-size: 0.74rem;
+  opacity: 0.65;
+  overflow-wrap: anywhere;
+}
+.import-dialog__source-badge {
+  flex: 0 0 auto;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid rgba(96, 165, 250, 0.5);
+  border-radius: 999px;
+  color: #93c5fd;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.import-dialog__scan {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.import-dialog__scan-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.import-dialog__scan-stat {
+  padding: 0.65rem;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.import-dialog__scan-stat span {
+  display: block;
+  font-size: 0.68rem;
+  opacity: 0.62;
+}
+.import-dialog__scan-stat strong {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 1rem;
+}
+.import-dialog__scan-section {
+  padding-top: 0.25rem;
+}
+.import-dialog__scan-heading {
+  margin-bottom: 0.35rem;
+  font-size: 0.78rem;
+  opacity: 0.7;
+}
+.import-dialog__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.import-dialog__chip {
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 0.72rem;
+}
+.import-dialog__chip--warn {
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fbbf24;
+}
+.import-dialog__scan-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 210px;
+  overflow-y: auto;
+}
+.import-dialog__scan-file {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.8rem;
+}
+.import-dialog__scan-file--supported {
+  border-left: 3px solid #22c55e;
+}
+.import-dialog__scan-file--unsupported {
+  border-left: 3px solid #f59e0b;
+}
+.import-dialog__scan-file--skipped {
+  border-left: 3px solid #64748b;
 }
 .import-dialog__select,
 .import-dialog__input {

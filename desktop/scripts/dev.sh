@@ -32,6 +32,7 @@ REPO_ROOT="$( cd -- "$DESKTOP_DIR/.." &> /dev/null && pwd )"
 VENV_PY="$REPO_ROOT/backend/.venv/bin/python"
 BACKEND_PORT="${JARVIS_DEV_PORT:-8765}"
 FRONTEND_PORT=3000
+SOURCE_IMPORT_GRANT_TOKEN="${JARVIS_SOURCE_IMPORT_GRANT_TOKEN:-dev-source-import-grant-token}"
 
 if [[ ! -x "$VENV_PY" ]]; then
     echo "error: backend venv not found at $VENV_PY" >&2
@@ -61,6 +62,7 @@ free_port "$FRONTEND_PORT" frontend
 #    PyInstaller bundle uses, so dev mode and production behave identically.
 echo "==> [1/3] starting backend (run_frozen.py) on port $BACKEND_PORT"
 JARVIS_API_PORT="$BACKEND_PORT" \
+JARVIS_SOURCE_IMPORT_GRANT_TOKEN="$SOURCE_IMPORT_GRANT_TOKEN" \
     "$VENV_PY" "$REPO_ROOT/backend/scripts/run_frozen.py" &
 BACKEND_PID=$!
 
@@ -116,4 +118,5 @@ echo "    Nuxt ready"
 cd "$DESKTOP_DIR"
 echo "==> [3/3] launching tauri dev (Rust hot-recompile + Vite HMR)"
 JARVIS_DEV_BACKEND_URL="http://127.0.0.1:$BACKEND_PORT" \
+JARVIS_SOURCE_IMPORT_GRANT_TOKEN="$SOURCE_IMPORT_GRANT_TOKEN" \
     npx tauri dev

@@ -18,6 +18,7 @@ from routers.memory import router as memory_router
 from routers.preferences import router as preferences_router
 from routers.sessions import router as sessions_router
 from routers.settings import router as settings_router
+from routers.source_import import router as source_import_router
 from routers.specialists import router as specialists_router
 from routers.workspace import router as workspace_router
 from routers.enrichment import router as enrichment_router
@@ -133,6 +134,7 @@ def create_app() -> FastAPI:
     app.include_router(graph_router)
     app.include_router(specialists_router)
     app.include_router(settings_router)
+    app.include_router(source_import_router)
     app.include_router(local_models_router)
     app.include_router(jira_router)
     app.include_router(enrichment_router)

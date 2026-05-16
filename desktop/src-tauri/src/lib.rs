@@ -34,7 +34,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     async_runtime, AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl,
     WebviewWindowBuilder,
@@ -48,6 +48,15 @@ use tokio::time::timeout;
 struct BackendConfig {
     backend_url: String,
     ws_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SourceImportGrantResponse {
+    source_token: String,
+    source_kind: String,
+    display_name: String,
+    root_path: String,
+    expires_at: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +259,41 @@ fn await_ollama_ready(addr: SocketAddr, deadline: Duration) -> Result<(), String
     ))
 }
 
+fn generate_source_import_token() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| format!("source-import token generation failed: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[cfg(target_os = "macos")]
+fn pick_folder_blocking() -> Result<String, String> {
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg("POSIX path of (choose folder with prompt \"Choose a folder to scan\")")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("folder picker failed to start: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("User canceled") || stderr.contains("-128") {
+            return Err("Folder selection cancelled".to_string());
+        }
+        return Err(format!("folder picker failed: {}", stderr.trim()));
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        return Err("Folder selection returned no path".to_string());
+    }
+    Ok(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pick_folder_blocking() -> Result<String, String> {
+    Err("Native folder picker is not available on this platform yet".to_string())
+}
+
 /// Spawn the bundled Ollama runtime as a child process. Returns the handle so
 /// the shell can kill it on exit.
 ///
@@ -385,6 +429,10 @@ async fn run_boot_sequence(app: AppHandle) {
     // -----------------------------------------------------------------
     emit_boot(&app, BootStage::new(BootPhase::SidecarStarting, "extracting inference services", 0.40));
     let shell_pid = std::process::id().to_string();
+    let source_import_token = app
+        .state::<SourceImportGrantToken>()
+        .0
+        .clone();
     let sidecar_cmd = match app.shell().sidecar("jarvis-sidecar") {
         Ok(c) => c,
         Err(e) => {
@@ -395,6 +443,7 @@ async fn run_boot_sequence(app: AppHandle) {
     let sidecar_cmd = sidecar_cmd
         .env("JARVIS_SHELL_PID", shell_pid)
         .env("JARVIS_OLLAMA_BASE_URL", &ollama_base_url)
+        .env("JARVIS_SOURCE_IMPORT_GRANT_TOKEN", &source_import_token)
         // CORS: bundled webview origin is platform-specific
         // (`tauri://localhost` on macOS, `https://tauri.localhost`
         // on Windows). Pass both so the same binary is portable.
@@ -454,6 +503,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             get_boot_state,
+            source_import_pick_folder,
             send_chat_message,
             license::license_get_state,
             license::license_install_text,
@@ -477,6 +527,12 @@ pub fn run() {
                 "initializing",
                 0.0,
             ))));
+            let source_import_token = std::env::var("JARVIS_SOURCE_IMPORT_GRANT_TOKEN")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(Ok)
+                .unwrap_or_else(generate_source_import_token)?;
+            app.manage(SourceImportGrantToken(source_import_token));
 
             // Build the window IMMEDIATELY. The page loads the splash route;
             // `useBoot` subscribes to `boot:stage` events and crossfades into
@@ -604,6 +660,45 @@ struct BackendUrlHandle(String);
 /// Loopback-only, plain HTTP, so no TLS feature flags. Shared across calls
 /// so we don't pay the per-call connection-pool setup cost.
 struct HttpClient(reqwest::Client);
+
+/// Shared secret used only between the Tauri shell and the local sidecar to
+/// turn a native picker result into a short-lived backend source grant. The
+/// frontend receives the resulting grant token, not a raw path-scanning API.
+struct SourceImportGrantToken(String);
+
+#[tauri::command]
+async fn source_import_pick_folder(
+    backend: State<'_, BackendUrlHandle>,
+    client: State<'_, HttpClient>,
+    grant_token: State<'_, SourceImportGrantToken>,
+) -> Result<SourceImportGrantResponse, String> {
+    let path = async_runtime::spawn_blocking(pick_folder_blocking)
+        .await
+        .map_err(|e| format!("folder picker task failed: {e}"))??;
+
+    let url = format!("{}/api/source-import/grants", backend.0);
+    let resp = client
+        .0
+        .post(&url)
+        .header("x-deepfiles-shell-token", grant_token.0.as_str())
+        .json(&serde_json::json!({
+            "path": path,
+            "source_kind": "local_folder",
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("source grant HTTP error: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("source grant rejected ({status}): {body}"));
+    }
+
+    resp.json::<SourceImportGrantResponse>()
+        .await
+        .map_err(|e| format!("source grant response decode failed: {e}"))
+}
 
 /// Forward a chat message payload from JS to the sidecar via plain HTTP
 /// POST instead of the WebView's WebSocket. Background: macOS WKWebView
