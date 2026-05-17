@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from services.ingest import SUPPORTED_EXTENSIONS
+from services.source_import.cloud_placeholders import (
+    ONLINE_ONLY_PLACEHOLDER_REASON,
+    detect_online_only_placeholder,
+    display_extension_for_cloud_placeholder,
+    filename_indicates_cloud_placeholder,
+)
 from services.source_import.models import (
     SourceScanFileItem,
     SourceScanFolderSummary,
@@ -140,6 +146,37 @@ def scan_folder(
         skipped_by_reason[reason] += 1
         total_size_seen += max(size, 0)
 
+    def count_seen_file() -> bool:
+        nonlocal total_files_seen, limit_hit
+        total_files_seen += 1
+        if total_files_seen > max_files:
+            limit_hit = True
+            record_skip("scan_file_limit")
+            stack.clear()
+            return False
+        return True
+
+    def add_placeholder_file(
+        *,
+        entry: os.DirEntry[str],
+        rel: str,
+        st: Optional[os.stat_result] = None,
+    ) -> None:
+        size = int(getattr(st, "st_size", 0) or 0) if st is not None else 0
+        modified_at = _iso_from_timestamp(st.st_mtime) if st is not None else None
+        extension = display_extension_for_cloud_placeholder(Path(entry.name))
+        record_skip(ONLINE_ONLY_PLACEHOLDER_REASON, size)
+        add_file_item(SourceScanFileItem(
+            id=_safe_file_id(rel),
+            relpath=rel,
+            filename=entry.name,
+            extension=extension,
+            size=size,
+            modified_at=modified_at,
+            status="skipped",
+            reason=ONLINE_ONLY_PLACEHOLDER_REASON,
+        ))
+
     while stack:
         current = stack.pop()
         try:
@@ -160,7 +197,13 @@ def scan_folder(
                         st = entry.stat(follow_symlinks=False)
                         size = st.st_size
                     except OSError:
+                        st = None
                         size = 0
+                    if filename_indicates_cloud_placeholder(path):
+                        if not count_seen_file():
+                            break
+                        add_placeholder_file(entry=entry, rel=rel, st=st)
+                        continue
                     record_skip("hidden_or_system_file", size)
                 continue
 
@@ -185,11 +228,7 @@ def scan_folder(
                 record_skip("unsupported_filesystem_entry")
                 continue
 
-            total_files_seen += 1
-            if total_files_seen > max_files:
-                limit_hit = True
-                record_skip("scan_file_limit")
-                stack.clear()
+            if not count_seen_file():
                 break
 
             try:
@@ -206,6 +245,14 @@ def scan_folder(
                     status="skipped",
                     reason="unreadable_file",
                 ))
+                continue
+
+            placeholder_reason = detect_online_only_placeholder(
+                path,
+                stat_result=st,
+            )
+            if placeholder_reason:
+                add_placeholder_file(entry=entry, rel=rel, st=st)
                 continue
 
             size = st.st_size

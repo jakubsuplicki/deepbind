@@ -185,14 +185,19 @@ async def build_system_prompt(
     user_message: str,
     workspace_path=None,
     graph_scope: Optional[str] = None,
+    import_batch_id: Optional[str] = None,
 ) -> str:
     """Build system prompt with optional context and active specialist.
 
     If graph_scope is provided, context is built from that node's
-    neighborhood instead of full-text retrieval.
+    neighborhood instead of full-text retrieval. If import_batch_id is
+    provided, context is restricted to notes created by that import batch.
     """
     prompt, _stats = await build_system_prompt_with_stats(
-        user_message, workspace_path=workspace_path, graph_scope=graph_scope,
+        user_message,
+        workspace_path=workspace_path,
+        graph_scope=graph_scope,
+        import_batch_id=import_batch_id,
     )
     return prompt
 
@@ -201,6 +206,7 @@ async def build_system_prompt_with_stats(
     user_message: str,
     workspace_path=None,
     graph_scope: Optional[str] = None,
+    import_batch_id: Optional[str] = None,
     *,
     system_prompt_budget_tokens: Optional[int] = None,
     tokenizer_id: Optional[str] = None,
@@ -280,6 +286,12 @@ async def build_system_prompt_with_stats(
     if graph_scope:
         context, trace = await build_graph_scoped_context(
             graph_scope, user_message, workspace_path=workspace_path,
+        )
+    elif import_batch_id:
+        context, _ctx_tokens, trace = await build_context(
+            user_message,
+            workspace_path=workspace_path,
+            import_batch_id=import_batch_id,
         )
     else:
         context, _ctx_tokens, trace = await build_context(

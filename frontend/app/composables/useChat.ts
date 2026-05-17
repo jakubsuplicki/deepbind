@@ -28,6 +28,7 @@ export function useChat() {
   // as cold would over-fire the surface.
   const sidecarWarm = ref(false)
   let _lastContent = ''
+  let _lastOptions: { graphScope?: string; importBatchId?: string } = {}
   // Step 28a — trace event arrives between text_delta and done; held here
   // until `done` flushes the assistant message into the history.
   let _pendingTrace: TraceItem[] | null = null
@@ -218,7 +219,10 @@ export function useChat() {
     })
   }
 
-  function sendMessage(content: string, options?: { graphScope?: string }): void {
+  function sendMessage(
+    content: string,
+    options?: { graphScope?: string; importBatchId?: string },
+  ): void {
     if (!content.trim() || isLoading.value) return
 
     // Wire-time diagnostic timestamps (Date.now() epoch ms). Three points
@@ -234,6 +238,7 @@ export function useChat() {
     // arrival - t_pre_send is large → transport-layer delay.
     const t_enter_ms = Date.now()
     _lastContent = content.trim()
+    _lastOptions = { ...(options ?? {}) }
     messages.value.push({ role: 'user', content: _lastContent, timestamp: new Date().toISOString() })
     currentResponse.value = ''
     error.value = ''
@@ -243,6 +248,7 @@ export function useChat() {
 
     const payload: Record<string, unknown> = { type: 'message', content: _lastContent, session_id: sessionId.value }
     if (options?.graphScope) payload.graph_scope = options.graphScope
+    if (options?.importBatchId) payload.import_batch_id = options.importBatchId
 
     // ADR 015 — single dispatcher (local Ollama). Attach the chosen model;
     // base_url is forwarded only when the user has set an explicit override
@@ -275,7 +281,7 @@ export function useChat() {
     }
     error.value = ''
     canRetry.value = false
-    sendMessage(_lastContent)
+    sendMessage(_lastContent, _lastOptions)
   }
 
   function disconnect(): void {

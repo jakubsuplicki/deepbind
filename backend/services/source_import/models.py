@@ -18,6 +18,14 @@ SourceImportState = Literal[
     "failed",
 ]
 SourceImportFileStatus = Literal["queued", "importing", "done", "skipped", "failed"]
+SourceImportRescanFileStatus = Literal[
+    "new",
+    "changed",
+    "unchanged",
+    "missing",
+    "unsupported",
+    "skipped",
+]
 
 
 class SourceGrantRequest(BaseModel):
@@ -124,6 +132,42 @@ class SourceImportRemoveRequest(BaseModel):
     confirm_batch_id: str = Field(min_length=4)
 
 
+class SourceImportRescanFileItem(BaseModel):
+    id: str
+    relpath: str
+    filename: str
+    extension: str
+    size: int = 0
+    modified_at: Optional[str] = None
+    status: SourceImportRescanFileStatus
+    reason: Optional[str] = None
+    previous_status: Optional[SourceImportFileStatus] = None
+    previous_size: Optional[int] = None
+    previous_modified_at: Optional[str] = None
+
+
+class SourceImportRescanReport(BaseModel):
+    batch_id: str
+    scan_id: Optional[str] = None
+    source_kind: SourceGrantKind = "local_folder"
+    source_display_name: str
+    proposed_destination_root: str
+    total_files_seen: int
+    current_supported_file_count: int
+    unsupported_file_count: int
+    skipped_file_count: int
+    unchanged_file_count: int
+    changed_file_count: int
+    new_file_count: int
+    missing_file_count: int
+    importable_file_count: int
+    importable_total_size: int
+    skipped_by_reason: dict[str, int]
+    files: list[SourceImportRescanFileItem]
+    file_list_truncated: bool = False
+    created_at: str
+
+
 class SourceImportFileOutcome(BaseModel):
     file_id: str
     relpath: str
@@ -137,6 +181,58 @@ class SourceImportFileOutcome(BaseModel):
     duplicate_of: Optional[str] = None
     content_hash: Optional[str] = None
     note_paths: list[str] = Field(default_factory=list)
+
+
+class SourceImportFileReviewItem(BaseModel):
+    file_id: str
+    relpath: str
+    filename: str
+    extension: str
+    size: int
+    modified_at: Optional[str] = None
+    status: Literal["skipped", "failed"]
+    stage: Optional[str] = None
+    reason: Optional[str] = None
+    duplicate_of: Optional[str] = None
+    note_paths: list[str] = Field(default_factory=list)
+    can_retry: bool = False
+    can_fix_locally: bool = False
+
+
+class SourceImportFileReviewReport(BaseModel):
+    batch_id: str
+    source_display_name: str
+    state: SourceImportState
+    skipped_file_count: int = 0
+    failed_file_count: int = 0
+    problem_file_count: int = 0
+    reason_counts: dict[str, int] = Field(default_factory=dict)
+    files: list[SourceImportFileReviewItem] = Field(default_factory=list)
+    file_list_truncated: bool = False
+    updated_at: str
+
+
+class SourceImportSuggestedQuestion(BaseModel):
+    question: str
+    reason: Literal["general", "file_types", "folders", "issues"] = "general"
+
+
+class SourceImportCompletionSummary(BaseModel):
+    batch_id: str
+    source_display_name: str
+    state: SourceImportState
+    destination_root: str
+    total_file_count: int
+    imported_file_count: int = 0
+    skipped_file_count: int = 0
+    failed_file_count: int = 0
+    duplicate_file_count: int = 0
+    created_note_count: int = 0
+    imported_extension_counts: dict[str, int] = Field(default_factory=dict)
+    imported_folder_counts: dict[str, int] = Field(default_factory=dict)
+    suggested_questions: list[SourceImportSuggestedQuestion] = Field(default_factory=list)
+    can_ask_about_import: bool = False
+    updated_at: str
 
 
 class SourceImportBatchSummary(BaseModel):

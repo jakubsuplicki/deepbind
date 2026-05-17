@@ -42,6 +42,18 @@ describe('useChat', () => {
     )
   })
 
+  it('sendMessage carries import batch scope when provided', () => {
+    const { init, sendMessage } = useChat()
+    init()
+    sendMessage('Which files matter most?', { importBatchId: 'import_1' })
+    expect(mockSend).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        content: 'Which files matter most?',
+        import_batch_id: 'import_1',
+      }),
+    )
+  })
+
   it('streaming chunks update currentResponse progressively', () => {
     const { init, sendMessage, currentResponse } = useChat()
     init()

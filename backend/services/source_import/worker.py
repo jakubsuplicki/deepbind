@@ -8,6 +8,11 @@ from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from services.ingest import IngestError, fast_ingest
+from services.source_import.cloud_placeholders import (
+    ONLINE_ONLY_PLACEHOLDER_REASON,
+    classify_read_error_reason,
+    detect_online_only_placeholder,
+)
 from services.source_import.manifest import (
     create_batch_manifest,
     get_batch_runtime,
@@ -189,6 +194,18 @@ async def run_import_batch(
             )
             try:
                 source_path = _safe_source_path(root, item.relpath)
+                placeholder_reason = detect_online_only_placeholder(source_path)
+                if placeholder_reason:
+                    await update_file_status(
+                        batch_id,
+                        item.file_id,
+                        "skipped",
+                        stage="skipped",
+                        reason=placeholder_reason,
+                        workspace_path=workspace_path,
+                    )
+                    continue
+
                 await update_file_status(
                     batch_id,
                     item.file_id,
@@ -207,6 +224,17 @@ async def run_import_batch(
                         reason="duplicate_content",
                         duplicate_of=duplicate_of,
                         content_hash=content_hash,
+                        workspace_path=workspace_path,
+                    )
+                    continue
+
+                if detect_online_only_placeholder(source_path):
+                    await update_file_status(
+                        batch_id,
+                        item.file_id,
+                        "skipped",
+                        stage="skipped",
+                        reason=ONLINE_ONLY_PLACEHOLDER_REASON,
                         workspace_path=workspace_path,
                     )
                     continue
@@ -250,6 +278,17 @@ async def run_import_batch(
                     batch_id,
                     "importing",
                     created_note_delta=created_notes,
+                    workspace_path=workspace_path,
+                )
+            except OSError as exc:
+                reason = classify_read_error_reason(exc)
+                is_placeholder = reason == ONLINE_ONLY_PLACEHOLDER_REASON
+                await update_file_status(
+                    batch_id,
+                    item.file_id,
+                    "skipped" if is_placeholder else "failed",
+                    stage="skipped" if is_placeholder else "failed",
+                    reason=reason,
                     workspace_path=workspace_path,
                 )
             except IngestError as exc:

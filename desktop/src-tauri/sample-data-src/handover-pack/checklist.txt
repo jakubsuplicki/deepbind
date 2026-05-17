@@ -1,0 +1,7 @@
+Northstar pilot handover checklist
+
+- Confirm the approved folder only contains pilot-safe material.
+- Import the sample folder first during training.
+- Ask the "Which files should I review first?" question after import.
+- Remove the import at the end of the demo if the workspace should stay clean.
+

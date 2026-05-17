@@ -26,6 +26,7 @@
     "externalBin": ["binaries/jarvis-sidecar"],
     "resources": {
       "binaries/ollama-runtime": "ollama-runtime",
+      "sample-data/deepfiles-demo-folder": "sample-data/deepfiles-demo-folder",
       "../../docs/THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md"
     },
     "fileAssociations": [

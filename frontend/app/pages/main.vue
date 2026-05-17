@@ -209,11 +209,18 @@ onMounted(async () => {
   // Handle graph_scope query param from "Ask about this" in graph view
   const route = useRoute()
   const graphScope = route.query.graph_scope as string | undefined
+  const importBatchId = route.query.import_batch_id as string | undefined
+  const importQuestion = route.query.q as string | undefined
   if (graphScope) {
     const label = graphScope.includes(':') ? graphScope.split(':').slice(1).join(':') : graphScope
     sendMessage(
       `Summarize the key content of "${label}" and show how it connects to other notes in my knowledge base. Focus on insights, not metadata.`,
       { graphScope },
+    )
+  } else if (importBatchId) {
+    sendMessage(
+      importQuestion || 'Summarize this import and identify the most useful things to review first.',
+      { importBatchId },
     )
   }
 })

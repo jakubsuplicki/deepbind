@@ -101,6 +101,94 @@ export interface SourceImportBatchSummary {
   finished_at?: string | null
 }
 
+export interface SourceImportFileReviewItem {
+  file_id: string
+  relpath: string
+  filename: string
+  extension: string
+  size: number
+  modified_at?: string | null
+  status: 'skipped' | 'failed'
+  stage?: string | null
+  reason?: string | null
+  duplicate_of?: string | null
+  note_paths: string[]
+  can_retry: boolean
+  can_fix_locally: boolean
+}
+
+export interface SourceImportFileReviewReport {
+  batch_id: string
+  source_display_name: string
+  state: SourceImportBatchSummary['state']
+  skipped_file_count: number
+  failed_file_count: number
+  problem_file_count: number
+  reason_counts: Record<string, number>
+  files: SourceImportFileReviewItem[]
+  file_list_truncated: boolean
+  updated_at: string
+}
+
+export interface SourceImportSuggestedQuestion {
+  question: string
+  reason: 'general' | 'file_types' | 'folders' | 'issues'
+}
+
+export interface SourceImportCompletionSummary {
+  batch_id: string
+  source_display_name: string
+  state: SourceImportBatchSummary['state']
+  destination_root: string
+  total_file_count: number
+  imported_file_count: number
+  skipped_file_count: number
+  failed_file_count: number
+  duplicate_file_count: number
+  created_note_count: number
+  imported_extension_counts: Record<string, number>
+  imported_folder_counts: Record<string, number>
+  suggested_questions: SourceImportSuggestedQuestion[]
+  can_ask_about_import: boolean
+  updated_at: string
+}
+
+export interface SourceImportRescanFileItem {
+  id: string
+  relpath: string
+  filename: string
+  extension: string
+  size: number
+  modified_at?: string | null
+  status: 'new' | 'changed' | 'unchanged' | 'missing' | 'unsupported' | 'skipped'
+  reason?: string | null
+  previous_status?: SourceImportFileOutcome['status'] | null
+  previous_size?: number | null
+  previous_modified_at?: string | null
+}
+
+export interface SourceImportRescanReport {
+  batch_id: string
+  scan_id?: string | null
+  source_kind: 'local_folder'
+  source_display_name: string
+  proposed_destination_root: string
+  total_files_seen: number
+  current_supported_file_count: number
+  unsupported_file_count: number
+  skipped_file_count: number
+  unchanged_file_count: number
+  changed_file_count: number
+  new_file_count: number
+  missing_file_count: number
+  importable_file_count: number
+  importable_total_size: number
+  skipped_by_reason: Record<string, number>
+  files: SourceImportRescanFileItem[]
+  file_list_truncated: boolean
+  created_at: string
+}
+
 export interface SourceSelectionOptions {
   excludedFileIds?: string[]
   excludedExtensions?: string[]
@@ -117,6 +205,17 @@ export function useSourceImport() {
     }
     const { invoke } = await import('@tauri-apps/api/core')
     return await invoke<SourceGrantResponse>('source_import_pick_folder')
+  }
+
+  async function pickSampleDataset(): Promise<SourceGrantResponse> {
+    const tauriWindow = typeof window === 'undefined'
+      ? undefined
+      : window as Window & { __TAURI_INTERNALS__?: unknown }
+    if (!tauriWindow?.__TAURI_INTERNALS__) {
+      throw new Error('Sample source import is available in the desktop app.')
+    }
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<SourceGrantResponse>('source_import_pick_sample_dataset')
   }
 
   async function scanSource(
@@ -171,6 +270,26 @@ export function useSourceImport() {
     )
   }
 
+  async function getImportCompletion(
+    batchId: string,
+  ): Promise<SourceImportCompletionSummary> {
+    return await $fetch<SourceImportCompletionSummary>(
+      apiUrl(`/api/source-import/imports/${encodeURIComponent(batchId)}/completion`),
+    )
+  }
+
+  async function getImportReview(
+    batchId: string,
+    limit = 100,
+  ): Promise<SourceImportFileReviewReport> {
+    return await $fetch<SourceImportFileReviewReport>(
+      apiUrl(`/api/source-import/imports/${encodeURIComponent(batchId)}/review`),
+      {
+        query: { limit },
+      },
+    )
+  }
+
   async function cancelImport(batchId: string): Promise<SourceImportBatchSummary> {
     return await $fetch<SourceImportBatchSummary>(
       apiUrl(`/api/source-import/imports/${encodeURIComponent(batchId)}/cancel`),
@@ -195,12 +314,25 @@ export function useSourceImport() {
     )
   }
 
+  async function rescanImport(batchId: string): Promise<SourceImportRescanReport> {
+    return await $fetch<SourceImportRescanReport>(
+      apiUrl(`/api/source-import/imports/${encodeURIComponent(batchId)}/rescan`),
+      {
+        method: 'POST',
+      },
+    )
+  }
+
   return {
     cancelImport,
     createSelection,
+    getImportCompletion,
+    getImportReview,
     getImport,
+    pickSampleDataset,
     pickFolderSource,
     removeImport,
+    rescanImport,
     scanSource,
     startImport,
   }

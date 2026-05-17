@@ -1,7 +1,7 @@
 import hmac
 import os
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from services.entitlement_gate import require_functional
 from services.source_import.grants import (
@@ -15,10 +15,13 @@ from services.source_import.cancellation import (
 )
 from services.source_import.models import (
     SourceImportBatchSummary,
+    SourceImportCompletionSummary,
     SourceImportRemoveRequest,
+    SourceImportRescanReport,
     SourceImportStartRequest,
     SourceGrantRequest,
     SourceGrantResponse,
+    SourceImportFileReviewReport,
     SourceSelectionRequest,
     SourceSelectionSummary,
     SourceScanReport,
@@ -28,7 +31,16 @@ from services.source_import.removal import (
     SourceImportRemovalConflict,
     remove_import_batch,
 )
-from services.source_import.manifest import get_batch_summary, list_batch_summaries
+from services.source_import.rescan import (
+    SourceImportRescanConflict,
+    rescan_import_batch,
+)
+from services.source_import.manifest import (
+    get_batch_completion_summary,
+    get_batch_file_review,
+    get_batch_summary,
+    list_batch_summaries,
+)
 from services.source_import.scan import scan_folder
 from services.source_import.selection import build_selection
 from services.source_import.store import (
@@ -196,6 +208,60 @@ async def get_source_import_endpoint(batch_id: str) -> SourceImportBatchSummary:
         return await get_batch_summary(batch_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Import batch not found")
+
+
+@router.get(
+    "/imports/{batch_id}/completion",
+    response_model=SourceImportCompletionSummary,
+    dependencies=[Depends(require_functional)],
+)
+async def get_source_import_completion_endpoint(
+    batch_id: str,
+) -> SourceImportCompletionSummary:
+    try:
+        return await get_batch_completion_summary(batch_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+
+
+@router.get(
+    "/imports/{batch_id}/review",
+    response_model=SourceImportFileReviewReport,
+    dependencies=[Depends(require_functional)],
+)
+async def get_source_import_review_endpoint(
+    batch_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> SourceImportFileReviewReport:
+    try:
+        return await get_batch_file_review(batch_id, limit=limit)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+
+
+@router.post(
+    "/imports/{batch_id}/rescan",
+    response_model=SourceImportRescanReport,
+    dependencies=[Depends(require_functional)],
+)
+async def rescan_source_import_endpoint(batch_id: str) -> SourceImportRescanReport:
+    try:
+        report, import_scan = await rescan_import_batch(
+            batch_id=batch_id,
+            scan_id=new_scan_id(),
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    except SourceImportRescanConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="Selected source is unreadable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if import_scan is not None:
+        save_scan(import_scan)
+    return report
 
 
 @router.post(

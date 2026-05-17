@@ -8,6 +8,7 @@ sources:
   - backend/services/chat/context_strategy.py
   - backend/services/ollama_dispatcher.py
   - backend/services/system_prompt.py
+  - backend/services/context_builder.py
   - backend/services/compaction_service.py
   - backend/services/token_counting.py
   - backend/services/retrieval/sessions.py
@@ -21,7 +22,7 @@ sources:
   - frontend/app/components/ChatPanel.vue
   - frontend/app/components/TraceList.vue
 depends_on: [retrieval, sessions, specialists, preferences-settings, local-models]
-last_updated: 2026-05-05
+last_updated: 2026-05-17
 last_reviewed: 2026-05-05
 ---
 
@@ -60,7 +61,7 @@ For each user message the backend (`_handle_message` in `chat.py`) runs the foll
 
 1. **Dispatcher construction** — The WS message carries `model` (the user-pinned chat model, e.g. `qwen3:8b`) and `base_url` (the Ollama endpoint — defaults to the loopback runtime spawned by the Tauri shell). `_make_llm` constructs an [`OllamaDispatcher`](../../backend/services/ollama_dispatcher.py); there is no provider branch and no API-key path because Ollama runs in-process on the user's machine.
 2. **Context assembly via `ContextStrategy`** — Session history is fetched via `session_service.get_messages` and passed through the active `ContextStrategy` (default: `FullHistoryStrategy`, which is identity). The strategy is the swap point through which compaction and retrieval-substitution alternatives plug in (ADR 010). Production today behaves exactly as before; the eval harness injects alternative strategies via the `context_strategy` parameter on `_handle_message`.
-3. **Context retrieval — retrieval lives in the user-message position** (per ADR 009 amendment 2026-05-01). `build_system_prompt_with_stats` calls `build_context` (from `context_builder`) to find relevant notes and returns the resulting block as `stats["retrieval_block"]` — a separate string, not embedded in the system prompt. The chat router glues it onto the just-sent user message via `attach_retrieval_to_user_message` before dispatch. The system prompt itself stays byte-identical session-long (persona + specialist directives + JARVIS extensions + language reminder), so Ollama's KV cache prefix-match reuses the long stable prefix on warm follow-up turns. Empirically this collapses warm TTFT from ~7.7 s to under 1 s on M5 24 GB. If a specialist is active, its prompt fragment is injected into the (still-stable) system prompt first.
+3. **Context retrieval — retrieval lives in the user-message position** (per ADR 009 amendment 2026-05-01). `build_system_prompt_with_stats` calls `build_context` (from `context_builder`) to find relevant notes and returns the resulting block as `stats["retrieval_block"]` — a separate string, not embedded in the system prompt. The chat router glues it onto the just-sent user message via `attach_retrieval_to_user_message` before dispatch. The system prompt itself stays byte-identical session-long (persona + specialist directives + JARVIS extensions + language reminder), so Ollama's KV cache prefix-match reuses the long stable prefix on warm follow-up turns. Empirically this collapses warm TTFT from ~7.7 s to under 1 s on M5 24 GB. If a specialist is active, its prompt fragment is injected into the (still-stable) system prompt first. When the payload carries `import_batch_id`, `build_context` restricts retrieval context to notes recorded in that folder import manifest and the trace marks those entries with `via="import_batch"`.
 4. **Tool filtering** — `specialist_service.filter_tools` narrows the full `TOOLS` list to those permitted by the active specialist (or all tools if none is active).
 5. **First LLM stream** — `OllamaDispatcher.stream_response` opens an `ollama.AsyncClient.chat(stream=True)` request. The adapter maps Ollama chunks to `StreamEvent` shapes (`text_delta`, `tool_use`, `done`, `error`) so the chat router and WS event consumers see the same surface they did before ADR 015. The request always sets `think: False` — without this, qwen3-family models emit a `<think>…</think>` block before the actual answer, the response surfaces as `message.thinking` tokens with empty `message.content` for several seconds per turn (5–10 s of dead air visible to the user). Models that don't natively support `think` (gemma4, ministral, devstral, gpt-oss in our catalog) silently ignore the flag — no harm. Models that *should* honor it but don't (the chain-of-thought leak class) are caught by the chat-model-probe and not auto-recommended on first run.
 6. **Tool call handling** — If the model emits a tool call, the dispatcher synthesizes a stable id (Ollama's wire format omits ids), accumulates the JSON `function.arguments`, and yields a `tool_use` `StreamEvent` once complete. The router executes the tool, appends both the assistant tool-use block and the tool result to the message list, and calls `_stream_follow_up` to get the LLM's next response. The Anthropic-style tool_result block is converted to Ollama's `{role: "tool", tool_name, content}` shape at the dispatcher boundary.
@@ -196,7 +197,7 @@ The "single hard-coded canonical model" choice is the wrong shape long-term — 
 - `backend/services/warmup_service.py` — Sidecar ML warmup orchestrator. Sequential daemon-thread warmup of fastembed embedder + reranker, spaCy NER, and HF tokenizers at FastAPI lifespan startup; thread-safe status snapshot; `start()` is idempotent; per-component failures don't abort the loop.
 - `frontend/app/composables/useWarmup.ts` — Singleton poll loop for `/api/health/warm`. Backoff schedule (250 ms → 2 s steady-state), stops on `ready: true`. Started once at `default.vue::onMounted`; multiple consumers share the same reactive refs.
 - `frontend/app/composables/useWebSocket.ts` — Persistent WebSocket with bidirectional ping/pong heartbeat, stale-socket detection on send (force-reconnect with frame queueing), exponential-backoff reconnect for involuntary closes, and multi-listener message dispatch
-- `frontend/app/composables/useChat.ts` — Conversation state manager; maps raw WebSocket events to UI state; handles retry logic
+- `frontend/app/composables/useChat.ts` — Conversation state manager; maps raw WebSocket events to UI state, carries optional graph/import retrieval scopes, and handles retry logic.
 - `frontend/app/components/ChatPanel.vue` — Message list, streaming cursor, typing indicator, tool activity label, error bar with retry, URL ingest toolbar
 
 ## API / Interface
@@ -218,7 +219,8 @@ All frames are JSON. The client sends; the server sends back a stream of events 
                               // default catalog pick.
   "base_url"?: string,        // Ollama endpoint override; defaults to the
                               // bundled-runtime loopback.
-  "graph_scope"?: object      // optional retrieval-scoping payload
+  "graph_scope"?: string,     // optional graph node retrieval scope
+  "import_batch_id"?: string  // optional folder-import retrieval scope
 }
 
 // Heartbeat — frontend sends this every 25s
@@ -315,7 +317,7 @@ const {
   sessionId,       // Ref<string>
   isConnected,     // Ref<boolean>
   init,            // () => void — call once on mount
-  sendMessage,     // (content: string) => void
+  sendMessage,     // (content: string, options?: { graphScope?: string; importBatchId?: string }) => void
   retry,           // () => void — resends last message
   disconnect,      // () => void
 } = useChat()

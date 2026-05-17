@@ -59,6 +59,8 @@ struct SourceImportGrantResponse {
     expires_at: String,
 }
 
+const SOURCE_IMPORT_SAMPLE_DATASET: &str = "sample-data/deepfiles-demo-folder";
+
 // ---------------------------------------------------------------------------
 // Boot-stage tracking — drives the splash screen.
 // ---------------------------------------------------------------------------
@@ -504,6 +506,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_boot_state,
             source_import_pick_folder,
+            source_import_pick_sample_dataset,
             send_chat_message,
             license::license_get_state,
             license::license_install_text,
@@ -676,6 +679,56 @@ async fn source_import_pick_folder(
         .await
         .map_err(|e| format!("folder picker task failed: {e}"))??;
 
+    create_source_import_grant_for_path(
+        path,
+        backend.inner(),
+        client.inner(),
+        grant_token.inner(),
+    )
+    .await
+}
+
+fn sample_dataset_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join(SOURCE_IMPORT_SAMPLE_DATASET));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SOURCE_IMPORT_SAMPLE_DATASET));
+
+    for candidate in candidates {
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(format!(
+        "sample dataset not found at resource or dev path: {SOURCE_IMPORT_SAMPLE_DATASET}"
+    ))
+}
+
+#[tauri::command]
+async fn source_import_pick_sample_dataset(
+    app: AppHandle,
+    backend: State<'_, BackendUrlHandle>,
+    client: State<'_, HttpClient>,
+    grant_token: State<'_, SourceImportGrantToken>,
+) -> Result<SourceImportGrantResponse, String> {
+    let path = sample_dataset_path(&app)?;
+    create_source_import_grant_for_path(
+        path.to_string_lossy().to_string(),
+        backend.inner(),
+        client.inner(),
+        grant_token.inner(),
+    )
+    .await
+}
+
+async fn create_source_import_grant_for_path(
+    path: String,
+    backend: &BackendUrlHandle,
+    client: &HttpClient,
+    grant_token: &SourceImportGrantToken,
+) -> Result<SourceImportGrantResponse, String> {
     let url = format!("{}/api/source-import/grants", backend.0);
     let resp = client
         .0

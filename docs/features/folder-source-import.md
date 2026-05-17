@@ -6,15 +6,20 @@ sources:
   - backend/main.py
   - backend/models/database.py
   - backend/routers/source_import.py
+  - backend/routers/chat.py
+  - backend/services/context_builder.py
   - backend/services/ingest.py
+  - backend/services/system_prompt.py
   - backend/services/structured_ingest.py
   - backend/services/source_import/__init__.py
   - backend/services/source_import/cancellation.py
+  - backend/services/source_import/cloud_placeholders.py
   - backend/services/source_import/extractors.py
   - backend/services/source_import/grants.py
   - backend/services/source_import/manifest.py
   - backend/services/source_import/models.py
   - backend/services/source_import/removal.py
+  - backend/services/source_import/rescan.py
   - backend/services/source_import/scan.py
   - backend/services/source_import/selection.py
   - backend/services/source_import/store.py
@@ -22,14 +27,21 @@ sources:
   - backend/tests/test_ingest_service.py
   - backend/tests/test_source_import_scan.py
   - desktop/src-tauri/Cargo.toml
+  - desktop/src-tauri/tauri.conf.json
   - desktop/src-tauri/src/lib.rs
+  - desktop/src-tauri/sample-data/deepfiles-demo-folder/README.md
+  - desktop/src-tauri/sample-data-src/handover-pack/data-dictionary.md
   - desktop/scripts/dev.sh
+  - frontend/app/composables/useChat.ts
   - frontend/app/composables/useSourceImport.ts
+  - frontend/app/pages/main.vue
+  - frontend/app/pages/memory.vue
   - frontend/app/components/ImportDialog.vue
+  - frontend/tests/composables/useChat.test.ts
   - frontend/tests/components/ImportDialog.test.ts
 depends_on: [memory, pdf-section-split, smart-connect, retrieval-trace, desktop-shell-graduation]
 last_reviewed: 2026-05-16
-last_updated: 2026-05-16
+last_updated: 2026-05-17
 ---
 
 # Folder Source Import
@@ -73,9 +85,13 @@ Step 29a and 29b are implemented as the first reviewable slice: the desktop shel
 
 Step 29c now has a first approved-import path. Reusable business document extractors are wired into `fast_ingest`, folder scans count DOCX, XLSX, PPTX, HTML/HTM, RTF, EML, and ZIP inventory as supported, and `POST /api/source-import/scans/{scan_id}/start` creates a SQLite-backed import manifest before a background worker reads only the approved files. Imported notes receive safe source-relative provenance, destination folders get a short batch disambiguator, and duplicate files inside the batch are skipped by content hash after approval.
 
-Step 29d now has its first lifecycle controls. Active imports can be cancelled through `POST /api/source-import/imports/{batch_id}/cancel`; the worker lets the current file finish, skips queued files with a clear `cancelled_by_user` reason, and leaves any completed notes visible. On sidecar startup, any batch left in `queued`, `importing`, `cancelling`, or `removing` is marked `interrupted` so the UI can show it as partial instead of pretending it completed. Completed/failed/cancelled/interrupted batches can be removed through `POST /api/source-import/imports/{batch_id}/remove`, which archives only notes recorded in that batch manifest, clears derived rows for those note paths, marks the batch `removed`, and leaves unrelated notes alone.
+Step 29d now has its first lifecycle controls. Active imports can be cancelled through `POST /api/source-import/imports/{batch_id}/cancel`; the worker lets the current file finish, skips queued files with a clear `cancelled_by_user` reason, and leaves any completed notes visible. On sidecar startup, any batch left in `queued`, `importing`, `cancelling`, or `removing` is marked `interrupted` so the UI can show it as partial instead of pretending it completed. Completed/failed/cancelled/interrupted batches can be removed through `POST /api/source-import/imports/{batch_id}/remove`, which archives only notes recorded in that batch manifest, clears derived rows for those note paths, marks the batch `removed`, and leaves unrelated notes alone. Those same terminal batches can be scanned again through `POST /api/source-import/imports/{batch_id}/rescan`; rescan performs another metadata-only folder scan from the manifest source root, reports new/changed/unchanged/missing files, and caches only new/changed candidates for a separate approved import. The completion surface also calls `GET /api/source-import/imports/{batch_id}/review` when a batch has skipped or failed files, then shows a capped manifest-backed review with relative file paths, reasons, and plain-language next steps.
 
-Still planned: full ZIP-as-container child extraction, explicit re-import/rescan, richer skipped/failed review, sample dataset, and batch-scoped chat/retrieval actions.
+Step 29e now has a first buyer-demo completion moment. `GET /api/source-import/imports/{batch_id}/completion` builds a deterministic manifest-backed summary with imported/skipped/failed/duplicate counts, top imported file types/folders, and suggested questions. `ImportDialog` keeps folder completion open on the Memory page, shows those questions, and routes a clicked question to chat with `import_batch_id`; the chat context builder then restricts retrieval context to notes created by that batch and emits trace rows with `via="import_batch"`.
+
+Step 29f now has a first sample-data and cloud-placeholder slice. The desktop bundle includes a fictional `deepfiles-demo-folder` app resource with a proposal, meeting notes, spreadsheet CSV, deck-style saved HTML page, email export, saved vendor page, RTF risk note, and small ZIP handover pack. `source_import_pick_sample_dataset` resolves the bundled resource, asks the sidecar for a normal short-lived local-folder grant, and `ImportDialog` exposes it as "Use sample data" beside the native folder picker. The sample still follows the same scan, review, approve, and import flow; it is never auto-scanned or auto-imported. The scan and worker also detect known online-only cloud placeholder markers from metadata, such as iCloud placeholder filenames, Windows cloud-file attributes, and explicit cloud-provider extended attributes, then skip those files with `online_only_placeholder` instead of trying to read or download them.
+
+Still planned: full ZIP-as-container child extraction, cross-batch duplicate policy, and a richer hybrid-scored import-scope retrieval polish pass.
 
 ## How It Works
 
@@ -156,7 +172,7 @@ Every import should create a local operational manifest keyed by `import_batch_i
 
 SQLite operational tables are the preferred storage for this manifest. Markdown remains canonical for user knowledge; the manifest exists for lifecycle, progress, dedupe, and recovery. If the manifest is lost, imported Markdown should still be usable after reindex, but remove/re-import history may be unavailable.
 
-The first manifest implementation lives in `source_import_batches` and `source_import_files`, created by `models.database.init_database()`. It stores the local source root as operational metadata, the approved relative paths, per-file status/stage/reason, content hashes after approval, generated note paths, and batch-level counts. The frontend polls `GET /api/source-import/imports/{batch_id}` for progress.
+The first manifest implementation lives in `source_import_batches` and `source_import_files`, created by `models.database.init_database()`. It stores the local source root as operational metadata, the approved relative paths, per-file status/stage/reason, content hashes after approval, generated note paths, and batch-level counts. The frontend polls `GET /api/source-import/imports/{batch_id}` for progress and uses `GET /api/source-import/imports/{batch_id}/review` for a capped skipped/failed file review.
 
 The manifest exists so the app can:
 
@@ -177,17 +193,19 @@ The current implementation exposes removal on the folder-import completion surfa
 
 ### Re-import and duplicate handling
 
-Continuous sync is deferred, but explicit re-import/rescan should be supported if the manifest has enough metadata.
+Continuous sync is deferred, but explicit re-import/rescan is supported for completed, failed, cancelled, and interrupted batches if the manifest still has the local source root.
 
 Re-import should compare source-relative path, size, modified time, and content hash when available:
 
 - unchanged files are skipped
-- changed files update or replace the prior generated note for that source-relative path
+- changed files are imported into a new approved batch in the current slice
 - new files are imported
 - missing files are reported, not automatically deleted in the first slice
 - duplicate files are detected by content hash after approval
 
 Do not hash during metadata scan, because hashing reads file contents. Hashing is allowed during the approved import.
+
+The current rescan service compares source-relative paths and file metadata only. It marks unchanged files as informational, reports missing files without deleting existing Markdown, treats previously failed/cancelled files as importable again, and creates a temporary scan containing only new or changed candidates. The UI shows the "Since last import" counts and uses the same `/selection` and `/start` path before any file contents are read. This means changed files create fresh notes under a new batch-disambiguated destination today; replacing or updating the prior generated note for the same source-relative path remains future policy work.
 
 The current worker performs first-slice duplicate handling inside one batch: once an approved file is successfully imported, later approved files with the same SHA-256 content hash are marked `skipped` with `duplicate_content` and a `duplicate_of` relative path. Cross-batch dedupe and explicit "import duplicates anyway" remain future policy work.
 
@@ -198,6 +216,20 @@ Folder import can take long enough that shutdown and cancellation need first-cla
 Cancellation should stop queued files, let the active file finish or fail cleanly, keep completed notes visible, and mark the batch as partial/cancelled until the user removes or re-imports it.
 
 The current implementation persists cancellation as manifest state rather than only an in-memory task flag. `source_import.cancellation` marks `queued`/`importing` batches as `cancelling`; the worker checks between files, marks unprocessed files skipped, and finishes the batch as `cancelled`. FastAPI startup calls `mark_interrupted_batches()` after database initialization so orphaned active manifests become `interrupted` and removable on the next launch.
+
+### Skipped and failed review
+
+Skipped and failed files are intentionally visible product state. The current review endpoint reads from the batch manifest, groups problem files by reason, caps the returned file list, and marks whether each file is likely retryable or locally fixable. `ImportDialog` shows that review on the completion surface with relative file paths and user-facing next steps such as downloading an online-only file, unlocking a protected document, checking local permissions, or scanning again after a cancellation.
+
+This review covers approved files that were skipped or failed during the import worker, including duplicate-content skips and extractor/read failures. Pre-approval scan exclusions such as unsupported file types and hidden/system folders are visible on the active scan review screen; persisting those scan-only rows as import history is still a later policy choice.
+
+### Completion summary and scoped questions
+
+The first completion summary is deterministic and manifest-backed. It does not call a model to invent prompts; it derives the buyer-facing summary from `source_import_files` outcomes: successful imports, created notes, duplicate-content skips, skipped/failed counts, top extensions, and top source-relative folders.
+
+Suggested questions are generated from those same manifest facts. General prompts are always present when at least one file imported, and extra prompts appear for spreadsheets/structured data, documents, decks, emails, skipped/failed files, and the highest-volume folder. Clicking a question navigates to chat with the current `import_batch_id`.
+
+The chat path treats that batch id as a retrieval scope. `build_context()` asks the manifest for created note paths, reads only those Markdown notes, ranks them with a small deterministic keyword-overlap pass, wraps them in the normal `<retrieved_note>` evidence tags, and emits retrieval traces marked `via="import_batch"`. This is intentionally narrower than the full hybrid retrieval pipeline so the demo answer stays grounded in the folder the buyer just approved. A later polish pass can add hybrid scoring inside that scope without changing the user contract.
 
 ### Destination naming and collisions
 
@@ -249,38 +281,50 @@ The importer should normalize and safely slug Unicode filenames, handle case-ins
 
 The product should include or plan a small fictional sample business folder so demos do not depend on a prospect handing over real files. The sample dataset should include representative files such as a proposal, meeting notes, spreadsheet, deck, email export, saved page, and small archive.
 
-Sample data must be clearly labeled and must not auto-import without user action.
+The current sample lives under `desktop/src-tauri/sample-data/deepfiles-demo-folder/` and is bundled through `tauri.conf.json` as an app resource, not inside the Python sidecar. The Rust shell resolves that resource path and creates the same backend source grant used by the native folder picker. Sample data is clearly labeled, fictional, and must not auto-import without user action.
 
 ## Key Files
 
 - `backend/main.py` - Marks orphaned active source-import batches interrupted during sidecar startup.
 - `backend/models/database.py` - Creates the SQLite operational manifest tables used by source import batches and per-file outcomes.
-- `backend/routers/source_import.py` - REST API for trusted source grants, metadata scans, cached scan reports, review selections, import start, import listing, and batch status.
+- `backend/routers/source_import.py` - REST API for trusted source grants, metadata scans, cached scan reports, review selections, import start, import listing, batch status, completion summaries, skipped/failed review, rescan, cancellation, and removal.
 - `backend/services/ingest.py` - Existing single-file ingest path now delegates business document formats to the reusable extractor registry and accepts source-relative provenance for approved folder imports.
 - `backend/services/structured_ingest.py` - CSV/XML ingest path; applies folder-import provenance to generated structured-data notes when called through `fast_ingest`.
+- `backend/routers/chat.py` - Accepts `import_batch_id` in chat payloads so questions launched from an import completion can stay scoped to that batch.
+- `backend/services/context_builder.py` - Builds import-scoped evidence from manifest-created note paths when chat receives an import batch scope.
+- `backend/services/system_prompt.py` - Threads the optional import batch scope through context assembly while keeping retrieval outside the stable system-prompt prefix.
 - `backend/services/source_import/__init__.py` - Source-import package note that tracks the current slice boundaries.
 - `backend/services/source_import/cancellation.py` - Import lifecycle service for requesting cancellation of active batches.
+- `backend/services/source_import/cloud_placeholders.py` - Conservative metadata-only cloud placeholder detection and read-error classification for OneDrive/iCloud/Dropbox/Google Drive style synced folders.
 - `backend/services/source_import/extractors.py` - Best-effort business document extractor registry for DOCX, XLSX, PPTX, HTML/HTM, RTF, EML, and safe ZIP inventory notes.
 - `backend/services/source_import/grants.py` - Short-lived in-memory source grants created only from the trusted desktop picker path.
-- `backend/services/source_import/manifest.py` - SQLite-backed import batch manifest, progress summary, cancellation state, interrupted-batch recovery, per-file status, generated note path, and content-hash storage.
+- `backend/services/source_import/manifest.py` - SQLite-backed import batch manifest, progress summary, completion summary, cancellation state, interrupted-batch recovery, per-file status, skipped/failed review reports, generated note path, and content-hash storage.
 - `backend/services/source_import/removal.py` - Import lifecycle cleanup; archives only manifest-created notes and clears derived rows for those note paths.
+- `backend/services/source_import/rescan.py` - Metadata-only re-scan comparison for previous import batches; reports new/changed/unchanged/missing files and caches only new/changed candidates for approval.
 - `backend/services/source_import/scan.py` - Metadata-only directory scanner; counts supported/skipped/unsupported files without opening file contents.
 - `backend/services/source_import/selection.py` - Applies review exclusions to the full cached scan and creates the approved-file handoff record.
 - `backend/services/source_import/store.py` - Temporary in-memory scan and selection cache for the review screen.
-- `backend/services/source_import/models.py` - Pydantic request/response models for grants, scans, review selections, and import batch summaries.
+- `backend/services/source_import/models.py` - Pydantic request/response models for grants, scans, review selections, import batch summaries, completion summaries, skipped/failed review reports, and rescan reports.
 - `backend/services/source_import/worker.py` - Background approved-file importer; hashes only after approval, skips same-batch duplicates, honors cancellation between files, writes safe provenance, and updates the manifest.
 - `desktop/src-tauri/Cargo.toml` - Adds `getrandom` for strong shell-to-sidecar grant token generation.
-- `desktop/src-tauri/src/lib.rs` - `source_import_pick_folder` command: native macOS folder picker plus shell-authenticated grant registration.
+- `desktop/src-tauri/tauri.conf.json` - Bundles the fictional sample business folder as an app resource separate from the sidecar binary.
+- `desktop/src-tauri/src/lib.rs` - `source_import_pick_folder` and `source_import_pick_sample_dataset` commands: native macOS folder picker or bundled sample-data resolver plus shell-authenticated grant registration.
+- `desktop/src-tauri/sample-data/deepfiles-demo-folder/` - Fictional demo folder used to show source import without a prospect handing over real files.
+- `desktop/src-tauri/sample-data-src/handover-pack/` - Maintainer source files for the small sample ZIP inventory package.
 - `desktop/scripts/dev.sh` - Shares the dev source-import grant token between the sidecar and Tauri shell.
-- `frontend/app/composables/useSourceImport.ts` - Frontend wrapper for desktop folder picking, scan, review selection creation, import start, import status polling, cancellation, and import removal.
-- `frontend/app/components/ImportDialog.vue` - Adds Folder mode, metadata review summary, exclusion controls, approved import start, batch progress/completion UI, active-import cancellation, and completed-import removal to the existing import dialog.
+- `frontend/app/composables/useChat.ts` - Sends `import_batch_id` when the user asks a suggested import question from completion.
+- `frontend/app/composables/useSourceImport.ts` - Frontend wrapper for desktop folder picking, sample-data picking, scan, review selection creation, import start, import status polling, completion summary, skipped/failed review, cancellation, rescan, and import removal.
+- `frontend/app/pages/main.vue` - Reads `import_batch_id` and `q` query params to start an import-scoped chat turn from the completion surface.
+- `frontend/app/pages/memory.vue` - Keeps the folder import dialog open after terminal folder batches so the buyer can see the completion summary and suggested questions.
+- `frontend/app/components/ImportDialog.vue` - Adds Folder mode, sample-data source selection, metadata review summary, exclusion controls, approved import start, batch progress/completion UI, completion summary with suggested questions, skipped/failed file review, active-import cancellation, completed-import removal, and scan-again/import-changes controls to the existing import dialog.
 - `backend/tests/test_ingest_service.py` - Backend coverage for business document extraction into Markdown.
-- `backend/tests/test_source_import_scan.py` - Backend coverage for grant auth, metadata-only scanning, single-use tokens, limits, symlink skips, full-scan review selection, business document support counts, approved import start, duplicate skip, safe provenance, cancellation, interrupted recovery, and remove-import cleanup.
-- `frontend/tests/components/ImportDialog.test.ts` - Frontend coverage for Folder mode, review exclusion updates, approved import start, active-import cancellation, and completed-import removal.
+- `backend/tests/test_source_import_scan.py` - Backend coverage for grant auth, metadata-only scanning, single-use tokens, limits, symlink skips, full-scan review selection, business document support counts, bundled sample dataset scanability, approved import start, duplicate skip, safe provenance, completion summaries, import-scoped chat context, skipped/failed review, cancellation, interrupted recovery, remove-import cleanup, and rescan/import-changes behavior.
+- `frontend/tests/components/ImportDialog.test.ts` - Frontend coverage for Folder mode, sample-data selection, review exclusion updates, approved import start, completion summary display, skipped/failed review display, active-import cancellation, completed-import removal, and scan-again/import-changes controls.
+- `frontend/tests/composables/useChat.test.ts` - Pins that chat payloads carry `import_batch_id` when a suggested import question is launched.
 
 Planned later files:
 
-- `backend/services/source_import/dedupe.py` - Approved-file hashing and duplicate/re-import comparison.
+- `backend/services/source_import/dedupe.py` - Future cross-batch duplicate policy and optional duplicate-import handling.
 - `backend/services/source_import/limits.py` - Scan, file, archive, and concurrency limits.
 
 ## API / Interface
@@ -295,14 +339,11 @@ POST   /api/source-import/scans/{scan_id}/selection
 POST   /api/source-import/scans/{scan_id}/start
 GET    /api/source-import/imports
 GET    /api/source-import/imports/{batch_id}
+GET    /api/source-import/imports/{batch_id}/completion
+GET    /api/source-import/imports/{batch_id}/review
+POST   /api/source-import/imports/{batch_id}/rescan
 POST   /api/source-import/imports/{batch_id}/cancel
 POST   /api/source-import/imports/{batch_id}/remove
-```
-
-Planned lifecycle surface:
-
-```text
-POST   /api/source-import/imports/{batch_id}/rescan
 ```
 
 `POST /api/source-import/scan` should receive a trusted picker grant/source token plus scan options, not an arbitrary raw path from the browser UI.
@@ -341,9 +382,15 @@ Backend internals may keep more technical stage names, but the frontend should p
 
 **Import-scoped questions need import-scoped retrieval.** Without `import_batch_id` scope, the demo can accidentally answer from older unrelated memory, making the product look less trustworthy.
 
+**Current import-scoped retrieval is deliberately narrow.** Suggested questions read only notes recorded in the import manifest. They do not yet run the full hybrid retrieval stack inside the batch, so very large batches may get a deterministic keyword-ranked subset rather than the absolute best semantic subset.
+
 **Cancelled and interrupted imports are normal states.** A laptop can sleep, the app can close, and users can cancel. These states are removable, and cancelled batches keep already-created notes visible until the user removes the import.
 
-**Cloud-sync folders are local paths, not connectors.** OneDrive, SharePoint, Dropbox, and Google Drive desktop sync are supported only insofar as they expose local files. Online-only placeholders should be skipped with a clear reason; the app should not download them in this slice.
+**Rescan is not sync.** `POST /api/source-import/imports/{batch_id}/rescan` is a user-triggered metadata comparison. It does not watch folders, delete missing files, hash contents, or replace older generated notes automatically.
+
+**Skipped review is manifest-backed.** `GET /api/source-import/imports/{batch_id}/review` reports skipped/failed outcomes from approved import files. It does not yet persist every unsupported or scan-skipped pre-approval row as batch history.
+
+**Cloud-sync folders are local paths, not connectors.** OneDrive, SharePoint, Dropbox, and Google Drive desktop sync are supported only insofar as they expose local files. The scanner and worker now perform conservative metadata-only placeholder detection for `.icloud` placeholder filenames, Windows cloud-file attributes, and explicit cloud-provider xattrs, then report `online_only_placeholder` with a fixable review hint. Detection is best-effort and local-only; the app does not call cloud APIs or hydrate files.
 
 **Removal is not just file deletion.** Deleting generated Markdown is not enough. SQLite rows, embeddings, chunks, graph edges, and suggestions derived from those notes must be removed or refreshed.
 
@@ -357,7 +404,7 @@ Backend internals may keep more technical stage names, but the frontend should p
 
 **Current ZIP support is inventory-only.** Single-file ZIP ingest creates a safe listing note and does not extract child files. Full archive-as-source import still needs its own scan, review, temporary extraction, and archive-child manifest behavior.
 
-**This doc is in progress.** Step 29a and 29b exist, 29c now has reusable extractors plus the first approved folder import worker, and 29d now covers removal, cancellation, and interrupted-batch recovery. Later slices still own full archive extraction, explicit re-import/rescan, richer extractor quality, sample data, and batch-scoped chat.
+**This doc is in progress.** Step 29a and 29b exist, 29c now has reusable extractors plus the first approved folder import worker, 29d covers removal, cancellation, interrupted-batch recovery, skipped/failed review, and explicit scan-again/import-changes, 29e has deterministic completion summaries plus import-scoped suggested questions, and 29f has the first bundled fictional sample dataset plus conservative online-only placeholder handling. Later slices still own full archive extraction, richer extractor quality, cross-batch duplicate policy, and hybrid-scored batch retrieval polish.
 
 ## Related
 

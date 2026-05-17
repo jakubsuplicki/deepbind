@@ -191,9 +191,12 @@ async function onSearch(query: string, mode: SearchMode = 'keyword') {
   await loadNotes()
 }
 
-async function onImported() {
-  showImport.value = false
-  await loadNotes()
+async function onImported(result?: Record<string, unknown>) {
+  const isFolderImport = !!result && typeof result.batch_id === 'string'
+  if (!isFolderImport) {
+    showImport.value = false
+  }
+  await Promise.all([loadNotes(), loadOrphans(), loadCoverage()])
 }
 
 async function onUrlImported() {

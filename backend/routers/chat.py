@@ -748,6 +748,7 @@ async def _handle_message(
     content: str,
     get_llm: callable = None,
     graph_scope: Optional[str] = None,
+    import_batch_id: Optional[str] = None,
     client_api_key: Optional[str] = None,
     provider: Optional[str] = None,
     model: Optional[str] = None,
@@ -796,6 +797,7 @@ async def _handle_message(
     system_prompt, prompt_stats = await build_system_prompt_with_stats(
         content,
         graph_scope=graph_scope,
+        import_batch_id=import_batch_id,
         system_prompt_budget_tokens=sp_budget_tokens,
         tokenizer_id=sp_tokenizer_id,
     )
@@ -1149,6 +1151,7 @@ async def _process_chat_payload(
             session_id = requested_sid
 
     graph_scope = data.get("graph_scope") or None
+    import_batch_id = data.get("import_batch_id") or None
 
     # Wire-time diagnostic — `wire_time_ms` is the headline number
     # (now - t_pre_send), and the three sub-fields decompose where the
@@ -1205,7 +1208,9 @@ async def _process_chat_payload(
 
     await _handle_message(
         websocket, session_id, content, get_llm,
-        graph_scope=graph_scope, client_api_key=client_api_key,
+        graph_scope=graph_scope,
+        import_batch_id=import_batch_id,
+        client_api_key=client_api_key,
         provider=client_provider, model=client_model,
         base_url=client_base_url,
     )

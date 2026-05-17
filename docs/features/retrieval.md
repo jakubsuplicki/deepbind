@@ -10,7 +10,7 @@ sources:
   - backend/services/chunking.py
 depends_on: [memory, knowledge-graph, preferences-settings]
 last_reviewed: 2026-04-26
-last_updated: 2026-04-26
+last_updated: 2026-05-17
 ---
 
 # Hybrid Retrieval Pipeline
@@ -71,6 +71,12 @@ Cosine is disabled when `JARVIS_DISABLE_EMBEDDINGS=1` (test mode), when `fastemb
 
 `build_graph_scoped_context(node_id, user_message)` builds context from a node's graph neighborhood only, without FTS search. It fetches depth-2 neighbors, reads up to 5 note neighbors (500 chars each), and wraps them in `<retrieved_note>` tags. This is used when the user navigates to chat from the graph's node detail panel ("Ask about this").
 
+### Import-scoped context
+
+`build_context(..., import_batch_id=...)` builds context only from Markdown notes recorded in a Folder Source Import manifest. It asks `source_import.manifest` for the batch summary, collects `note_paths` from successfully imported files, reads those notes from memory, ranks a capped set with deterministic keyword overlap, and wraps the selected notes in the same `<retrieved_note>` evidence tags used by normal retrieval.
+
+This path is deliberately narrower than the full hybrid retrieval pipeline. It exists so suggested questions launched from the folder-import completion surface stay grounded in the just-approved source rather than older unrelated memory. Trace rows use `via="import_batch"` and `signals={"import_scope": ...}` so the UI can show that the answer used import-scoped evidence.
+
 ## Key Files
 
 - `backend/services/retrieval/__init__.py` — Public surface: re-exports `retrieve` so callers keep using `from services.retrieval import retrieve` after the package split.
@@ -107,10 +113,11 @@ Returns an empty list if `query` is blank or whitespace-only, or if no signal pr
 async def build_context(
     user_message: str,
     workspace_path=None,
+    import_batch_id: Optional[str] = None,
 ) -> Tuple[Optional[str], int, List[dict]]:
 ```
 
-Returns `(context_text, token_estimate, trace)`. `context_text` is a ready-to-inject context string or `None` if no relevant notes or preferences were found. `token_estimate` is `len(text) // 4` or `0`. `trace` is the per-note retrieval trace described below — empty list when nothing was retrieved. This return value is used directly by the chat service when constructing the system prompt sent to Claude; the chat router then forwards `trace` to the WebSocket as a `trace` event.
+Returns `(context_text, token_estimate, trace)`. `context_text` is a ready-to-inject context string or `None` if no relevant notes or preferences were found. `token_estimate` is `len(text) // 4` or `0`. `trace` is the per-note retrieval trace described below — empty list when nothing was retrieved. When `import_batch_id` is supplied, context is restricted to notes created by that source import batch. This return value is used directly by the chat service when constructing the system prompt sent to Claude; the chat router then forwards `trace` to the WebSocket as a `trace` event.
 
 ### `build_graph_scoped_context()`
 
@@ -174,5 +181,6 @@ Defined at module top of `retrieval/pipeline.py`. Changing these rebalances sign
 - **Recency is only a tiebreaker.** Two notes with the same fused score are sorted by `updated_at` descending, but recency has zero influence when scores differ. A months-old note with a high BM25 + cosine match will still outrank yesterday's weakly matching note.
 - **Silent note-read failures.** If a note's path exists in the index but the file is missing on disk, `build_context()` skips it without logging. A partially deleted workspace can silently reduce context quality.
 - **Specialist scoping strips graph-scored notes too.** `_scope_results()` filters by path prefix without distinguishing signal sources. A graph-scored note that lives outside a specialist's declared sources will be dropped even if it's highly relevant.
+- **Import-scoped context bypasses hybrid scoring today.** The folder-import completion flow reads manifest-created notes directly and ranks them with keyword overlap. This keeps buyer-demo answers grounded in the approved batch, but it is not yet the same as running BM25 + cosine + graph fusion inside a batch filter.
 - **500-character truncation is unconditional.** Long notes are always cut at 500 characters regardless of how short the rest of the context is. There is no fill-up logic that uses the remaining token budget.
 - **`workspace_path` threading.** Both functions accept a `workspace_path` argument that is forwarded to all service calls. Passing `None` in both calls is safe — each underlying service falls back to its own default — but passing mismatched values between `retrieve()` and `build_context()` would silently produce results from different workspaces.

@@ -10,8 +10,12 @@ import aiosqlite
 from config import get_settings
 from services.source_import.models import (
     SourceImportBatchSummary,
+    SourceImportCompletionSummary,
+    SourceImportFileReviewItem,
+    SourceImportFileReviewReport,
     SourceImportFileOutcome,
     SourceImportFileStatus,
+    SourceImportSuggestedQuestion,
     SourceImportState,
     SourceScanFileItem,
     SourceScanResult,
@@ -129,6 +133,185 @@ def _outcome_from_row(row: aiosqlite.Row) -> SourceImportFileOutcome:
 
 
 _ACTIVE_STATES = ("queued", "importing", "cancelling", "removing")
+_REVIEW_STATUSES = ("skipped", "failed")
+_COMPLETION_QUESTION_LIMIT = 5
+
+
+def _normalise_reason(reason: Optional[str], fallback: str) -> str:
+    if not reason:
+        return fallback
+    cleaned = reason.strip()
+    return cleaned or fallback
+
+
+def _can_retry_file(*, status: str, reason: Optional[str]) -> bool:
+    reason_text = (reason or "").lower()
+    if "duplicate_content" in reason_text:
+        return False
+    if status == "failed":
+        return True
+    return any(
+        marker in reason_text
+        for marker in (
+            "app_closed_during_import",
+            "cancelled_by_user",
+            "no longer available",
+            "outside the selected folder",
+            "permission",
+            "unreadable",
+        )
+    )
+
+
+def _can_fix_locally(*, reason: Optional[str]) -> bool:
+    reason_text = (reason or "").lower()
+    return any(
+        marker in reason_text
+        for marker in (
+            "encrypted",
+            "file_too_large",
+            "limit",
+            "no longer available",
+            "online_only",
+            "outside the selected folder",
+            "password",
+            "permission",
+            "placeholder",
+            "source file",
+            "unreadable",
+            "unsupported",
+        )
+    )
+
+
+def _review_item_from_outcome(
+    item: SourceImportFileOutcome,
+) -> SourceImportFileReviewItem:
+    if item.status not in {"skipped", "failed"}:
+        raise ValueError("Review items must be skipped or failed")
+    review_status = "skipped" if item.status == "skipped" else "failed"
+    return SourceImportFileReviewItem(
+        file_id=item.file_id,
+        relpath=item.relpath,
+        filename=item.filename,
+        extension=item.extension,
+        size=item.size,
+        modified_at=item.modified_at,
+        status=review_status,
+        stage=item.stage,
+        reason=item.reason,
+        duplicate_of=item.duplicate_of,
+        note_paths=item.note_paths,
+        can_retry=_can_retry_file(status=item.status, reason=item.reason),
+        can_fix_locally=_can_fix_locally(reason=item.reason),
+    )
+
+
+def _parent_folder(relpath: str) -> str:
+    parent = Path(relpath).parent.as_posix()
+    return "." if parent in {"", "."} else parent
+
+
+def _sorted_counts(counts: dict[str, int], *, limit: int = 6) -> dict[str, int]:
+    return dict(
+        sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    )
+
+
+def _add_question(
+    questions: list[SourceImportSuggestedQuestion],
+    seen: set[str],
+    question: str,
+    *,
+    reason: str = "general",
+) -> None:
+    if question in seen or len(questions) >= _COMPLETION_QUESTION_LIMIT:
+        return
+    seen.add(question)
+    questions.append(
+        SourceImportSuggestedQuestion(
+            question=question,
+            reason=reason,  # type: ignore[arg-type]
+        )
+    )
+
+
+def _build_suggested_questions(
+    *,
+    imported_extension_counts: dict[str, int],
+    imported_folder_counts: dict[str, int],
+    skipped_file_count: int,
+    failed_file_count: int,
+) -> list[SourceImportSuggestedQuestion]:
+    questions: list[SourceImportSuggestedQuestion] = []
+    seen: set[str] = set()
+    extensions = set(imported_extension_counts)
+
+    _add_question(
+        questions,
+        seen,
+        "What are the main themes across this import?",
+    )
+    _add_question(
+        questions,
+        seen,
+        "Which files should I review first?",
+    )
+    _add_question(
+        questions,
+        seen,
+        "What risks, open questions, or decisions appear across these files?",
+    )
+
+    if extensions & {".csv", ".xlsx", ".xml", ".json"}:
+        _add_question(
+            questions,
+            seen,
+            "Which files mention pricing, budget, dates, or status?",
+            reason="file_types",
+        )
+    if extensions & {".docx", ".pdf", ".txt", ".rtf", ".md"}:
+        _add_question(
+            questions,
+            seen,
+            "Summarize the requirements and commitments in these documents.",
+            reason="file_types",
+        )
+    if ".pptx" in extensions:
+        _add_question(
+            questions,
+            seen,
+            "What are the main points across the decks?",
+            reason="file_types",
+        )
+    if ".eml" in extensions:
+        _add_question(
+            questions,
+            seen,
+            "What decisions or follow-ups appear in the emails?",
+            reason="file_types",
+        )
+    if skipped_file_count or failed_file_count:
+        _add_question(
+            questions,
+            seen,
+            "What important files were skipped or failed, and what should I fix?",
+            reason="issues",
+        )
+
+    top_folder = next(
+        (folder for folder in imported_folder_counts if folder != "."),
+        "",
+    )
+    if top_folder:
+        _add_question(
+            questions,
+            seen,
+            f"Summarize the {top_folder} folder.",
+            reason="folders",
+        )
+
+    return questions
 
 
 async def create_batch_manifest(
@@ -275,6 +458,125 @@ async def get_batch_summary(
         started_at=batch["started_at"],
         updated_at=batch["updated_at"],
         finished_at=batch["finished_at"],
+    )
+
+
+async def get_batch_file_review(
+    batch_id: str,
+    *,
+    limit: int = 100,
+    workspace_path: Optional[Path] = None,
+) -> SourceImportFileReviewReport:
+    db_path = await _ensure_db(workspace_path)
+    capped_limit = min(max(limit, 1), 500)
+    async with aiosqlite.connect(str(db_path)) as db:
+        db.row_factory = aiosqlite.Row
+        batch_cursor = await db.execute(
+            "SELECT * FROM source_import_batches WHERE batch_id = ?",
+            (batch_id,),
+        )
+        batch = await batch_cursor.fetchone()
+        if batch is None:
+            raise KeyError("Import batch not found")
+
+        status_placeholders = ",".join("?" for _ in _REVIEW_STATUSES)
+        counts_cursor = await db.execute(
+            f"""
+            SELECT status, reason, COUNT(1) AS count
+            FROM source_import_files
+            WHERE batch_id = ?
+              AND status IN ({status_placeholders})
+            GROUP BY status, reason
+            """,
+            (batch_id, *_REVIEW_STATUSES),
+        )
+        count_rows = await counts_cursor.fetchall()
+
+        files_cursor = await db.execute(
+            f"""
+            SELECT * FROM source_import_files
+            WHERE batch_id = ?
+              AND status IN ({status_placeholders})
+            ORDER BY CASE status WHEN 'failed' THEN 0 ELSE 1 END, id
+            LIMIT ?
+            """,
+            (batch_id, *_REVIEW_STATUSES, capped_limit + 1),
+        )
+        file_rows = await files_cursor.fetchall()
+
+    skipped_file_count = 0
+    failed_file_count = 0
+    reason_counts: dict[str, int] = {}
+    for row in count_rows:
+        count = int(row["count"] or 0)
+        status = str(row["status"])
+        reason = _normalise_reason(row["reason"], status)
+        reason_counts[reason] = reason_counts.get(reason, 0) + count
+        if status == "skipped":
+            skipped_file_count += count
+        elif status == "failed":
+            failed_file_count += count
+
+    truncated = len(file_rows) > capped_limit
+    outcomes = [_outcome_from_row(row) for row in file_rows[:capped_limit]]
+    return SourceImportFileReviewReport(
+        batch_id=batch["batch_id"],
+        source_display_name=batch["source_display_name"],
+        state=batch["state"],
+        skipped_file_count=skipped_file_count,
+        failed_file_count=failed_file_count,
+        problem_file_count=skipped_file_count + failed_file_count,
+        reason_counts=dict(sorted(reason_counts.items())),
+        files=[_review_item_from_outcome(item) for item in outcomes],
+        file_list_truncated=truncated,
+        updated_at=batch["updated_at"],
+    )
+
+
+async def get_batch_completion_summary(
+    batch_id: str,
+    *,
+    workspace_path: Optional[Path] = None,
+) -> SourceImportCompletionSummary:
+    summary = await get_batch_summary(batch_id, workspace_path=workspace_path)
+    imported_extension_counts: dict[str, int] = {}
+    imported_folder_counts: dict[str, int] = {}
+    duplicate_file_count = 0
+
+    for item in summary.files:
+        if item.status == "done":
+            extension = item.extension or "(none)"
+            imported_extension_counts[extension] = (
+                imported_extension_counts.get(extension, 0) + 1
+            )
+            folder = _parent_folder(item.relpath)
+            imported_folder_counts[folder] = imported_folder_counts.get(folder, 0) + 1
+        elif item.status == "skipped" and "duplicate_content" in (item.reason or ""):
+            duplicate_file_count += 1
+
+    sorted_extensions = _sorted_counts(imported_extension_counts)
+    sorted_folders = _sorted_counts(imported_folder_counts)
+    return SourceImportCompletionSummary(
+        batch_id=summary.batch_id,
+        source_display_name=summary.source_display_name,
+        state=summary.state,
+        destination_root=summary.destination_root,
+        total_file_count=summary.total_file_count,
+        imported_file_count=summary.imported_file_count,
+        skipped_file_count=summary.skipped_file_count,
+        failed_file_count=summary.failed_file_count,
+        duplicate_file_count=duplicate_file_count,
+        created_note_count=summary.created_note_count,
+        imported_extension_counts=sorted_extensions,
+        imported_folder_counts=sorted_folders,
+        suggested_questions=_build_suggested_questions(
+            imported_extension_counts=sorted_extensions,
+            imported_folder_counts=sorted_folders,
+            skipped_file_count=summary.skipped_file_count,
+            failed_file_count=summary.failed_file_count,
+        ),
+        can_ask_about_import=summary.imported_file_count > 0,
+        updated_at=summary.updated_at,
     )
 
 
