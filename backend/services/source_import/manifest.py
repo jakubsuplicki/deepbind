@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS source_import_batches (
     batch_id            TEXT PRIMARY KEY,
     scan_id             TEXT NOT NULL,
     selection_id        TEXT NOT NULL,
+    duplicate_policy    TEXT NOT NULL DEFAULT 'skip',
     source_kind         TEXT NOT NULL DEFAULT 'local_folder',
     source_display_name TEXT NOT NULL,
     source_root_path    TEXT NOT NULL,
@@ -72,6 +73,8 @@ CREATE INDEX IF NOT EXISTS idx_source_import_files_batch
     ON source_import_files(batch_id);
 CREATE INDEX IF NOT EXISTS idx_source_import_files_status
     ON source_import_files(status);
+CREATE INDEX IF NOT EXISTS idx_source_import_files_content_hash
+    ON source_import_files(content_hash);
 """
 
 
@@ -321,6 +324,7 @@ async def create_batch_manifest(
     selection: SourceSelectionRecord,
     files: Iterable[SourceScanFileItem],
     destination_root: str,
+    duplicate_policy: str = "skip",
     workspace_path: Optional[Path] = None,
 ) -> SourceImportBatchSummary:
     db_path = await _ensure_db(workspace_path)
@@ -331,16 +335,17 @@ async def create_batch_manifest(
         await db.execute(
             """
             INSERT INTO source_import_batches(
-                batch_id, scan_id, selection_id, source_kind, source_display_name,
-                source_root_path, destination_root, state, total_file_count,
+                batch_id, scan_id, selection_id, duplicate_policy, source_kind,
+                source_display_name, source_root_path, destination_root, state, total_file_count,
                 total_bytes, created_note_count, started_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 batch_id,
                 scan.report.scan_id,
                 selection.summary.selection_id,
+                duplicate_policy,
                 scan.report.source_kind,
                 scan.report.source_display_name,
                 scan.report.source_root_path,
@@ -442,6 +447,7 @@ async def get_batch_summary(
         batch_id=batch["batch_id"],
         scan_id=batch["scan_id"],
         selection_id=batch["selection_id"],
+        duplicate_policy=batch["duplicate_policy"] or "skip",
         source_kind=batch["source_kind"],
         source_display_name=batch["source_display_name"],
         destination_root=_public_destination(batch["destination_root"]),

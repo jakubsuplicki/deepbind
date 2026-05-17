@@ -5,7 +5,8 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
-SourceGrantKind = Literal["local_folder"]
+SourceGrantKind = Literal["local_folder", "local_archive"]
+SourceDuplicatePolicy = Literal["skip", "import"]
 SourceImportState = Literal[
     "queued",
     "importing",
@@ -126,6 +127,7 @@ class SourceSelectionRecord(BaseModel):
 
 class SourceImportStartRequest(BaseModel):
     selection_id: str = Field(min_length=4)
+    duplicate_policy: SourceDuplicatePolicy = "skip"
 
 
 class SourceImportRemoveRequest(BaseModel):
@@ -239,6 +241,7 @@ class SourceImportBatchSummary(BaseModel):
     batch_id: str
     scan_id: str
     selection_id: str
+    duplicate_policy: SourceDuplicatePolicy = "skip"
     source_kind: SourceGrantKind = "local_folder"
     source_display_name: str
     destination_root: str

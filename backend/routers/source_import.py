@@ -41,7 +41,7 @@ from services.source_import.manifest import (
     get_batch_summary,
     list_batch_summaries,
 )
-from services.source_import.scan import scan_folder
+from services.source_import.scan import scan_source
 from services.source_import.selection import build_selection
 from services.source_import.store import (
     get_scan,
@@ -89,7 +89,7 @@ async def create_source_grant_endpoint(
 
     return SourceGrantResponse(
         source_token=grant.token,
-        source_kind="local_folder",
+        source_kind=grant.source_kind,
         display_name=grant.display_name,
         root_path=str(grant.root_path),
         expires_at=grant.expires_at.isoformat(),
@@ -109,8 +109,9 @@ async def scan_source_endpoint(body: SourceScanRequest) -> SourceScanReport:
 
     scan_id = new_scan_id()
     try:
-        scan = scan_folder(
+        scan = scan_source(
             grant.root_path,
+            source_kind=grant.source_kind,
             scan_id=scan_id,
             include_hidden=body.include_hidden,
             max_files=body.max_files,
@@ -184,6 +185,7 @@ async def start_source_import_endpoint(
             batch_id=new_import_batch_id(),
             scan=scan,
             selection=selection,
+            duplicate_policy=body.duplicate_policy,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

@@ -272,7 +272,7 @@ CREATE INDEX IF NOT EXISTS idx_eq_status_created ON enrichment_queue(status, cre
 """
 
 
-_VALID_TABLES = {"notes", "note_chunks"}
+_VALID_TABLES = {"notes", "note_chunks", "source_import_batches"}
 
 
 async def _column_exists(db, table: str, column: str) -> bool:
@@ -347,4 +347,9 @@ async def init_database(db_path: Path) -> None:
         # Step 29c: local-folder source import operational manifests.
         from services.source_import.manifest import SOURCE_IMPORT_SQL
         await db.executescript(SOURCE_IMPORT_SQL)
+        if not await _column_exists(db, "source_import_batches", "duplicate_policy"):
+            await db.execute(
+                "ALTER TABLE source_import_batches "
+                "ADD COLUMN duplicate_policy TEXT NOT NULL DEFAULT 'skip'"
+            )
         await db.commit()

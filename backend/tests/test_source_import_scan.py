@@ -1,5 +1,7 @@
 import asyncio
+import io
 import os
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -36,14 +38,23 @@ def _clear_source_import_state(monkeypatch):
     clear_scans_for_tests()
 
 
-async def _grant(client, path: Path) -> str:
+async def _grant_source(
+    client,
+    path: Path,
+    *,
+    source_kind: str = "local_folder",
+) -> dict:
     r = await client.post(
         "/api/source-import/grants",
-        json={"path": str(path), "source_kind": "local_folder"},
+        json={"path": str(path), "source_kind": source_kind},
         headers={"x-deepfiles-shell-token": "test-shell-token"},
     )
     assert r.status_code == 200
-    return r.json()["source_token"]
+    return r.json()
+
+
+async def _grant(client, path: Path) -> str:
+    return (await _grant_source(client, path))["source_token"]
 
 
 async def _wait_for_import(client, batch_id: str) -> dict:
@@ -243,7 +254,6 @@ async def test_scan_marks_business_document_types_supported(client, tmp_path):
         "page.html",
         "memo.rtf",
         "message.eml",
-        "archive.zip",
     ]:
         (tmp_path / name).write_text("placeholder", encoding="utf-8")
     token = await _grant(client, tmp_path)
@@ -252,7 +262,7 @@ async def test_scan_marks_business_document_types_supported(client, tmp_path):
 
     assert r.status_code == 200
     body = r.json()
-    assert body["supported_file_count"] == 7
+    assert body["supported_file_count"] == 6
     assert body["unsupported_file_count"] == 0
     assert set(body["counts_by_extension"]) >= {
         ".docx",
@@ -261,8 +271,181 @@ async def test_scan_marks_business_document_types_supported(client, tmp_path):
         ".html",
         ".rtf",
         ".eml",
-        ".zip",
     }
+
+
+@pytest.mark.anyio
+async def test_scan_expands_zip_archive_children_without_opening_members(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    archive = tmp_path / "handover.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Docs/brief.md", "# Brief\n\nArchive body")
+        zf.writestr("Data/table.csv", "name,value\nA,1\n")
+        zf.writestr("Images/logo.png", b"not supported")
+
+    def _fail_member_open(*_args, **_kwargs):
+        raise AssertionError("scan extracted archive member contents")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", _fail_member_open)
+
+    token = await _grant(client, tmp_path)
+    r = await client.post("/api/source-import/scan", json={"source_token": token})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["supported_file_count"] == 2
+    assert body["unsupported_file_count"] == 1
+    assert body["skipped_file_count"] == 0
+    assert body["counts_by_extension"] == {".csv": 1, ".md": 1, ".png": 1}
+    assert {row["relpath"] for row in body["files"]} == {
+        "handover.zip/Data/table.csv",
+        "handover.zip/Docs/brief.md",
+        "handover.zip/Images/logo.png",
+    }
+    assert next(
+        row for row in body["files"] if row["relpath"] == "handover.zip/Docs/brief.md"
+    )["status"] == "supported"
+    assert next(
+        row for row in body["files"] if row["relpath"] == "handover.zip/Images/logo.png"
+    )["reason"] == "unsupported_file_type"
+
+
+@pytest.mark.anyio
+async def test_scan_selected_zip_archive_as_source_without_opening_members(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    archive = tmp_path / "handover.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Docs/brief.md", "# Brief\n\nArchive body")
+        zf.writestr("Data/table.csv", "name,value\nA,1\n")
+        zf.writestr("Images/logo.png", b"not supported")
+
+    def _fail_member_open(*_args, **_kwargs):
+        raise AssertionError("scan extracted archive member contents")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", _fail_member_open)
+
+    grant = await _grant_source(client, archive, source_kind="local_archive")
+    assert grant["source_kind"] == "local_archive"
+    assert grant["display_name"] == "handover.zip"
+
+    r = await client.post(
+        "/api/source-import/scan",
+        json={"source_token": grant["source_token"]},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["source_kind"] == "local_archive"
+    assert body["source_display_name"] == "handover.zip"
+    assert body["source_root_path"] == str(archive.resolve())
+    assert body["proposed_destination_root"] == "memory/imports/handover/"
+    assert body["supported_file_count"] == 2
+    assert body["unsupported_file_count"] == 1
+    assert body["counts_by_extension"] == {".csv": 1, ".md": 1, ".png": 1}
+    assert {row["relpath"] for row in body["files"]} == {
+        "Data/table.csv",
+        "Docs/brief.md",
+        "Images/logo.png",
+    }
+
+
+@pytest.mark.anyio
+async def test_scan_marks_nested_zip_archives_as_skipped_without_opening_them(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    inner_bytes = io.BytesIO()
+    with zipfile.ZipFile(inner_bytes, "w") as nested:
+        nested.writestr("inside.md", "# Inside")
+
+    archive = tmp_path / "handover.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Docs/brief.md", "# Brief")
+        zf.writestr("Nested/inner.zip", inner_bytes.getvalue())
+
+    def _fail_member_open(*_args, **_kwargs):
+        raise AssertionError("scan extracted nested archive member contents")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", _fail_member_open)
+
+    folder_token = await _grant(client, tmp_path)
+    folder_scan = await client.post(
+        "/api/source-import/scan",
+        json={"source_token": folder_token},
+    )
+
+    assert folder_scan.status_code == 200
+    folder_body = folder_scan.json()
+    assert folder_body["supported_file_count"] == 1
+    assert folder_body["skipped_file_count"] == 1
+    assert folder_body["skipped_by_reason"] == {"nested_archive": 1}
+    nested_row = next(
+        row
+        for row in folder_body["files"]
+        if row["relpath"] == "handover.zip/Nested/inner.zip"
+    )
+    assert nested_row["status"] == "skipped"
+    assert nested_row["reason"] == "nested_archive"
+
+    archive_grant = await _grant_source(client, archive, source_kind="local_archive")
+    archive_scan = await client.post(
+        "/api/source-import/scan",
+        json={"source_token": archive_grant["source_token"]},
+    )
+
+    assert archive_scan.status_code == 200
+    archive_body = archive_scan.json()
+    assert archive_body["source_kind"] == "local_archive"
+    assert archive_body["supported_file_count"] == 1
+    assert archive_body["skipped_file_count"] == 1
+    assert archive_body["skipped_by_reason"] == {"nested_archive": 1}
+    nested_archive_row = next(
+        row for row in archive_body["files"] if row["relpath"] == "Nested/inner.zip"
+    )
+    assert nested_archive_row["status"] == "skipped"
+    assert nested_archive_row["reason"] == "nested_archive"
+
+
+@pytest.mark.anyio
+async def test_scan_skips_zip_archive_with_unsafe_path(client, tmp_path):
+    archive = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("../escape.md", "# Escape")
+
+    token = await _grant(client, tmp_path)
+    r = await client.post("/api/source-import/scan", json={"source_token": token})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["supported_file_count"] == 0
+    assert body["skipped_file_count"] == 1
+    assert body["skipped_by_reason"] == {"archive_unsafe_path": 1}
+    assert body["files"][0]["relpath"] == "unsafe.zip"
+    assert body["files"][0]["status"] == "skipped"
+    assert body["files"][0]["reason"] == "archive_unsafe_path"
+
+
+@pytest.mark.anyio
+async def test_archive_grant_rejects_non_zip_file(client, tmp_path):
+    source = tmp_path / "notes.md"
+    source.write_text("# Notes", encoding="utf-8")
+
+    r = await client.post(
+        "/api/source-import/grants",
+        json={"path": str(source), "source_kind": "local_archive"},
+        headers={"x-deepfiles-shell-token": "test-shell-token"},
+    )
+
+    assert r.status_code == 400
+    assert "zip archive" in r.json()["detail"].lower()
+
 
 
 @pytest.mark.anyio
@@ -334,10 +517,11 @@ async def test_bundled_sample_dataset_scans_as_supported_demo_source():
         ".html",
         ".md",
         ".rtf",
-        ".zip",
+        ".txt",
     }.issubset(set(report.counts_by_extension))
     assert "Proposal - Northstar Pilot.md" in relpaths
-    assert "Archive/handover-pack.zip" in relpaths
+    assert "Archive/handover-pack.zip/checklist.txt" in relpaths
+    assert "Archive/handover-pack.zip/data-dictionary.md" in relpaths
 
     archive_doc = extract_business_document(sample_root / "Archive" / "handover-pack.zip")
     assert archive_doc.source_type == "zip"
@@ -387,6 +571,7 @@ async def test_start_import_processes_approved_files_with_safe_provenance(
         json={"selection_id": selection_body["selection_id"]},
     )
     assert started.status_code == 200
+    assert started.json()["duplicate_policy"] == "skip"
     batch_id = started.json()["batch_id"]
 
     finished = await _wait_for_import(client, batch_id)
@@ -442,6 +627,300 @@ async def test_start_import_processes_approved_files_with_safe_provenance(
         item["via"] == "import_batch" and item["path"] in note_relpaths
         for item in stats["trace"]
     )
+
+
+@pytest.mark.anyio
+async def test_start_import_can_keep_duplicate_content_when_requested(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    await init_database(workspace / "app" / "jarvis.db")
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+    monkeypatch.setattr("services.ingest_jobs.schedule_graph_rebuild", lambda **_kwargs: None)
+
+    async def _fake_fast_ingest(
+        _path,
+        *,
+        target_folder,
+        original_name=None,
+        **_kwargs,
+    ):
+        name = Path(original_name or "imported.md").stem
+        return {"path": f"{target_folder}/{name}.md", "total_notes": 1}
+
+    monkeypatch.setattr("services.source_import.worker.fast_ingest", _fake_fast_ingest)
+
+    source = tmp_path / "Client A"
+    source.mkdir()
+    (source / "keep.md").write_text("# Keep\n\nSame body", encoding="utf-8")
+    (source / "copy.md").write_text("# Keep\n\nSame body", encoding="utf-8")
+
+    token = await _grant(client, source)
+    scan = await client.post("/api/source-import/scan", json={"source_token": token})
+    assert scan.status_code == 200
+    selection = await client.post(
+        f"/api/source-import/scans/{scan.json()['scan_id']}/selection",
+        json={},
+    )
+    assert selection.status_code == 200
+
+    started = await client.post(
+        f"/api/source-import/scans/{scan.json()['scan_id']}/start",
+        json={
+            "selection_id": selection.json()["selection_id"],
+            "duplicate_policy": "import",
+        },
+    )
+    assert started.status_code == 200
+    assert started.json()["duplicate_policy"] == "import"
+
+    finished = await _wait_for_import(client, started.json()["batch_id"])
+    assert finished["state"] == "completed"
+    assert finished["duplicate_policy"] == "import"
+    assert finished["imported_file_count"] == 2
+    assert finished["skipped_file_count"] == 0
+    assert finished["created_note_count"] == 2
+    assert {item["status"] for item in finished["files"]} == {"done"}
+
+    completion = await client.get(
+        f"/api/source-import/imports/{started.json()['batch_id']}/completion"
+    )
+    assert completion.status_code == 200
+    assert completion.json()["duplicate_file_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_import_extracts_approved_zip_child_after_review(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    await init_database(workspace / "app" / "jarvis.db")
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+    monkeypatch.setattr("services.ingest_jobs.schedule_graph_rebuild", lambda **_kwargs: None)
+
+    source = tmp_path / "Client A"
+    source.mkdir()
+    archive = source / "handover.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Docs/brief.md", "# Brief\n\nArchive body")
+
+    async def _fake_fast_ingest(
+        path,
+        *,
+        target_folder,
+        workspace_path=None,
+        original_name=None,
+        source_label=None,
+        extra_frontmatter=None,
+        **_kwargs,
+    ):
+        assert Path(path).read_text(encoding="utf-8") == "# Brief\n\nArchive body"
+        assert original_name == "brief.md"
+        assert source_label == "handover.zip/Docs/brief.md"
+        assert target_folder.endswith("/handover.zip/Docs")
+        assert extra_frontmatter["source_relpath"] == "handover.zip/Docs/brief.md"
+        assert extra_frontmatter["source_archive_relpath"] == "handover.zip"
+        assert extra_frontmatter["source_archive_member_path"] == "Docs/brief.md"
+        return {"path": f"{target_folder}/brief.md", "total_notes": 1}
+
+    monkeypatch.setattr("services.source_import.worker.fast_ingest", _fake_fast_ingest)
+
+    token = await _grant(client, source)
+    scan = await client.post("/api/source-import/scan", json={"source_token": token})
+    assert scan.status_code == 200
+    scan_body = scan.json()
+    assert scan_body["supported_file_count"] == 1
+    assert scan_body["files"][0]["relpath"] == "handover.zip/Docs/brief.md"
+
+    selection = await client.post(
+        f"/api/source-import/scans/{scan_body['scan_id']}/selection",
+        json={},
+    )
+    assert selection.status_code == 200
+    assert selection.json()["approved_file_count"] == 1
+
+    started = await client.post(
+        f"/api/source-import/scans/{scan_body['scan_id']}/start",
+        json={"selection_id": selection.json()["selection_id"]},
+    )
+    assert started.status_code == 200
+
+    finished = await _wait_for_import(client, started.json()["batch_id"])
+    assert finished["state"] == "completed"
+    assert finished["imported_file_count"] == 1
+    assert finished["files"][0]["relpath"] == "handover.zip/Docs/brief.md"
+    expected_root = finished["destination_root"].removeprefix("memory/").rstrip("/")
+    assert finished["files"][0]["note_paths"] == [
+        f"{expected_root}/handover.zip/Docs/brief.md"
+    ]
+
+
+@pytest.mark.anyio
+async def test_import_extracts_selected_zip_archive_member_after_review(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    await init_database(workspace / "app" / "jarvis.db")
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+    monkeypatch.setattr("services.ingest_jobs.schedule_graph_rebuild", lambda **_kwargs: None)
+
+    archive = tmp_path / "handover.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Docs/brief.md", "# Brief\n\nArchive body")
+
+    async def _fake_fast_ingest(
+        path,
+        *,
+        target_folder,
+        workspace_path=None,
+        original_name=None,
+        source_label=None,
+        extra_frontmatter=None,
+        **_kwargs,
+    ):
+        assert Path(path).read_text(encoding="utf-8") == "# Brief\n\nArchive body"
+        assert original_name == "brief.md"
+        assert source_label == "Docs/brief.md"
+        assert target_folder.endswith("/Docs")
+        assert extra_frontmatter["source_kind"] == "local_archive_import"
+        assert extra_frontmatter["source_relpath"] == "Docs/brief.md"
+        assert extra_frontmatter["source_archive_relpath"] == "handover.zip"
+        assert extra_frontmatter["source_archive_member_path"] == "Docs/brief.md"
+        return {"path": f"{target_folder}/brief.md", "total_notes": 1}
+
+    monkeypatch.setattr("services.source_import.worker.fast_ingest", _fake_fast_ingest)
+
+    grant = await _grant_source(client, archive, source_kind="local_archive")
+    scan = await client.post(
+        "/api/source-import/scan",
+        json={"source_token": grant["source_token"]},
+    )
+    assert scan.status_code == 200
+    scan_body = scan.json()
+    assert scan_body["source_kind"] == "local_archive"
+    assert scan_body["supported_file_count"] == 1
+    assert scan_body["files"][0]["relpath"] == "Docs/brief.md"
+
+    selection = await client.post(
+        f"/api/source-import/scans/{scan_body['scan_id']}/selection",
+        json={},
+    )
+    assert selection.status_code == 200
+    assert selection.json()["approved_file_count"] == 1
+
+    started = await client.post(
+        f"/api/source-import/scans/{scan_body['scan_id']}/start",
+        json={"selection_id": selection.json()["selection_id"]},
+    )
+    assert started.status_code == 200
+    assert started.json()["source_kind"] == "local_archive"
+
+    finished = await _wait_for_import(client, started.json()["batch_id"])
+    assert finished["state"] == "completed"
+    assert finished["source_kind"] == "local_archive"
+    assert finished["imported_file_count"] == 1
+    assert finished["files"][0]["relpath"] == "Docs/brief.md"
+    expected_root = finished["destination_root"].removeprefix("memory/").rstrip("/")
+    assert finished["files"][0]["note_paths"] == [
+        f"{expected_root}/Docs/brief.md"
+    ]
+
+
+@pytest.mark.anyio
+async def test_import_skips_cross_batch_duplicate_until_original_is_removed(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    await init_database(workspace / "app" / "jarvis.db")
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+
+    async def _fake_connect(*_args, **_kwargs):
+        return SimpleNamespace(model_dump=lambda: {})
+
+    monkeypatch.setattr("services.connection_service.connect_note", _fake_connect)
+    monkeypatch.setattr("services.ingest_jobs.schedule_graph_rebuild", lambda **_kwargs: None)
+
+    async def _import_source(source: Path) -> dict:
+        token = await _grant(client, source)
+        scan = await client.post("/api/source-import/scan", json={"source_token": token})
+        assert scan.status_code == 200
+        selection = await client.post(
+            f"/api/source-import/scans/{scan.json()['scan_id']}/selection",
+            json={},
+        )
+        assert selection.status_code == 200
+        started = await client.post(
+            f"/api/source-import/scans/{scan.json()['scan_id']}/start",
+            json={"selection_id": selection.json()["selection_id"]},
+        )
+        assert started.status_code == 200
+        return await _wait_for_import(client, started.json()["batch_id"])
+
+    first_source = tmp_path / "Client A"
+    first_source.mkdir()
+    (first_source / "keep.md").write_text("# Keep\n\nSame body", encoding="utf-8")
+    first = await _import_source(first_source)
+    assert first["state"] == "completed"
+    assert first["imported_file_count"] == 1
+
+    second_source = tmp_path / "Client B"
+    second_source.mkdir()
+    (second_source / "copy.md").write_text("# Keep\n\nSame body", encoding="utf-8")
+    second = await _import_source(second_source)
+
+    assert second["state"] == "completed"
+    assert second["imported_file_count"] == 0
+    assert second["skipped_file_count"] == 1
+    assert second["failed_file_count"] == 0
+    assert second["files"][0]["status"] == "skipped"
+    assert second["files"][0]["reason"] == "duplicate_content_existing_import"
+    assert second["files"][0]["duplicate_of"] == "Client A/keep.md"
+
+    review = await client.get(f"/api/source-import/imports/{second['batch_id']}/review")
+    assert review.status_code == 200
+    assert review.json()["reason_counts"] == {"duplicate_content_existing_import": 1}
+
+    duplicate_rescan = await client.post(
+        f"/api/source-import/imports/{second['batch_id']}/rescan"
+    )
+    assert duplicate_rescan.status_code == 200
+    duplicate_rescan_body = duplicate_rescan.json()
+    assert duplicate_rescan_body["scan_id"] is None
+    assert duplicate_rescan_body["importable_file_count"] == 0
+    assert duplicate_rescan_body["unchanged_file_count"] == 1
+    assert duplicate_rescan_body["files"][0]["status"] == "unchanged"
+    assert duplicate_rescan_body["files"][0]["reason"] == "previous_duplicate_content"
+
+    removed = await client.post(
+        f"/api/source-import/imports/{first['batch_id']}/remove",
+        json={"confirm_batch_id": first["batch_id"]},
+    )
+    assert removed.status_code == 200
+    assert removed.json()["state"] == "removed"
+
+    third_source = tmp_path / "Client C"
+    third_source.mkdir()
+    (third_source / "copy.md").write_text("# Keep\n\nSame body", encoding="utf-8")
+    third = await _import_source(third_source)
+    assert third["state"] == "completed"
+    assert third["imported_file_count"] == 1
+    assert third["skipped_file_count"] == 0
 
 
 @pytest.mark.anyio

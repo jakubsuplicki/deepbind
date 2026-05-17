@@ -8,8 +8,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from services.source_import.archives import ZIP_EXTENSION
+
 
 GRANT_TTL = timedelta(minutes=10)
+SOURCE_KINDS = {"local_folder", "local_archive"}
 
 
 class SourceGrantError(ValueError):
@@ -41,7 +44,7 @@ def _prune_expired(now: Optional[datetime] = None) -> None:
 
 
 def create_grant(path: str, *, source_kind: str = "local_folder") -> SourceGrant:
-    if source_kind != "local_folder":
+    if source_kind not in SOURCE_KINDS:
         raise SourceGrantError("Unsupported source kind")
 
     root = Path(path).expanduser()
@@ -50,8 +53,14 @@ def create_grant(path: str, *, source_kind: str = "local_folder") -> SourceGrant
     except OSError as exc:
         raise SourceGrantError("Selected source does not exist") from exc
 
-    if not resolved.is_dir():
-        raise SourceGrantError("Selected source is not a folder")
+    if source_kind == "local_folder":
+        if not resolved.is_dir():
+            raise SourceGrantError("Selected source is not a folder")
+    elif source_kind == "local_archive":
+        if not resolved.is_file():
+            raise SourceGrantError("Selected source is not a file")
+        if resolved.suffix.lower() != ZIP_EXTENSION:
+            raise SourceGrantError("Selected source is not a ZIP archive")
 
     token = secrets.token_urlsafe(32)
     grant = SourceGrant(

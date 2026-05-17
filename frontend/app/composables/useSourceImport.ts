@@ -1,10 +1,12 @@
 export interface SourceGrantResponse {
   source_token: string
-  source_kind: 'local_folder'
+  source_kind: 'local_folder' | 'local_archive'
   display_name: string
   root_path: string
   expires_at: string
 }
+
+export type SourceDuplicatePolicy = 'skip' | 'import'
 
 export interface SourceScanFileItem {
   id: string
@@ -19,7 +21,7 @@ export interface SourceScanFileItem {
 
 export interface SourceScanReport {
   scan_id: string
-  source_kind: 'local_folder'
+  source_kind: SourceGrantResponse['source_kind']
   source_display_name: string
   source_root_path: string
   proposed_destination_root: string
@@ -74,7 +76,8 @@ export interface SourceImportBatchSummary {
   batch_id: string
   scan_id: string
   selection_id: string
-  source_kind: 'local_folder'
+  duplicate_policy: SourceDuplicatePolicy
+  source_kind: SourceGrantResponse['source_kind']
   source_display_name: string
   destination_root: string
   state:
@@ -170,7 +173,7 @@ export interface SourceImportRescanFileItem {
 export interface SourceImportRescanReport {
   batch_id: string
   scan_id?: string | null
-  source_kind: 'local_folder'
+  source_kind: SourceGrantResponse['source_kind']
   source_display_name: string
   proposed_destination_root: string
   total_files_seen: number
@@ -195,6 +198,10 @@ export interface SourceSelectionOptions {
   excludedFolders?: string[]
 }
 
+export interface SourceImportStartOptions {
+  duplicatePolicy?: SourceDuplicatePolicy
+}
+
 export function useSourceImport() {
   async function pickFolderSource(): Promise<SourceGrantResponse> {
     const tauriWindow = typeof window === 'undefined'
@@ -205,6 +212,17 @@ export function useSourceImport() {
     }
     const { invoke } = await import('@tauri-apps/api/core')
     return await invoke<SourceGrantResponse>('source_import_pick_folder')
+  }
+
+  async function pickArchiveSource(): Promise<SourceGrantResponse> {
+    const tauriWindow = typeof window === 'undefined'
+      ? undefined
+      : window as Window & { __TAURI_INTERNALS__?: unknown }
+    if (!tauriWindow?.__TAURI_INTERNALS__) {
+      throw new Error('Archive source import is available in the desktop app.')
+    }
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<SourceGrantResponse>('source_import_pick_archive')
   }
 
   async function pickSampleDataset(): Promise<SourceGrantResponse> {
@@ -252,6 +270,7 @@ export function useSourceImport() {
   async function startImport(
     scanId: string,
     selectionId: string,
+    options: SourceImportStartOptions = {},
   ): Promise<SourceImportBatchSummary> {
     return await $fetch<SourceImportBatchSummary>(
       apiUrl(`/api/source-import/scans/${encodeURIComponent(scanId)}/start`),
@@ -259,6 +278,7 @@ export function useSourceImport() {
         method: 'POST',
         body: {
           selection_id: selectionId,
+          duplicate_policy: options.duplicatePolicy ?? 'skip',
         },
       },
     )
@@ -329,6 +349,7 @@ export function useSourceImport() {
     getImportCompletion,
     getImportReview,
     getImport,
+    pickArchiveSource,
     pickSampleDataset,
     pickFolderSource,
     removeImport,

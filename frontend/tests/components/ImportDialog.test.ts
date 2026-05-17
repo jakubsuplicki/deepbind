@@ -9,6 +9,7 @@ const sourceImportMocks = vi.hoisted(() => ({
   getImport: vi.fn(),
   getImportCompletion: vi.fn(),
   getImportReview: vi.fn(),
+  pickArchiveSource: vi.fn(),
   pickFolderSource: vi.fn(),
   pickSampleDataset: vi.fn(),
   removeImport: vi.fn(),
@@ -28,6 +29,7 @@ describe('components/ImportDialog.vue', () => {
     sourceImportMocks.getImport.mockReset()
     sourceImportMocks.getImportCompletion.mockReset()
     sourceImportMocks.getImportReview.mockReset()
+    sourceImportMocks.pickArchiveSource.mockReset()
     sourceImportMocks.pickFolderSource.mockReset()
     sourceImportMocks.pickSampleDataset.mockReset()
     sourceImportMocks.removeImport.mockReset()
@@ -150,6 +152,94 @@ describe('components/ImportDialog.vue', () => {
       includeHidden: false,
     })
     expect(wrapper.text()).toContain('Scan ready')
+  })
+
+  it('folder mode can select a ZIP archive before scanning', async () => {
+    sourceImportMocks.pickArchiveSource.mockResolvedValue({
+      source_token: 'archive-source-token',
+      source_kind: 'local_archive',
+      display_name: 'handover.zip',
+      root_path: '/Users/me/handover.zip',
+      expires_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.scanSource.mockResolvedValue({
+      scan_id: 'scan_archive',
+      source_kind: 'local_archive',
+      source_display_name: 'handover.zip',
+      source_root_path: '/Users/me/handover.zip',
+      proposed_destination_root: 'memory/imports/handover/',
+      total_files_seen: 3,
+      total_size_seen: 192,
+      supported_file_count: 2,
+      unsupported_file_count: 0,
+      skipped_file_count: 1,
+      skipped_by_reason: { nested_archive: 1 },
+      counts_by_extension: { '.md': 1, '.csv': 1 },
+      largest_files: [],
+      folder_summary: [{ relpath: 'Docs', file_count: 1, total_size: 64 }],
+      files: [
+        {
+          id: 'docs-brief-md',
+          relpath: 'Docs/brief.md',
+          filename: 'brief.md',
+          extension: '.md',
+          size: 64,
+          modified_at: null,
+          status: 'supported',
+          reason: null,
+        },
+        {
+          id: 'nested-inner-zip',
+          relpath: 'Nested/inner.zip',
+          filename: 'inner.zip',
+          extension: '.zip',
+          size: 64,
+          modified_at: null,
+          status: 'skipped',
+          reason: 'nested_archive',
+        },
+      ],
+      file_list_truncated: false,
+      limit_hit: false,
+      created_at: '2026-05-16T00:00:01Z',
+    })
+    sourceImportMocks.createSelection.mockResolvedValue({
+      selection_id: 'sel_archive',
+      scan_id: 'scan_archive',
+      source_display_name: 'handover.zip',
+      proposed_destination_root: 'memory/imports/handover/',
+      approved_file_count: 2,
+      approved_total_size: 128,
+      excluded_file_count: 0,
+      excluded_total_size: 0,
+      unsupported_file_count: 0,
+      skipped_file_count: 1,
+      excluded_by_rule: {},
+      approved_files: [],
+      approved_file_list_truncated: false,
+      created_at: '2026-05-16T00:00:02Z',
+    })
+
+    const wrapper = await mountSuspended(ImportDialog, {
+      props: { visible: true },
+    })
+    await wrapper.findAll('.import-dialog__mode-btn')[1]!.trigger('click')
+    await wrapper.find('.import-dialog__archive-btn').trigger('click')
+    await flushPromises()
+
+    expect(sourceImportMocks.pickArchiveSource).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('handover.zip')
+    expect(wrapper.text()).toContain('ZIP archive selected')
+    expect(wrapper.find('.import-dialog__import-btn').text()).toContain('Scan archive')
+
+    await wrapper.find('.import-dialog__import-btn').trigger('click')
+    await flushPromises()
+
+    expect(sourceImportMocks.scanSource).toHaveBeenCalledWith('archive-source-token', {
+      includeHidden: false,
+    })
+    expect(wrapper.text()).toContain('Scan ready')
+    expect(wrapper.text()).toContain('Nested archive')
   })
 
   it('folder scan review lets users exclude file types', async () => {
@@ -376,6 +466,109 @@ describe('components/ImportDialog.vue', () => {
     expect(sourceImportMocks.getImportCompletion).toHaveBeenCalledWith('import_1')
     expect(wrapper.text()).toContain('Ready to ask')
     expect(wrapper.text()).toContain('Which files should I review first?')
+  })
+
+  it('folder mode can keep duplicate content as separate notes', async () => {
+    sourceImportMocks.pickFolderSource.mockResolvedValue({
+      source_token: 'source-token',
+      source_kind: 'local_folder',
+      display_name: 'Client A',
+      root_path: '/Users/me/Client A',
+      expires_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.scanSource.mockResolvedValue({
+      scan_id: 'scan_123',
+      source_kind: 'local_folder',
+      source_display_name: 'Client A',
+      source_root_path: '/Users/me/Client A',
+      proposed_destination_root: 'memory/imports/client-a/',
+      total_files_seen: 2,
+      total_size_seen: 40,
+      supported_file_count: 2,
+      unsupported_file_count: 0,
+      skipped_file_count: 0,
+      skipped_by_reason: {},
+      counts_by_extension: { '.md': 2 },
+      largest_files: [],
+      folder_summary: [],
+      files: [],
+      file_list_truncated: false,
+      limit_hit: false,
+      created_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.createSelection.mockResolvedValue({
+      selection_id: 'sel_1',
+      scan_id: 'scan_123',
+      source_display_name: 'Client A',
+      proposed_destination_root: 'memory/imports/client-a/',
+      approved_file_count: 2,
+      approved_total_size: 40,
+      excluded_file_count: 0,
+      excluded_total_size: 0,
+      unsupported_file_count: 0,
+      skipped_file_count: 0,
+      excluded_by_rule: {},
+      approved_files: [],
+      approved_file_list_truncated: false,
+      created_at: '2026-05-16T00:00:01Z',
+    })
+    sourceImportMocks.startImport.mockResolvedValue({
+      batch_id: 'import_1',
+      scan_id: 'scan_123',
+      selection_id: 'sel_1',
+      duplicate_policy: 'import',
+      source_kind: 'local_folder',
+      source_display_name: 'Client A',
+      destination_root: 'memory/imports/client-a-import1/',
+      state: 'completed',
+      total_file_count: 2,
+      imported_file_count: 2,
+      skipped_file_count: 0,
+      failed_file_count: 0,
+      created_note_count: 2,
+      total_bytes: 40,
+      processed_bytes: 40,
+      current_file: null,
+      files: [],
+      started_at: '2026-05-16T00:00:02Z',
+      updated_at: '2026-05-16T00:00:03Z',
+      finished_at: '2026-05-16T00:00:03Z',
+    })
+    sourceImportMocks.getImportCompletion.mockResolvedValue({
+      batch_id: 'import_1',
+      source_display_name: 'Client A',
+      state: 'completed',
+      destination_root: 'memory/imports/client-a-import1/',
+      total_file_count: 2,
+      imported_file_count: 2,
+      skipped_file_count: 0,
+      failed_file_count: 0,
+      duplicate_file_count: 0,
+      created_note_count: 2,
+      imported_extension_counts: { '.md': 2 },
+      imported_folder_counts: { '.': 2 },
+      suggested_questions: [],
+      can_ask_about_import: true,
+      updated_at: '2026-05-16T00:00:03Z',
+    })
+
+    const wrapper = await mountSuspended(ImportDialog, {
+      props: { visible: true },
+    })
+    await wrapper.findAll('.import-dialog__mode-btn')[1]!.trigger('click')
+    await wrapper.find('.import-dialog__browse-btn').trigger('click')
+    await flushPromises()
+    await wrapper.find('.import-dialog__import-btn').trigger('click')
+    await flushPromises()
+    await wrapper.find('.import-dialog__duplicate-toggle input').setValue(true)
+    await wrapper.find('.import-dialog__import-btn').trigger('click')
+    await flushPromises()
+
+    expect(sourceImportMocks.startImport).toHaveBeenCalledWith(
+      'scan_123',
+      'sel_1',
+      { duplicatePolicy: 'import' },
+    )
   })
 
   it('folder mode shows skipped and failed files after import', async () => {

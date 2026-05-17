@@ -9,7 +9,9 @@ sources:
   - backend/services/ingest.py
   - backend/services/structured_ingest.py
   - backend/services/source_import/extractors.py
+  - backend/services/source_import/archives.py
   - backend/services/source_import/cancellation.py
+  - backend/services/source_import/dedupe.py
   - backend/services/source_import/manifest.py
   - backend/services/source_import/removal.py
   - backend/services/source_import/rescan.py
@@ -87,15 +89,19 @@ For `.csv` and `.xml` files, `fast_ingest` delegates to `structured_ingest.inges
 - **Generic XML**: Converted to a single markdown note with structure analysis and first 200 elements rendered with their attributes and text content.
 - **Large file handling**: Groups with more than 100 issues are split into multiple notes (part 1, part 2, etc.). The graph is rebuilt once after all notes are created, not per-note.
 
-For business document files, `source_import.extractors` converts the approved upload into Markdown before indexing. DOCX/XLSX/PPTX use conservative standard-library ZIP/XML parsing so the desktop bundle does not gain new parser dependencies in this slice. HTML uses the existing `trafilatura` + `markdownify` stack, RTF uses a best-effort control-word stripper, EML uses Python's standard `email` package, and ZIP creates a safe archive inventory note rather than extracting child files.
+For business document files, `source_import.extractors` converts the approved upload into Markdown before indexing. DOCX/XLSX/PPTX use conservative standard-library ZIP/XML parsing so the desktop bundle does not gain new parser dependencies in this slice. HTML uses the existing `trafilatura` + `markdownify` stack, RTF uses a best-effort control-word stripper, EML uses Python's standard `email` package, and single-file ZIP upload creates a safe archive inventory note rather than extracting child files.
 
-When `fast_ingest` is called by Folder Source Import, it receives a safe `source_label` and extra frontmatter such as `source_kind`, `source_relpath`, `source_filename`, `source_size`, and `import_batch_id`. That keeps generated Markdown source-relative even though the operational manifest keeps the absolute source root for local lifecycle work. The same provenance path is passed through `structured_ingest.ingest_structured_file` so CSV/XML folder imports do not write absolute local paths into user-facing notes.
+When `fast_ingest` is called by Folder Source Import, it receives a safe `source_label` and extra frontmatter such as `source_kind`, `source_relpath`, `source_filename`, `source_size`, and `import_batch_id`. That keeps generated Markdown source-relative even though the operational manifest keeps the absolute source root for local lifecycle work. The same provenance path is passed through `structured_ingest.ingest_structured_file` so CSV/XML source imports do not write absolute local paths into user-facing notes.
+
+ZIP files inside an approved folder and standalone ZIP archive sources are handled by `source_import.archives`: scan reads only guarded archive directory metadata, the review screen sees child paths such as `handover.zip/Docs/brief.md` for folder-contained archives or `Docs/brief.md` for a selected archive root, and the worker extracts only approved children into temporary files before calling `fast_ingest`. Markdown frontmatter adds `source_archive_relpath` and `source_archive_member_path`; standalone archive imports use `source_kind: local_archive_import`.
 
 Folder import cancellation and interruption are tracked in the manifest, not in Markdown. Active imports move through `cancelling` before the worker finishes the current file, skips queued files, and marks the batch `cancelled`; if the app restarts with an active batch still in the manifest, startup marks it `interrupted`. Completed notes from cancelled or interrupted batches remain normal Markdown memory until the user removes that import.
 
 Folder import removal uses the manifest's generated note paths instead of folder-wide deletion. `source_import.removal` calls the same soft-delete path used by manual note deletion, so imported Markdown moves to `.trash/`, then it clears derived rows for those paths and schedules a graph rebuild. The manifest remains as local operational audit metadata; unrelated notes in the same destination folder are left alone.
 
 Folder import rescan uses the same manifest as local operational context. `source_import.rescan` reads the stored source root, performs another metadata-only scan, reports new/changed/unchanged/missing files, and caches only new or changed candidates for a later approved import. It does not hash file contents, delete missing files, or replace older generated Markdown automatically.
+
+Folder import duplicate handling uses the manifest only after approval. The worker hashes approved file contents, skips same-batch duplicates by in-memory content hash, and asks `source_import.dedupe` whether the hash already exists in a successfully imported file from a non-removed prior batch. Cross-batch matches are marked `duplicate_content_existing_import`; removed imports are ignored so users can remove an import and then import the same content again.
 
 Folder import skipped/failed review also comes from the manifest. `GET /api/source-import/imports/{batch_id}/review` returns a capped list of approved files that were skipped or failed during the worker, grouped by reason with retry/fix-local hints for the UI. Scan-only unsupported or hidden/system rows are still shown during the active metadata review rather than written into Markdown memory.
 
@@ -227,17 +233,18 @@ When a large document (e.g. a PDF) is ingested it is split into many section not
 - `backend/routers/memory.py` — HTTP endpoints for note CRUD, file ingest, URL ingest, reindex, AI enrichment, embedding reindex, and semantic search
 - `backend/services/memory_service.py` — Core note operations: create, read, list, append, delete, reindex; manages Markdown files and SQLite index together; triggers on-write embedding
 - `backend/services/ingest.py` — File ingest pipeline for Markdown, text, PDF, structured data, and business document uploads; AI enrichment via `smart_enrich`
-- `backend/services/source_import/extractors.py` — Best-effort business document extractors for DOCX, XLSX, PPTX, HTML/HTM, RTF, EML, and safe ZIP inventory notes
+- `backend/services/source_import/extractors.py` — Best-effort business document extractors for DOCX, XLSX, PPTX, HTML/HTM, RTF, EML, and safe single-file ZIP inventory notes
+- `backend/services/source_import/archives.py` — ZIP directory scanning, archive safety guards, and temporary extraction for approved folder-import or standalone archive children
 - `backend/services/connection_service.py` — Smart Connect: per-note ingest-time linking; pure scoring + caps; writes `suggested_related` and calls incremental graph update
 - `backend/services/alias_index.py` — Smart Connect alias index: SQLite-backed normalised phrase → note path map; `upsert_note_aliases()` (called from `_index_note`) and `scan_body()` (n-gram lookup, NFKD-normalised, Polish-aware)
 - `backend/services/dismissed_suggestions.py` — Smart Connect dismissal store: SQLite table `dismissed_suggestions(note_path, target_path, dismissed_at)` with `dismiss()`, `undismiss()`, `list_dismissed_for()`, `list_all()`, `remove_note()`
 - `backend/routers/connections.py` — Smart Connect HTTP surface: `GET /api/connections/orphans`, `POST /api/connections/run/{path}` (mode=fast|aggressive), `POST /api/connections/dismiss`, `POST /api/connections/promote`
 - `backend/services/structured_ingest.py` — CSV/XML ingest with Jira export detection; groups issues by epic/project, creates overview + detail notes with wiki-linked people for graph integration; accepts folder-import provenance from `fast_ingest`
 - `backend/services/source_import/cancellation.py` — Folder import cancellation lifecycle; requests cancellation for active batches while preserving already-created Markdown
-- `backend/services/source_import/manifest.py` — SQLite operational manifest for approved folder imports, including batch/file status and generated note paths
+- `backend/services/source_import/manifest.py` — SQLite operational manifest for approved folder imports, including duplicate policy, batch/file status, and generated note paths
 - `backend/services/source_import/removal.py` — Folder import removal lifecycle; archives only manifest-created notes and clears note-scoped derived rows before graph refresh
 - `backend/services/source_import/rescan.py` — Folder import rescan lifecycle; compares a previous manifest to a fresh metadata-only source scan and prepares new/changed candidates for approval
-- `backend/services/source_import/worker.py` — Folder import worker that reads approved files, hashes after approval, writes via `fast_ingest`, honors cancellation between files, and updates batch progress
+- `backend/services/source_import/worker.py` — Source import worker that reads approved files, hashes after approval, applies the selected duplicate policy, writes via `fast_ingest`, honors cancellation between files, and updates batch progress
 - `backend/services/url_ingest.py` — URL ingest for YouTube videos (transcript + oEmbed metadata) and general web articles (trafilatura + markdownify); short-circuits when the privacy kill-switch blocks URL ingest.
 - `backend/services/ingest_jobs.py` — Process-local, thread-safe ingest job tracker. Powers the global "Ingesting…" status badge. Includes `schedule_graph_rebuild()` for the one-at-a-time background graph rebuild after each file ingest.
 - `frontend/app/composables/useIngestStatus.ts` — Singleton composable that polls `/api/memory/ingest/status` every 5 s, merges server-tracked jobs with client-side upload progress, and ref-counts subscribers so the timer only runs while at least one component is mounted.
@@ -247,8 +254,8 @@ When a large document (e.g. a PDF) is ingested it is split into many section not
 - `frontend/app/components/NoteList.vue` — Sidebar list with FTS search input, folder filter pills, and per-note delete with confirmation
 - `frontend/app/components/NoteViewer.vue` — Right-panel note reader; renders Markdown via `marked` + `DOMPurify` after stripping frontmatter; embeds `SuggestionsPanel` above the body
 - `frontend/app/components/SuggestionsPanel.vue` — Smart Connect review UI: lists `suggested_related` with confidence + methods, per-item Keep / Dismiss buttons (promote → `related`, dismiss → `dismissed_suggestions`), and a header-level Re-run button
-- `frontend/app/composables/useSourceImport.ts` — Frontend API wrapper for trusted folder selection, scan, review selection, import start, import status polling, cancellation, rescan, and import removal
-- `frontend/app/components/ImportDialog.vue` — Drag-and-drop file upload modal; submits to `/api/memory/ingest` as multipart and hosts the in-progress folder scan/review/import-progress/cancel/removal/rescan mode
+- `frontend/app/composables/useSourceImport.ts` — Frontend API wrapper for trusted folder selection, scan, review selection, import start with duplicate policy, import status polling, cancellation, rescan, and import removal
+- `frontend/app/components/ImportDialog.vue` — Drag-and-drop file upload modal; submits to `/api/memory/ingest` as multipart and hosts the in-progress folder scan/review/duplicate-policy/import-progress/cancel/removal/rescan mode
 - `frontend/app/components/LinkIngestDialog.vue` — URL import modal with client-side YouTube/article detection, folder selection, and optional AI summary toggle
 
 ## API / Interface

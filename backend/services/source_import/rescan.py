@@ -16,7 +16,7 @@ from services.source_import.models import (
     SourceScanReport,
     SourceScanResult,
 )
-from services.source_import.scan import FILE_LIST_LIMIT, scan_folder
+from services.source_import.scan import FILE_LIST_LIMIT, scan_source
 
 
 class SourceImportRescanConflict(Exception):
@@ -50,7 +50,7 @@ def _file_from_previous(item: SourceImportFileOutcome) -> SourceImportRescanFile
 def _previous_needs_import(item: SourceImportFileOutcome) -> bool:
     if item.status == "done":
         return False
-    if item.status == "skipped" and item.reason == "duplicate_content":
+    if item.status == "skipped" and "duplicate_content" in (item.reason or ""):
         return False
     return True
 
@@ -151,7 +151,7 @@ def _comparison_item(
             True,
         )
 
-    reason = "previous_duplicate_content" if previous.reason == "duplicate_content" else None
+    reason = "previous_duplicate_content" if "duplicate_content" in (previous.reason or "") else None
     return (
         SourceImportRescanFileItem(
             id=current.id,
@@ -257,7 +257,11 @@ async def rescan_import_batch(
         raise SourceImportRescanConflict("Import is not rescannable in its current state")
 
     root = Path(str(batch["source_root_path"]))
-    source_scan = scan_folder(root, scan_id=scan_id)
+    source_scan = scan_source(
+        root,
+        source_kind=str(batch.get("source_kind") or "local_folder"),
+        scan_id=scan_id,
+    )
     previous_by_relpath = {item.relpath: item for item in previous_files}
     current_relpaths = {item.relpath for item in source_scan.files}
 

@@ -7,10 +7,14 @@ from dataclasses import dataclass, field
 from email import policy
 from email.parser import BytesParser
 from email.message import Message
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Iterable, Optional
 
 from defusedxml import ElementTree as ET
+from services.source_import.archives import (
+    ArchiveError,
+    open_safe_zip,
+)
 
 
 BUSINESS_EXTRACTOR_EXTENSIONS = {
@@ -24,8 +28,6 @@ BUSINESS_EXTRACTOR_EXTENSIONS = {
     ".zip",
 }
 
-MAX_ZIP_ENTRIES = 2_000
-MAX_ZIP_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 MAX_RENDERED_CHARS = 300_000
 XLSX_MAX_PREVIEW_ROWS = 80
 XLSX_MAX_PREVIEW_COLS = 30
@@ -88,28 +90,11 @@ def _read_zip_xml(zf: zipfile.ZipFile, name: str) -> ET.Element:
         raise ExtractorError(f"Could not parse Office XML part: {name}") from exc
 
 
-def _validate_zip(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
-    infos = zf.infolist()
-    if len(infos) > MAX_ZIP_ENTRIES:
-        raise ExtractorError(f"Archive has too many entries ({len(infos)} > {MAX_ZIP_ENTRIES})")
-    total = 0
-    for info in infos:
-        path = PurePosixPath(info.filename)
-        if info.filename.startswith("/") or ".." in path.parts:
-            raise ExtractorError("Archive contains an unsafe path")
-        total += max(info.file_size, 0)
-        if total > MAX_ZIP_UNCOMPRESSED_BYTES:
-            raise ExtractorError("Archive is too large after decompression")
-    return infos
-
-
 def _open_safe_zip(path: Path) -> zipfile.ZipFile:
     try:
-        zf = zipfile.ZipFile(path)
-    except zipfile.BadZipFile as exc:
-        raise ExtractorError("File is not a valid ZIP-based document") from exc
-    _validate_zip(zf)
-    return zf
+        return open_safe_zip(path)
+    except ArchiveError as exc:
+        raise ExtractorError(str(exc)) from exc
 
 
 def _xml_text(node: ET.Element) -> str:

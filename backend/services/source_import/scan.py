@@ -6,10 +6,16 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, Optional
 
 from services.ingest import SUPPORTED_EXTENSIONS
+from services.source_import.archives import (
+    ZIP_EXTENSION,
+    ArchiveError,
+    ArchiveMemberMetadata,
+    iter_zip_member_metadata,
+)
 from services.source_import.cloud_placeholders import (
     ONLINE_ONLY_PLACEHOLDER_REASON,
     detect_online_only_placeholder,
@@ -177,6 +183,68 @@ def scan_folder(
             reason=ONLINE_ONLY_PLACEHOLDER_REASON,
         ))
 
+    def add_archive_member(member: ArchiveMemberMetadata) -> None:
+        nonlocal supported_count, unsupported_count, total_size_seen
+        member_path = PurePosixPath(member.member_name)
+        if not include_hidden and any(
+            part.startswith(".") for part in member_path.parts if part not in {"", "."}
+        ):
+            record_skip("hidden_or_system_file", member.size)
+            add_file_item(SourceScanFileItem(
+                id=_safe_file_id(member.relpath),
+                relpath=member.relpath,
+                filename=member.filename,
+                extension=member.extension,
+                size=member.size,
+                modified_at=member.modified_at,
+                status="skipped",
+                reason="hidden_or_system_file",
+            ))
+            return
+
+        if member.extension == ZIP_EXTENSION:
+            record_skip("nested_archive", member.size)
+            add_file_item(SourceScanFileItem(
+                id=_safe_file_id(member.relpath),
+                relpath=member.relpath,
+                filename=member.filename,
+                extension=member.extension,
+                size=member.size,
+                modified_at=member.modified_at,
+                status="skipped",
+                reason="nested_archive",
+            ))
+            return
+
+        total_size_seen += max(member.size, 0)
+        counts_by_extension[member.extension] += 1
+        folder_key = PurePosixPath(member.relpath).parent.as_posix()
+        if folder_key == ".":
+            folder_key = "."
+        folders[folder_key][0] += 1
+        folders[folder_key][1] += max(member.size, 0)
+        add_largest(member.relpath, member.size, member.extension)
+
+        if member.extension in SUPPORTED_EXTENSIONS:
+            supported_count += 1
+            status = "supported"
+            reason = None
+        else:
+            unsupported_count += 1
+            status = "unsupported"
+            reason = "unsupported_file_type"
+
+        add_file_item(SourceScanFileItem(
+            id=_safe_file_id(member.relpath),
+            relpath=member.relpath,
+            filename=member.filename,
+            extension=member.extension,
+            size=member.size,
+            modified_at=member.modified_at,
+            status=status,
+            reason=reason,
+        ))
+
     while stack:
         current = stack.pop()
         try:
@@ -257,8 +325,49 @@ def scan_folder(
 
             size = st.st_size
             modified_at = _iso_from_timestamp(st.st_mtime)
-            total_size_seen += max(size, 0)
             extension = Path(entry.name).suffix.lower() or "(none)"
+
+            if extension == ZIP_EXTENSION:
+                try:
+                    archive_members = iter_zip_member_metadata(
+                        path,
+                        archive_relpath=rel,
+                    )
+                except ArchiveError as exc:
+                    record_skip(exc.reason, size)
+                    add_file_item(SourceScanFileItem(
+                        id=_safe_file_id(rel),
+                        relpath=rel,
+                        filename=entry.name,
+                        extension=extension,
+                        size=size,
+                        modified_at=modified_at,
+                        status="skipped",
+                        reason=exc.reason,
+                    ))
+                    continue
+
+                if not archive_members:
+                    record_skip("archive_empty", size)
+                    add_file_item(SourceScanFileItem(
+                        id=_safe_file_id(rel),
+                        relpath=rel,
+                        filename=entry.name,
+                        extension=extension,
+                        size=size,
+                        modified_at=modified_at,
+                        status="skipped",
+                        reason="archive_empty",
+                    ))
+                    continue
+
+                for member in archive_members:
+                    if not count_seen_file():
+                        break
+                    add_archive_member(member)
+                continue
+
+            total_size_seen += max(size, 0)
             counts_by_extension[extension] += 1
             folder_key = Path(rel).parent.as_posix()
             if folder_key == ".":
@@ -316,3 +425,240 @@ def scan_folder(
         created_at=_now_iso(),
     )
     return SourceScanResult(report=report, files=all_files)
+
+
+def scan_archive(
+    archive_path: Path,
+    *,
+    scan_id: str,
+    include_hidden: bool = False,
+    max_files: Optional[int] = None,
+) -> SourceScanResult:
+    root = archive_path.resolve(strict=True)
+    if not root.is_file():
+        raise ValueError("Selected source is not a file")
+    if root.suffix.lower() != ZIP_EXTENSION:
+        raise ValueError("Selected source is not a ZIP archive")
+
+    max_files = max_files or DEFAULT_MAX_FILES
+    total_files_seen = 0
+    total_size_seen = 0
+    supported_count = 0
+    unsupported_count = 0
+    skipped_count = 0
+    skipped_by_reason: Counter[str] = Counter()
+    counts_by_extension: Counter[str] = Counter()
+    folders: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    largest: list[SourceScanLargestFile] = []
+    preview_files: list[SourceScanFileItem] = []
+    all_files: list[SourceScanFileItem] = []
+    file_list_truncated = False
+    limit_hit = False
+
+    def add_file_item(item: SourceScanFileItem) -> None:
+        nonlocal file_list_truncated
+        all_files.append(item)
+        if len(preview_files) < FILE_LIST_LIMIT:
+            preview_files.append(item)
+        else:
+            file_list_truncated = True
+
+    def add_largest(relpath: str, size: int, extension: str) -> None:
+        largest.append(SourceScanLargestFile(relpath=relpath, size=size, extension=extension))
+        largest.sort(key=lambda row: row.size, reverse=True)
+        del largest[LARGEST_FILES_LIMIT:]
+
+    def record_skip(reason: str, size: int = 0) -> None:
+        nonlocal skipped_count, total_size_seen
+        skipped_count += 1
+        skipped_by_reason[reason] += 1
+        total_size_seen += max(size, 0)
+
+    def count_seen_file() -> bool:
+        nonlocal total_files_seen, limit_hit
+        total_files_seen += 1
+        if total_files_seen > max_files:
+            limit_hit = True
+            record_skip("scan_file_limit")
+            return False
+        return True
+
+    def add_archive_member(member: ArchiveMemberMetadata) -> None:
+        nonlocal supported_count, unsupported_count, total_size_seen
+        member_path = PurePosixPath(member.member_name)
+        if not include_hidden and any(
+            part.startswith(".") for part in member_path.parts if part not in {"", "."}
+        ):
+            record_skip("hidden_or_system_file", member.size)
+            add_file_item(SourceScanFileItem(
+                id=_safe_file_id(member.relpath),
+                relpath=member.relpath,
+                filename=member.filename,
+                extension=member.extension,
+                size=member.size,
+                modified_at=member.modified_at,
+                status="skipped",
+                reason="hidden_or_system_file",
+            ))
+            return
+
+        if member.extension == ZIP_EXTENSION:
+            record_skip("nested_archive", member.size)
+            add_file_item(SourceScanFileItem(
+                id=_safe_file_id(member.relpath),
+                relpath=member.relpath,
+                filename=member.filename,
+                extension=member.extension,
+                size=member.size,
+                modified_at=member.modified_at,
+                status="skipped",
+                reason="nested_archive",
+            ))
+            return
+
+        total_size_seen += max(member.size, 0)
+        counts_by_extension[member.extension] += 1
+        folder_key = PurePosixPath(member.relpath).parent.as_posix()
+        if folder_key == ".":
+            folder_key = "."
+        folders[folder_key][0] += 1
+        folders[folder_key][1] += max(member.size, 0)
+        add_largest(member.relpath, member.size, member.extension)
+
+        if member.extension in SUPPORTED_EXTENSIONS:
+            supported_count += 1
+            status = "supported"
+            reason = None
+        else:
+            unsupported_count += 1
+            status = "unsupported"
+            reason = "unsupported_file_type"
+
+        add_file_item(SourceScanFileItem(
+            id=_safe_file_id(member.relpath),
+            relpath=member.relpath,
+            filename=member.filename,
+            extension=member.extension,
+            size=member.size,
+            modified_at=member.modified_at,
+            status=status,
+            reason=reason,
+        ))
+
+    try:
+        root_stat = root.stat()
+        root_size = root_stat.st_size
+        root_modified_at = _iso_from_timestamp(root_stat.st_mtime)
+    except OSError:
+        root_stat = None
+        root_size = 0
+        root_modified_at = None
+
+    placeholder_reason = detect_online_only_placeholder(
+        root,
+        stat_result=root_stat,
+    )
+    if placeholder_reason:
+        total_files_seen = 1
+        record_skip(placeholder_reason, root_size)
+        add_file_item(SourceScanFileItem(
+            id=_safe_file_id(root.name),
+            relpath=root.name,
+            filename=root.name,
+            extension=root.suffix.lower(),
+            size=root_size,
+            modified_at=root_modified_at,
+            status="skipped",
+            reason=placeholder_reason,
+        ))
+    else:
+        try:
+            archive_members = iter_zip_member_metadata(root, archive_relpath="")
+        except ArchiveError as exc:
+            total_files_seen = 1
+            record_skip(exc.reason, root_size)
+            add_file_item(SourceScanFileItem(
+                id=_safe_file_id(root.name),
+                relpath=root.name,
+                filename=root.name,
+                extension=root.suffix.lower(),
+                size=root_size,
+                modified_at=root_modified_at,
+                status="skipped",
+                reason=exc.reason,
+            ))
+        else:
+            if not archive_members:
+                total_files_seen = 1
+                record_skip("archive_empty", root_size)
+                add_file_item(SourceScanFileItem(
+                    id=_safe_file_id(root.name),
+                    relpath=root.name,
+                    filename=root.name,
+                    extension=root.suffix.lower(),
+                    size=root_size,
+                    modified_at=root_modified_at,
+                    status="skipped",
+                    reason="archive_empty",
+                ))
+            else:
+                for member in archive_members:
+                    if not count_seen_file():
+                        break
+                    add_archive_member(member)
+
+    folder_summary = [
+        SourceScanFolderSummary(relpath=rel, file_count=values[0], total_size=values[1])
+        for rel, values in sorted(
+            folders.items(),
+            key=lambda item: (item[0].count("/"), item[0].lower()),
+        )[:FOLDER_SUMMARY_LIMIT]
+    ]
+
+    display_name = root.name or str(root)
+    report = SourceScanReport(
+        scan_id=scan_id,
+        source_kind="local_archive",
+        source_display_name=display_name,
+        source_root_path=str(root),
+        proposed_destination_root=f"memory/imports/{_slugify(root.stem or display_name)}/",
+        total_files_seen=total_files_seen,
+        total_size_seen=total_size_seen,
+        supported_file_count=supported_count,
+        unsupported_file_count=unsupported_count,
+        skipped_file_count=skipped_count,
+        skipped_by_reason=dict(sorted(skipped_by_reason.items())),
+        counts_by_extension=dict(sorted(counts_by_extension.items())),
+        largest_files=largest,
+        folder_summary=folder_summary,
+        files=preview_files,
+        file_list_truncated=file_list_truncated,
+        limit_hit=limit_hit,
+        created_at=_now_iso(),
+    )
+    return SourceScanResult(report=report, files=all_files)
+
+
+def scan_source(
+    path: Path,
+    *,
+    source_kind: str,
+    scan_id: str,
+    include_hidden: bool = False,
+    max_files: Optional[int] = None,
+) -> SourceScanResult:
+    if source_kind == "local_folder":
+        return scan_folder(
+            path,
+            scan_id=scan_id,
+            include_hidden=include_hidden,
+            max_files=max_files,
+        )
+    if source_kind == "local_archive":
+        return scan_archive(
+            path,
+            scan_id=scan_id,
+            include_hidden=include_hidden,
+            max_files=max_files,
+        )
+    raise ValueError("Unsupported source kind")

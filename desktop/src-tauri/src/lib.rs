@@ -296,6 +296,37 @@ fn pick_folder_blocking() -> Result<String, String> {
     Err("Native folder picker is not available on this platform yet".to_string())
 }
 
+#[cfg(target_os = "macos")]
+fn pick_archive_blocking() -> Result<String, String> {
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(concat!(
+            "POSIX path of (choose file with prompt ",
+            "\"Choose a ZIP archive to scan\" of type {\"zip\"})",
+        ))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("archive picker failed to start: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("User canceled") || stderr.contains("-128") {
+            return Err("Archive selection cancelled".to_string());
+        }
+        return Err(format!("archive picker failed: {}", stderr.trim()));
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        return Err("Archive selection returned no path".to_string());
+    }
+    Ok(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pick_archive_blocking() -> Result<String, String> {
+    Err("Native archive picker is not available on this platform yet".to_string())
+}
+
 /// Spawn the bundled Ollama runtime as a child process. Returns the handle so
 /// the shell can kill it on exit.
 ///
@@ -506,6 +537,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_boot_state,
             source_import_pick_folder,
+            source_import_pick_archive,
             source_import_pick_sample_dataset,
             send_chat_message,
             license::license_get_state,
@@ -681,6 +713,27 @@ async fn source_import_pick_folder(
 
     create_source_import_grant_for_path(
         path,
+        "local_folder",
+        backend.inner(),
+        client.inner(),
+        grant_token.inner(),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn source_import_pick_archive(
+    backend: State<'_, BackendUrlHandle>,
+    client: State<'_, HttpClient>,
+    grant_token: State<'_, SourceImportGrantToken>,
+) -> Result<SourceImportGrantResponse, String> {
+    let path = async_runtime::spawn_blocking(pick_archive_blocking)
+        .await
+        .map_err(|e| format!("archive picker task failed: {e}"))??;
+
+    create_source_import_grant_for_path(
+        path,
+        "local_archive",
         backend.inner(),
         client.inner(),
         grant_token.inner(),
@@ -716,6 +769,7 @@ async fn source_import_pick_sample_dataset(
     let path = sample_dataset_path(&app)?;
     create_source_import_grant_for_path(
         path.to_string_lossy().to_string(),
+        "local_folder",
         backend.inner(),
         client.inner(),
         grant_token.inner(),
@@ -725,6 +779,7 @@ async fn source_import_pick_sample_dataset(
 
 async fn create_source_import_grant_for_path(
     path: String,
+    source_kind: &str,
     backend: &BackendUrlHandle,
     client: &HttpClient,
     grant_token: &SourceImportGrantToken,
@@ -736,7 +791,7 @@ async fn create_source_import_grant_for_path(
         .header("x-deepfiles-shell-token", grant_token.0.as_str())
         .json(&serde_json::json!({
             "path": path,
-            "source_kind": "local_folder",
+            "source_kind": source_kind,
         }))
         .send()
         .await

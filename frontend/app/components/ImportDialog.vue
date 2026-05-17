@@ -53,7 +53,7 @@
           <button
             type="button"
             class="import-dialog__browse-btn"
-            :disabled="folderPicking || folderSamplePicking || folderScanning"
+            :disabled="folderPicking || folderArchivePicking || folderSamplePicking || folderScanning"
             @click="chooseFolderSource"
           >
             <Icon name="ph:folder-open-bold" class="icon--sm" />
@@ -61,8 +61,17 @@
           </button>
           <button
             type="button"
+            class="import-dialog__archive-btn"
+            :disabled="folderPicking || folderArchivePicking || folderSamplePicking || folderScanning"
+            @click="chooseArchiveSource"
+          >
+            <Icon name="ph:file-zip-bold" class="icon--sm" />
+            {{ folderArchivePicking ? 'Opening...' : 'Choose ZIP' }}
+          </button>
+          <button
+            type="button"
             class="import-dialog__sample-btn"
-            :disabled="folderPicking || folderSamplePicking || folderScanning"
+            :disabled="folderPicking || folderArchivePicking || folderSamplePicking || folderScanning"
             @click="chooseSampleDataset"
           >
             <Icon name="ph:sparkle-bold" class="icon--sm" />
@@ -84,11 +93,11 @@
             type="checkbox"
             :disabled="folderScanning || !!folderScan"
           />
-          <span>Include hidden files and folders</span>
+          <span>{{ folderHiddenToggleLabel }}</span>
         </label>
 
         <div v-if="folderScanning" class="import-dialog__progress">
-          Scanning file names, types, sizes, and folders...
+          {{ folderScanningLabel }}
         </div>
 
         <div v-if="folderScan" class="import-dialog__scan">
@@ -129,6 +138,14 @@
             <p class="import-dialog__sublabel">
               File contents stay unread until the approved import step.
             </p>
+            <label class="import-dialog__toggle import-dialog__duplicate-toggle">
+              <input
+                v-model="importDuplicateContent"
+                type="checkbox"
+                :disabled="folderReviewLocked"
+              />
+              <span>Import duplicate content as separate notes</span>
+            </label>
           </div>
           <div v-else-if="folderSelectionLoading" class="import-dialog__progress">
             Updating review...
@@ -681,6 +698,7 @@ const uploading = ref(false)
 const error = ref('')
 const success = ref('')
 const folderPicking = ref(false)
+const folderArchivePicking = ref(false)
 const folderSamplePicking = ref(false)
 const folderScanning = ref(false)
 const folderGrant = ref<SourceGrantResponse | null>(null)
@@ -700,6 +718,7 @@ const folderRescan = ref<SourceImportRescanReport | null>(null)
 const folderRescanning = ref(false)
 const folderRescanImportStarting = ref(false)
 const includeHiddenInFolderScan = ref(false)
+const importDuplicateContent = ref(false)
 const excludedFileIds = ref<string[]>([])
 const excludedExtensions = ref<string[]>([])
 const excludedFolders = ref<string[]>([])
@@ -740,6 +759,22 @@ const folderRows = computed(() => {
     .filter(row => row.relpath !== '.')
     .slice(0, 12)
 })
+
+const folderSourceIsArchive = computed(() =>
+  folderGrant.value?.source_kind === 'local_archive' ||
+  folderScan.value?.source_kind === 'local_archive' ||
+  folderImport.value?.source_kind === 'local_archive'
+)
+
+const folderHiddenToggleLabel = computed(() =>
+  folderSourceIsArchive.value ? 'Include hidden archive entries' : 'Include hidden files and folders'
+)
+
+const folderScanningLabel = computed(() =>
+  folderSourceIsArchive.value
+    ? 'Scanning archive file names, types, sizes, and folders...'
+    : 'Scanning file names, types, sizes, and folders...'
+)
 
 const folderImportActive = computed(() =>
   folderImportStarting.value ||
@@ -868,6 +903,7 @@ const primaryDisabled = computed(() => {
       !folderGrant.value ||
       folderScanning.value ||
       folderPicking.value ||
+      folderArchivePicking.value ||
       folderSamplePicking.value ||
       folderRescanning.value ||
       folderImportActive.value
@@ -902,7 +938,7 @@ const primaryLabel = computed(() => {
     if (folderImportTerminal.value) return 'Imported'
     if (folderScan.value) return 'Import selected'
     if (folderScanning.value) return 'Scanning...'
-    return 'Scan folder'
+    return folderSourceIsArchive.value ? 'Scan archive' : 'Scan folder'
   }
   if (selectedFiles.value.length > 1) return `Import ${selectedFiles.value.length} files`
   return 'Import'
@@ -925,6 +961,7 @@ function resetFolderReview() {
   folderRescan.value = null
   folderRescanning.value = false
   folderRescanImportStarting.value = false
+  importDuplicateContent.value = false
   excludedFileIds.value = []
   excludedExtensions.value = []
   excludedFolders.value = []
@@ -939,6 +976,7 @@ function setMode(next: Mode) {
   error.value = ''
   success.value = ''
   folderGrant.value = null
+  folderArchivePicking.value = false
   includeHiddenInFolderScan.value = false
   resetFolderReview()
   if (next === 'jira' && recentImports.value.length === 0) {
@@ -1042,6 +1080,21 @@ async function chooseFolderSource() {
   }
 }
 
+async function chooseArchiveSource() {
+  folderArchivePicking.value = true
+  error.value = ''
+  success.value = ''
+  resetFolderReview()
+  try {
+    folderGrant.value = await sourceImport.pickArchiveSource()
+    success.value = 'ZIP archive selected. Scan it when ready.'
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'Archive selection failed'
+  } finally {
+    folderArchivePicking.value = false
+  }
+}
+
 async function chooseSampleDataset() {
   folderSamplePicking.value = true
   error.value = ''
@@ -1072,7 +1125,7 @@ async function scanFolderSource() {
       `Scan ready: ${folderScan.value.supported_file_count} supported files, ` +
       `${folderScan.value.skipped_file_count} skipped.`
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Folder scan failed'
+    error.value = err instanceof Error ? err.message : 'Source scan failed'
   } finally {
     folderScanning.value = false
   }
@@ -1109,10 +1162,16 @@ async function startFolderImport() {
   folderImportReview.value = null
   folderRescan.value = null
   try {
-    folderImport.value = await sourceImport.startImport(
-      folderScan.value.scan_id,
-      folderSelection.value.selection_id,
-    )
+    folderImport.value = importDuplicateContent.value
+      ? await sourceImport.startImport(
+          folderScan.value.scan_id,
+          folderSelection.value.selection_id,
+          { duplicatePolicy: 'import' },
+        )
+      : await sourceImport.startImport(
+          folderScan.value.scan_id,
+          folderSelection.value.selection_id,
+        )
     success.value = `Import started: ${folderImport.value.total_file_count} files approved.`
     scheduleFolderImportPoll()
   } catch (err: unknown) {
@@ -1209,10 +1268,16 @@ async function startFolderRescanImport() {
   folderImportReview.value = null
   try {
     const selection = await sourceImport.createSelection(folderRescan.value.scan_id, {})
-    folderImport.value = await sourceImport.startImport(
-      folderRescan.value.scan_id,
-      selection.selection_id,
-    )
+    folderImport.value = importDuplicateContent.value
+      ? await sourceImport.startImport(
+          folderRescan.value.scan_id,
+          selection.selection_id,
+          { duplicatePolicy: 'import' },
+        )
+      : await sourceImport.startImport(
+          folderRescan.value.scan_id,
+          selection.selection_id,
+        )
     folderSelection.value = selection
     success.value =
       `Importing ${folderImport.value.total_file_count} new or changed files.`
@@ -1505,6 +1570,7 @@ function folderIssueCanFixLocally(file: { reason?: string | null }): boolean {
     'encrypted',
     'file_too_large',
     'limit',
+    'nested_archive',
     'no longer available',
     'online_only',
     'outside the selected folder',
@@ -1536,6 +1602,9 @@ function folderIssueActionHint(file: SourceImportFileReviewItem): string {
   if (reason.includes('online_only') || reason.includes('placeholder')) {
     return 'Download it to this computer, then scan again.'
   }
+  if (reason.includes('nested_archive')) {
+    return 'Extract the nested archive locally, then import it as its own source.'
+  }
   if (
     reason.includes('no longer available') ||
     reason.includes('outside the selected folder')
@@ -1548,6 +1617,9 @@ function folderIssueActionHint(file: SourceImportFileReviewItem): string {
   if (reason.includes('unsupported')) {
     return 'Convert it to a supported document type.'
   }
+  if (reason.includes('archive_')) {
+    return 'Extract or repair the archive locally, then scan again.'
+  }
   if (reason.includes('too large') || reason.includes('limit')) {
     return 'Split or reduce the file before importing.'
   }
@@ -1558,6 +1630,21 @@ function folderIssueActionHint(file: SourceImportFileReviewItem): string {
 }
 
 function humanizeReason(reason: string): string {
+  const labels: Record<string, string> = {
+    archive_duplicate_member: 'Duplicate archive path',
+    archive_empty: 'Empty archive',
+    archive_entry_limit: 'Archive limit',
+    archive_member_not_found: 'Archive file missing',
+    archive_size_limit: 'Archive too large',
+    archive_unreadable: 'Unreadable archive',
+    archive_unsafe_path: 'Unsafe archive path',
+    duplicate_content: 'Duplicate',
+    duplicate_content_existing_import: 'Already imported',
+    nested_archive: 'Nested archive',
+    online_only_placeholder: 'Online-only file',
+    previous_duplicate_content: 'Already imported',
+  }
+  if (labels[reason]) return labels[reason]
   return reason
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (ch) => ch.toUpperCase())
@@ -1645,6 +1732,7 @@ onUnmounted(() => {
   display: none;
 }
 .import-dialog__browse-btn,
+.import-dialog__archive-btn,
 .import-dialog__sample-btn {
   margin-top: 0.5rem;
   padding: 0.4rem 1.25rem;
@@ -1661,7 +1749,12 @@ onUnmounted(() => {
   border-color: rgba(34, 197, 94, 0.45);
   color: #86efac;
 }
+.import-dialog__archive-btn {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+}
 .import-dialog__browse-btn:disabled,
+.import-dialog__archive-btn:disabled,
 .import-dialog__sample-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1802,6 +1895,9 @@ onUnmounted(() => {
 }
 .import-dialog__toggle input {
   margin: 0;
+}
+.import-dialog__duplicate-toggle {
+  margin-top: 0.15rem;
 }
 .import-dialog__scan {
   display: flex;
