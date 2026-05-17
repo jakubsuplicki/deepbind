@@ -208,6 +208,7 @@ async def search_similar(
     query: str,
     limit: int = 10,
     workspace_path: Optional[Path] = None,
+    path_allowlist: Optional[set[str]] = None,
 ) -> List[Tuple[str, float]]:
     """Find notes most similar to a query by cosine similarity.
 
@@ -219,13 +220,24 @@ async def search_similar(
     db_path = (workspace_path or get_settings().workspace_path) / "app" / "jarvis.db"
     if not db_path.exists():
         return []
+    if path_allowlist is not None and not path_allowlist:
+        return []
 
     query_vec = await aembed_query(query)
 
     async with aiosqlite.connect(str(db_path)) as db:
-        cursor = await db.execute(
-            "SELECT path, embedding FROM note_embeddings"
-        )
+        if path_allowlist is not None:
+            paths = sorted(path_allowlist)
+            placeholders = ",".join("?" for _ in paths)
+            cursor = await db.execute(
+                "SELECT path, embedding FROM note_embeddings "
+                f"WHERE path IN ({placeholders})",
+                paths,
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT path, embedding FROM note_embeddings"
+            )
         rows = await cursor.fetchall()
 
     if not rows:
@@ -396,6 +408,7 @@ async def search_similar_chunks(
     query: str,
     limit: int = 10,
     workspace_path: Optional[Path] = None,
+    path_allowlist: Optional[set[str]] = None,
 ) -> List[dict]:
     """Find most similar chunks, grouped by parent note.
 
@@ -408,16 +421,25 @@ async def search_similar_chunks(
     db_path = (workspace_path or get_settings().workspace_path) / "app" / "jarvis.db"
     if not db_path.exists():
         return []
+    if path_allowlist is not None and not path_allowlist:
+        return []
 
     query_vec = await aembed_query(query)
 
     async with aiosqlite.connect(str(db_path)) as db:
         try:
-            cursor = await db.execute(
+            sql = (
                 "SELECT ce.path, ce.chunk_index, ce.embedding, nc.chunk_text, nc.section_title "
                 "FROM chunk_embeddings ce "
                 "JOIN note_chunks nc ON ce.chunk_id = nc.id"
             )
+            params: list[str] = []
+            if path_allowlist is not None:
+                paths = sorted(path_allowlist)
+                placeholders = ",".join("?" for _ in paths)
+                sql += f" WHERE ce.path IN ({placeholders})"
+                params = paths
+            cursor = await db.execute(sql, params)
             rows = await cursor.fetchall()
         except Exception:
             return []

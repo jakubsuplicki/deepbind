@@ -135,10 +135,13 @@ async def list_notes(
     search: Optional[str] = None,
     limit: int = 50,
     workspace_path: Optional[Path] = None,
+    path_allowlist: Optional[set[str]] = None,
 ) -> List[Dict]:
     db_p = _db_path(workspace_path)
 
     if not db_p.exists():
+        return []
+    if path_allowlist is not None and not path_allowlist:
         return []
 
     async with aiosqlite.connect(str(db_p)) as db:
@@ -155,11 +158,19 @@ async def list_notes(
             # Try AND first (all terms required)
             fts_and = " ".join(t + "*" for t in tokens)
 
-            folder_clause = ""
+            extra_clauses = []
             params: list = [fts_and]
             if folder:
-                folder_clause = " AND n.folder = ?"
+                extra_clauses.append("n.folder = ?")
                 params.append(folder)
+            if path_allowlist is not None:
+                paths = sorted(path_allowlist)
+                placeholders = ",".join("?" for _ in paths)
+                extra_clauses.append(f"n.path IN ({placeholders})")
+                params.extend(paths)
+            extra_clause = ""
+            if extra_clauses:
+                extra_clause = " AND " + " AND ".join(extra_clauses)
             params.append(limit)
 
             # bm25() returns negative values; lower = better match
@@ -171,7 +182,7 @@ async def list_notes(
                        {bm25_expr} AS bm25_score
                 FROM notes n
                 JOIN notes_fts ON notes_fts.rowid = n.id
-                WHERE notes_fts MATCH ?{folder_clause}
+                WHERE notes_fts MATCH ?{extra_clause}
                 ORDER BY bm25_score
                 LIMIT ?
             """
@@ -187,9 +198,17 @@ async def list_notes(
         else:
             query = "SELECT path, title, folder, tags, updated_at, word_count, frontmatter FROM notes"
             params = []
+            clauses = []
             if folder:
-                query += " WHERE folder = ?"
+                clauses.append("folder = ?")
                 params.append(folder)
+            if path_allowlist is not None:
+                paths = sorted(path_allowlist)
+                placeholders = ",".join("?" for _ in paths)
+                clauses.append(f"path IN ({placeholders})")
+                params.extend(paths)
+            if clauses:
+                query += " WHERE " + " AND ".join(clauses)
             query += " ORDER BY updated_at DESC LIMIT ?"
             params.append(limit)
             cursor = await db.execute(query, params)

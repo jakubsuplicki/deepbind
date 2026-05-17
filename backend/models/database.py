@@ -272,7 +272,12 @@ CREATE INDEX IF NOT EXISTS idx_eq_status_created ON enrichment_queue(status, cre
 """
 
 
-_VALID_TABLES = {"notes", "note_chunks", "source_import_batches"}
+_VALID_TABLES = {
+    "notes",
+    "note_chunks",
+    "source_import_batches",
+    "source_import_files",
+}
 
 
 async def _column_exists(db, table: str, column: str) -> bool:
@@ -351,5 +356,10 @@ async def init_database(db_path: Path) -> None:
             await db.execute(
                 "ALTER TABLE source_import_batches "
                 "ADD COLUMN duplicate_policy TEXT NOT NULL DEFAULT 'skip'"
+            )
+        if not await _column_exists(db, "source_import_files", "warnings"):
+            await db.execute(
+                "ALTER TABLE source_import_files "
+                "ADD COLUMN warnings TEXT NOT NULL DEFAULT '[]'"
             )
         await db.commit()

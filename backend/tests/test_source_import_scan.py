@@ -69,6 +69,48 @@ async def _wait_for_import(client, batch_id: str) -> dict:
     raise AssertionError("source import did not finish")
 
 
+def _write_xlsx_fixture(path: Path, *, rows: int = 2) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows_xml = "\n".join(
+        (
+            f'<row r="{idx}">'
+            f'<c r="A{idx}" t="inlineStr"><is><t>Row {idx}</t></is></c>'
+            f'<c r="B{idx}"><v>{idx}</v></c>'
+            "</row>"
+        )
+        for idx in range(1, rows + 1)
+    )
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(
+            "xl/workbook.xml",
+            """
+            <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                      xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <sheets><sheet name="Pipeline" sheetId="1" r:id="rId1"/></sheets>
+            </workbook>
+            """,
+        )
+        zf.writestr(
+            "xl/_rels/workbook.xml.rels",
+            """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
+            </Relationships>
+            """,
+        )
+        zf.writestr(
+            "xl/worksheets/sheet1.xml",
+            f"""
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetData>
+                {rows_xml}
+              </sheetData>
+            </worksheet>
+            """,
+        )
+    return path
+
+
 @pytest.mark.anyio
 async def test_grant_rejects_missing_shell_token(client, tmp_path):
     r = await client.post(
@@ -162,6 +204,29 @@ async def test_scan_reports_file_limit(client, tmp_path):
 
 
 @pytest.mark.anyio
+async def test_scan_skips_files_above_source_import_file_limit(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr("services.source_import.scan.MAX_FILE_BYTES", 8)
+    (tmp_path / "small.md").write_bytes(b"12345678")
+    (tmp_path / "large.md").write_bytes(b"123456789")
+    token = await _grant(client, tmp_path)
+
+    r = await client.post("/api/source-import/scan", json={"source_token": token})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["supported_file_count"] == 1
+    assert body["skipped_file_count"] == 1
+    assert body["skipped_by_reason"] == {"file_too_large": 1}
+    large = next(row for row in body["files"] if row["relpath"] == "large.md")
+    assert large["status"] == "skipped"
+    assert large["reason"] == "file_too_large"
+
+
+@pytest.mark.anyio
 async def test_scan_skips_symlink_outside_root(client, tmp_path):
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
@@ -219,6 +284,37 @@ async def test_selection_applies_review_exclusions(client, tmp_path):
     assert body["excluded_file_count"] == 3
     assert body["excluded_by_rule"] == {"file": 1, "file_type": 1, "folder": 1}
     assert body["unsupported_file_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_selection_enforces_approved_batch_size_limit(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "services.source_import.selection.MAX_APPROVED_BYTES_PER_BATCH",
+        10,
+    )
+    (tmp_path / "alpha.md").write_bytes(b"1234567")
+    (tmp_path / "beta.md").write_bytes(b"abcdefg")
+    token = await _grant(client, tmp_path)
+
+    scan = await client.post("/api/source-import/scan", json={"source_token": token})
+    assert scan.status_code == 200
+    scan_body = scan.json()
+    selection = await client.post(
+        f"/api/source-import/scans/{scan_body['scan_id']}/selection",
+        json={},
+    )
+
+    assert selection.status_code == 200
+    body = selection.json()
+    assert body["approved_file_count"] == 1
+    assert body["approved_total_size"] == 7
+    assert body["excluded_file_count"] == 1
+    assert body["excluded_total_size"] == 7
+    assert body["excluded_by_rule"] == {"batch_size_limit": 1}
 
 
 @pytest.mark.anyio
@@ -587,6 +683,13 @@ async def test_start_import_processes_approved_files_with_safe_provenance(
         if item["status"] == "skipped"
     } == {"duplicate_content"}
 
+    history = await client.get("/api/source-import/imports?limit=1")
+    assert history.status_code == 200
+    history_body = history.json()
+    assert len(history_body) == 1
+    assert history_body[0]["batch_id"] == batch_id
+    assert history_body[0]["source_display_name"] == "Client A"
+
     completion = await client.get(f"/api/source-import/imports/{batch_id}/completion")
     assert completion.status_code == 200
     completion_body = completion.json()
@@ -627,6 +730,61 @@ async def test_start_import_processes_approved_files_with_safe_provenance(
         item["via"] == "import_batch" and item["path"] in note_relpaths
         for item in stats["trace"]
     )
+
+
+@pytest.mark.anyio
+async def test_source_import_surfaces_extractor_warnings(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    await init_database(workspace / "app" / "jarvis.db")
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+
+    async def _fake_connect(*_args, **_kwargs):
+        return SimpleNamespace(model_dump=lambda: {})
+
+    monkeypatch.setattr("services.connection_service.connect_note", _fake_connect)
+    monkeypatch.setattr("services.ingest_jobs.schedule_graph_rebuild", lambda **_kwargs: None)
+
+    source = tmp_path / "Client A"
+    source.mkdir()
+    _write_xlsx_fixture(source / "pipeline.xlsx", rows=81)
+
+    token = await _grant(client, source)
+    scan = await client.post("/api/source-import/scan", json={"source_token": token})
+    assert scan.status_code == 200
+    selection = await client.post(
+        f"/api/source-import/scans/{scan.json()['scan_id']}/selection",
+        json={},
+    )
+    assert selection.status_code == 200
+    started = await client.post(
+        f"/api/source-import/scans/{scan.json()['scan_id']}/start",
+        json={"selection_id": selection.json()["selection_id"]},
+    )
+    assert started.status_code == 200
+
+    finished = await _wait_for_import(client, started.json()["batch_id"])
+    assert finished["state"] == "completed"
+    assert finished["imported_file_count"] == 1
+    assert finished["warning_file_count"] == 1
+    assert finished["files"][0]["warnings"] == ["Pipeline: preview limited to 80 rows"]
+
+    completion = await client.get(
+        f"/api/source-import/imports/{started.json()['batch_id']}/completion"
+    )
+    assert completion.status_code == 200
+    assert completion.json()["warning_file_count"] == 1
+
+    note_path = finished["files"][0]["note_paths"][0]
+    content = (workspace / "memory" / note_path).read_text(encoding="utf-8")
+    fm, _body = parse_frontmatter(content)
+    assert fm["extractor_warnings"] == ["Pipeline: preview limited to 80 rows"]
+    assert "## Import warnings" in content
 
 
 @pytest.mark.anyio

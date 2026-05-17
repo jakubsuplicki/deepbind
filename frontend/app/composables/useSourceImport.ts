@@ -69,6 +69,7 @@ export interface SourceImportFileOutcome {
   reason?: string | null
   duplicate_of?: string | null
   content_hash?: string | null
+  warnings: string[]
   note_paths: string[]
 }
 
@@ -94,6 +95,7 @@ export interface SourceImportBatchSummary {
   imported_file_count: number
   skipped_file_count: number
   failed_file_count: number
+  warning_file_count: number
   created_note_count: number
   total_bytes: number
   processed_bytes: number
@@ -148,6 +150,7 @@ export interface SourceImportCompletionSummary {
   skipped_file_count: number
   failed_file_count: number
   duplicate_file_count: number
+  warning_file_count: number
   created_note_count: number
   imported_extension_counts: Record<string, number>
   imported_folder_counts: Record<string, number>
@@ -290,6 +293,15 @@ export function useSourceImport() {
     )
   }
 
+  async function listImports(limit = 10): Promise<SourceImportBatchSummary[]> {
+    return await $fetch<SourceImportBatchSummary[]>(
+      apiUrl('/api/source-import/imports'),
+      {
+        query: { limit },
+      },
+    )
+  }
+
   async function getImportCompletion(
     batchId: string,
   ): Promise<SourceImportCompletionSummary> {
@@ -349,6 +361,7 @@ export function useSourceImport() {
     getImportCompletion,
     getImportReview,
     getImport,
+    listImports,
     pickArchiveSource,
     pickSampleDataset,
     pickFolderSource,

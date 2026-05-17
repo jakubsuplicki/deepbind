@@ -8,10 +8,15 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
+from services.source_import.limits import (
+    MAX_ARCHIVE_ENTRIES,
+    MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+)
+
 
 ZIP_EXTENSION = ".zip"
-MAX_ZIP_ENTRIES = 2_000
-MAX_ZIP_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
+MAX_ZIP_ENTRIES = MAX_ARCHIVE_ENTRIES
+MAX_ZIP_UNCOMPRESSED_BYTES = MAX_ARCHIVE_UNCOMPRESSED_BYTES
 
 
 class ArchiveError(Exception):

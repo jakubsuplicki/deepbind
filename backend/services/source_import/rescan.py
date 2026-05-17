@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
+from services.source_import.limits import (
+    FOLDER_SUMMARY_LIMIT,
+    LARGEST_FILES_LIMIT,
+)
 from services.source_import.manifest import get_batch_runtime
 from services.source_import.models import (
     SourceImportFileOutcome,
@@ -216,7 +220,7 @@ def _scan_for_importable_changes(
         for relpath, values in sorted(
             folders.items(),
             key=lambda pair: (pair[0].count("/"), pair[0].lower()),
-        )[:20]
+        )[:FOLDER_SUMMARY_LIMIT]
     ]
     preview = importable_files[:FILE_LIST_LIMIT]
 
@@ -233,7 +237,7 @@ def _scan_for_importable_changes(
         skipped_file_count=0,
         skipped_by_reason={},
         counts_by_extension=dict(sorted(counts_by_extension.items())),
-        largest_files=largest[:10],
+        largest_files=largest[:LARGEST_FILES_LIMIT],
         folder_summary=folder_summary,
         files=preview,
         file_list_truncated=len(importable_files) > len(preview),

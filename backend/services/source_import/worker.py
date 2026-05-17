@@ -22,6 +22,7 @@ from services.source_import.cloud_placeholders import (
     detect_online_only_placeholder,
 )
 from services.source_import.dedupe import find_prior_imported_content_duplicate
+from services.source_import.limits import MAX_APPROVED_BYTES_PER_BATCH
 from services.source_import.manifest import (
     create_batch_manifest,
     get_batch_runtime,
@@ -182,6 +183,13 @@ def _created_note_count(result: dict) -> int:
     return 1 if result.get("path") else len(_result_note_paths(result))
 
 
+def _result_warnings(result: dict) -> list[str]:
+    warnings = result.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    return [str(warning) for warning in warnings if str(warning).strip()]
+
+
 async def start_import_batch(
     *,
     batch_id: str,
@@ -193,6 +201,8 @@ async def start_import_batch(
     files = _approved_files(scan, selection)
     if not files:
         raise ValueError("No supported files are approved for import")
+    if sum(max(item.size, 0) for item in files) > MAX_APPROVED_BYTES_PER_BATCH:
+        raise ValueError("Approved import is above the source import size limit")
 
     destination_root = _destination_relroot(scan, batch_id)
     summary = await create_batch_manifest(
@@ -383,6 +393,7 @@ async def run_import_batch(
                     )
                     note_paths = _result_note_paths(result)
                     created_notes = _created_note_count(result)
+                    warnings = _result_warnings(result)
                     imported_hashes[content_hash] = item.relpath
                     await update_file_status(
                         batch_id,
@@ -390,6 +401,7 @@ async def run_import_batch(
                         "done",
                         stage="done",
                         content_hash=content_hash,
+                        warnings=warnings,
                         note_paths=note_paths,
                         workspace_path=workspace_path,
                     )

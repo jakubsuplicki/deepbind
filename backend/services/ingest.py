@@ -788,6 +788,7 @@ async def fast_ingest(
 
     title = Path(display_name).stem
     frontmatter_source = source_label or str(file_path)
+    extractor_warnings: list[str] = []
     mem = _memory_dir(workspace_path)
     folder = mem / target_folder
     folder.mkdir(parents=True, exist_ok=True)
@@ -972,6 +973,7 @@ async def fast_ingest(
             )
         except ExtractorError as exc:
             raise IngestError(str(exc)) from exc
+        extractor_warnings = list(extracted.warnings)
         md_name = f"{_slugify(extracted.title) or _slugify(title) or 'document'}.md"
         target = _unique_path(folder / md_name)
         fm = {
@@ -982,11 +984,11 @@ async def fast_ingest(
             "tags": ["import", extracted.source_type],
         }
         fm = _merge_frontmatter(fm, extra_frontmatter)
-        if extracted.warnings:
-            fm["extractor_warnings"] = extracted.warnings
+        if extractor_warnings:
+            fm["extractor_warnings"] = extractor_warnings
         content = add_frontmatter(extracted.markdown.strip() + "\n", fm)
-        if extracted.warnings:
-            warning_lines = "\n".join(f"- {warning}" for warning in extracted.warnings)
+        if extractor_warnings:
+            warning_lines = "\n".join(f"- {warning}" for warning in extractor_warnings)
             content += f"\n## Import warnings\n\n{warning_lines}\n"
         await asyncio.to_thread(target.write_text, content, encoding="utf-8")
 
@@ -1030,7 +1032,7 @@ async def fast_ingest(
     except Exception as exc:
         logger.warning("Smart Connect after ingest failed: %s", exc)
 
-    return {
+    response = {
         "path": rel_path,
         "title": title,
         "folder": target_folder,
@@ -1038,6 +1040,9 @@ async def fast_ingest(
         "size": target_size,
         "connections": connections_payload,
     }
+    if extractor_warnings:
+        response["warnings"] = extractor_warnings
+    return response
 
 
 async def smart_enrich(

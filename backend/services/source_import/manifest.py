@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS source_import_files (
     reason         TEXT,
     duplicate_of   TEXT,
     content_hash   TEXT,
+    warnings       TEXT NOT NULL DEFAULT '[]',
     note_paths     TEXT NOT NULL DEFAULT '[]',
     updated_at     TEXT NOT NULL,
     UNIQUE(batch_id, file_id),
@@ -118,6 +119,18 @@ def _decode_note_paths(value: object) -> list[str]:
     return [str(item) for item in parsed]
 
 
+def _decode_warnings(value: object) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if str(item).strip()]
+
+
 def _outcome_from_row(row: aiosqlite.Row) -> SourceImportFileOutcome:
     return SourceImportFileOutcome(
         file_id=row["file_id"],
@@ -131,6 +144,7 @@ def _outcome_from_row(row: aiosqlite.Row) -> SourceImportFileOutcome:
         reason=row["reason"],
         duplicate_of=row["duplicate_of"],
         content_hash=row["content_hash"],
+        warnings=_decode_warnings(row["warnings"] if "warnings" in row.keys() else None),
         note_paths=_decode_note_paths(row["note_paths"]),
     )
 
@@ -438,6 +452,9 @@ async def get_batch_summary(
     imported_file_count = sum(1 for item in files if item.status == "done")
     skipped_file_count = sum(1 for item in files if item.status == "skipped")
     failed_file_count = sum(1 for item in files if item.status == "failed")
+    warning_file_count = sum(
+        1 for item in files if item.status == "done" and item.warnings
+    )
     processed_bytes = sum(
         max(item.size, 0)
         for item in files
@@ -456,6 +473,7 @@ async def get_batch_summary(
         imported_file_count=imported_file_count,
         skipped_file_count=skipped_file_count,
         failed_file_count=failed_file_count,
+        warning_file_count=warning_file_count,
         created_note_count=int(batch["created_note_count"] or 0),
         total_bytes=int(batch["total_bytes"] or 0),
         processed_bytes=processed_bytes,
@@ -572,6 +590,7 @@ async def get_batch_completion_summary(
         skipped_file_count=summary.skipped_file_count,
         failed_file_count=summary.failed_file_count,
         duplicate_file_count=duplicate_file_count,
+        warning_file_count=summary.warning_file_count,
         created_note_count=summary.created_note_count,
         imported_extension_counts=sorted_extensions,
         imported_folder_counts=sorted_folders,
@@ -785,6 +804,7 @@ async def update_file_status(
     reason: Optional[str] = None,
     duplicate_of: Optional[str] = None,
     content_hash: Optional[str] = None,
+    warnings: Optional[list[str]] = None,
     note_paths: Optional[list[str]] = None,
     workspace_path: Optional[Path] = None,
 ) -> None:
@@ -799,6 +819,7 @@ async def update_file_status(
                 reason = ?,
                 duplicate_of = ?,
                 content_hash = COALESCE(?, content_hash),
+                warnings = COALESCE(?, warnings),
                 note_paths = COALESCE(?, note_paths),
                 updated_at = ?
             WHERE batch_id = ? AND file_id = ?
@@ -809,6 +830,7 @@ async def update_file_status(
                 reason,
                 duplicate_of,
                 content_hash,
+                json.dumps(warnings) if warnings is not None else None,
                 json.dumps(note_paths) if note_paths is not None else None,
                 now,
                 batch_id,

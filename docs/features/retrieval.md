@@ -6,6 +6,8 @@ sources:
   - backend/services/retrieval/__init__.py
   - backend/services/retrieval/pipeline.py
   - backend/services/context_builder.py
+  - backend/services/memory_service.py
+  - backend/services/embedding_service.py
   - backend/services/reranker_service.py
   - backend/services/chunking.py
 depends_on: [memory, knowledge-graph, preferences-settings]
@@ -27,8 +29,8 @@ The pipeline runs in two stages: retrieval (`retrieval.py`) followed by context 
 
 **Stage 1 — retrieve()**
 
-1. **Signal 1 — BM25 candidates.** `memory_service.list_notes(search=query, limit=limit*3)` runs the FTS5 query. Each candidate carries a `_bm25_score` from SQLite's built-in BM25 ranker. Scores are normalized against the maximum absolute score in the candidate pool to produce a `[0, 1]` value per note. This is the seed candidate pool.
-2. **Signal 2 — cosine similarity.** If `JARVIS_DISABLE_EMBEDDINGS` is not set and `embedding_service.is_available()` returns true, `search_similar(query, limit*3)` embeds the query through the local fastembed model (per ADR 018: `snowflake/snowflake-arctic-embed-l`, English-only, Apache-2.0, 1024-dim, ~1 GB ONNX) and scores every embedded note by cosine similarity. The query goes through `embed_query` / `aembed_query` which prepend Arctic-Embed-L's required prefix `"Represent this sentence for searching relevant passages: "`; documents go through `embed_text` / `embed_texts` with no prefix. Scores are clamped to `[0, 1]` (cosine can be negative). Notes already in the candidate pool get their `_cosine` field updated; notes found only by embeddings (no BM25 match) are looked up via `_get_note_meta()` directly from SQLite and joined into the pool with `_bm25 = 0`. Cosine failure (`ImportError`, model load error) is logged as a warning and the pipeline continues without this signal.
+1. **Signal 1 — BM25 candidates.** `memory_service.list_notes(search=query, limit=limit*3)` runs the FTS5 query. Each candidate carries a `_bm25_score` from SQLite's built-in BM25 ranker. Scores are normalized against the maximum absolute score in the candidate pool to produce a `[0, 1]` value per note. When a `path_allowlist` is supplied, the FTS query is constrained to those note paths.
+2. **Signal 2 — cosine similarity.** If `JARVIS_DISABLE_EMBEDDINGS` is not set and `embedding_service.is_available()` returns true, `search_similar_chunks(query, ...)` or the note-level `search_similar(query, ...)` embeds the query through the local fastembed model (per ADR 018: `snowflake/snowflake-arctic-embed-l`, English-only, Apache-2.0, 1024-dim, ~1 GB ONNX) and scores embedded chunks/notes by cosine similarity. The query goes through `embed_query` / `aembed_query` which prepend Arctic-Embed-L's required prefix `"Represent this sentence for searching relevant passages: "`; documents go through `embed_text` / `embed_texts` with no prefix. Scores are clamped to `[0, 1]` (cosine can be negative). Notes already in the candidate pool get their `_cosine` field updated; notes found only by embeddings (no BM25 match) are looked up via `_get_note_meta()` directly from SQLite and joined into the pool with `_bm25 = 0`. When a `path_allowlist` is supplied, chunk/note embedding reads are also constrained to those paths. Cosine failure (`ImportError`, model load error) is logged as a warning and the pipeline continues without this signal.
 3. **Signal 3 — graph scoring.** The knowledge graph is loaded from cache or disk. When present, `_extract_query_entities()` matches query tokens against known graph node labels (persons, tags, areas). `_compute_graph_score()` then computes, for each candidate, the sum of:
    - **Edge connectivity** — weighted edges linking the note to other candidates in the pool.
    - **Convergence bonus** — `+0.3` if the note connects to 3+ other candidates.
@@ -39,7 +41,7 @@ The pipeline runs in two stages: retrieval (`retrieval.py`) followed by context 
 4. **Weighted fusion.** Weights default to `WEIGHT_BM25 = 0.35`, `WEIGHT_COSINE = 0.35`, `WEIGHT_GRAPH = 0.30`. Any missing signal is zeroed and the remaining weights are renormalized so they still sum to `1.0`. The fused score per note is `w_bm25*bm25 + w_cos*cosine + w_graph*graph`.
 5. **Signal 5 — cross-encoder reranker (precision pass).** When `JARVIS_DISABLE_RERANKER` is not set and the fastembed `TextCrossEncoder` is importable, the top `JARVIS_RERANKER_POOL` candidates (default `20`) are re-scored with `BAAI/bge-reranker-v2-m3` (Apache-2.0; per ADR 018, the cross-encoder for v1) via the `onnx-community/bge-reranker-v2-m3-ONNX` INT8 port (~570 MB, registered with fastembed at runtime via `add_custom_model` because it isn't in fastembed 0.8.0's built-in registry yet — see `services/reranker_service.py`). Raw cross-encoder scores are unbounded logits (typical range −8 to +5); the pipeline applies min-max normalisation within the pool and blends with the prior fused score: `final = JARVIS_RERANKER_WEIGHT * rerank_norm + (1 - weight) * fused`, weight default `0.7`. Pool entries beyond the cap keep their fusion-only ordering. The reranker adds a `rerank` key to `_signals` (the *normalised* score) and a raw `_rerank` field for diagnostics; it contributes a `via="rerank"` value to the trace when it dominates. Failure (model not available, pool size 1, or runtime error) is silent: candidates keep their fused scores.
 6. **Sort** by `(score, updated_at)` descending — recency is the tiebreaker when scores are equal.
-7. **Cluster dedup.** `_cluster_dedup()` enforces at most 2 notes per folder so a single folder can't dominate the output, then trims to `limit`.
+7. **Cluster dedup.** `_cluster_dedup()` enforces at most 2 notes per folder so a single folder can't dominate the output, then trims to `limit`. Internal scoped callers can disable this when the allowlist itself is already the user's intended context.
 8. **Cleanup.** Internal scoring fields (`_score`, `_bm25`, `_cosine`, `_graph`, `_rerank`, `_bm25_score`, `_node_id`) are stripped from the returned dicts. The `_signals` dict is preserved for transparency — callers can inspect which signal drove each result.
 
 **Stage 2 — build_context()**
@@ -73,14 +75,16 @@ Cosine is disabled when `JARVIS_DISABLE_EMBEDDINGS=1` (test mode), when `fastemb
 
 ### Import-scoped context
 
-`build_context(..., import_batch_id=...)` builds context only from Markdown notes recorded in a Folder Source Import manifest. It asks `source_import.manifest` for the batch summary, collects `note_paths` from successfully imported files, reads those notes from memory, ranks a capped set with deterministic keyword overlap, and wraps the selected notes in the same `<retrieved_note>` evidence tags used by normal retrieval.
+`build_context(..., import_batch_id=...)` builds context only from Markdown notes recorded in a Folder Source Import manifest. It asks `source_import.manifest` for the batch summary, collects `note_paths` from successfully imported files, then calls `retrieve(..., path_allowlist=batch_note_paths, deduplicate_folders=False)` so BM25, chunk/note cosine, graph scoring, and reranking can operate inside the batch without leaking older unrelated memory. The selected notes are wrapped in the same `<retrieved_note>` evidence tags used by normal retrieval.
 
-This path is deliberately narrower than the full hybrid retrieval pipeline. It exists so suggested questions launched from the folder-import completion surface stay grounded in the just-approved source rather than older unrelated memory. Trace rows use `via="import_batch"` and `signals={"import_scope": ...}` so the UI can show that the answer used import-scoped evidence.
+This path remains strict about scope: only manifest-created note paths are eligible. If the hybrid pass is unavailable, it falls back to the earlier deterministic keyword-overlap ranking. Trace rows use `via="import_batch"` and include `import_scope` alongside any hybrid signals, so the UI can show both the batch boundary and the scoring signals used inside it.
 
 ## Key Files
 
 - `backend/services/retrieval/__init__.py` — Public surface: re-exports `retrieve` so callers keep using `from services.retrieval import retrieve` after the package split.
 - `backend/services/retrieval/pipeline.py` — 3-signal hybrid fusion (BM25 + cosine + graph) with optional Signal 4 (enrichment) and Signal 5 (cross-encoder reranker), weight renormalisation, `_compute_graph_score` (edge connectivity + convergence + path + similar_to cluster bonus), folder dedup, `_signals` transparency.
+- `backend/services/memory_service.py` — Supplies BM25 candidates and can constrain `list_notes()` to a path allowlist for scoped retrieval.
+- `backend/services/embedding_service.py` — Supplies chunk and note cosine candidates and can constrain embedding reads to a path allowlist for scoped retrieval.
 - `backend/services/reranker_service.py` — Lazy-loaded singleton wrapper around fastembed's `TextCrossEncoder`. Per ADR 018, the model is `BAAI/bge-reranker-v2-m3` via `onnx-community/bge-reranker-v2-m3-ONNX` (INT8). Registered via `add_custom_model` on first use (the onnx-community port is not in fastembed 0.8.0's built-in registry — issue qdrant/fastembed#494). No runtime-download fallback: the bundled `.app` trusts its bundle and degrades to fusion-only retrieval if the model fails to load. 100% local, no API calls.
 - `backend/services/context_builder.py` — Orchestrates retrieval, applies specialist scoping, fetches note bodies, produces the final `(context_text, token_estimate, trace)` tuple for Claude. Also provides `build_graph_scoped_context()` and the shared `_extract_keywords()` utility.
 - `backend/services/chunking.py` — Markdown-aware chunker shared with the embedding pipeline; the retrieval signal-2 path queries the chunk index built by this module.
@@ -94,6 +98,8 @@ async def retrieve(
     query: str,
     limit: int = 5,
     workspace_path=None,
+    path_allowlist: Optional[Set[str]] = None,
+    deduplicate_folders: bool = True,
 ) -> List[Dict]:
 ```
 
@@ -106,6 +112,8 @@ Returns a ranked list of note dicts. Each dict contains at minimum a `"path"` ke
 Any missing signal is reported as `0.0`. Internal intermediate fields are stripped before return.
 
 Returns an empty list if `query` is blank or whitespace-only, or if no signal produced any candidates.
+
+`path_allowlist` is an internal scoping hook used by Folder Source Import. When present, BM25, chunk/note cosine, metadata seed rows, and graph scoring are limited to those note paths. `deduplicate_folders=False` is used for import batches so several relevant files from the same imported folder can appear together.
 
 ### `build_context()`
 

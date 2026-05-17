@@ -9,6 +9,7 @@ const sourceImportMocks = vi.hoisted(() => ({
   getImport: vi.fn(),
   getImportCompletion: vi.fn(),
   getImportReview: vi.fn(),
+  listImports: vi.fn(),
   pickArchiveSource: vi.fn(),
   pickFolderSource: vi.fn(),
   pickSampleDataset: vi.fn(),
@@ -29,6 +30,8 @@ describe('components/ImportDialog.vue', () => {
     sourceImportMocks.getImport.mockReset()
     sourceImportMocks.getImportCompletion.mockReset()
     sourceImportMocks.getImportReview.mockReset()
+    sourceImportMocks.listImports.mockReset()
+    sourceImportMocks.listImports.mockResolvedValue([])
     sourceImportMocks.pickArchiveSource.mockReset()
     sourceImportMocks.pickFolderSource.mockReset()
     sourceImportMocks.pickSampleDataset.mockReset()
@@ -352,6 +355,90 @@ describe('components/ImportDialog.vue', () => {
     expect(wrapper.text()).toContain('Excluded by review')
   })
 
+  it('folder scan review surfaces readable import limit reasons', async () => {
+    sourceImportMocks.pickFolderSource.mockResolvedValue({
+      source_token: 'source-token',
+      source_kind: 'local_folder',
+      display_name: 'Shared Drive',
+      root_path: '/Users/me/Shared Drive',
+      expires_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.scanSource.mockResolvedValue({
+      scan_id: 'scan_limits',
+      source_kind: 'local_folder',
+      source_display_name: 'Shared Drive',
+      source_root_path: '/Users/me/Shared Drive',
+      proposed_destination_root: 'memory/imports/shared-drive/',
+      total_files_seen: 4,
+      total_size_seen: 2147483648,
+      supported_file_count: 2,
+      unsupported_file_count: 0,
+      skipped_file_count: 2,
+      skipped_by_reason: {
+        file_too_large: 1,
+        scan_file_limit: 1,
+      },
+      counts_by_extension: { '.pdf': 2 },
+      largest_files: [],
+      folder_summary: [],
+      files: [
+        {
+          id: 'brief-pdf',
+          relpath: 'Brief.pdf',
+          filename: 'Brief.pdf',
+          extension: '.pdf',
+          size: 1024,
+          modified_at: null,
+          status: 'supported',
+          reason: null,
+        },
+        {
+          id: 'huge-pdf',
+          relpath: 'Huge.pdf',
+          filename: 'Huge.pdf',
+          extension: '.pdf',
+          size: 2147483648,
+          modified_at: null,
+          status: 'skipped',
+          reason: 'file_too_large',
+        },
+      ],
+      file_list_truncated: true,
+      limit_hit: true,
+      created_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.createSelection.mockResolvedValue({
+      selection_id: 'sel_limits',
+      scan_id: 'scan_limits',
+      source_display_name: 'Shared Drive',
+      proposed_destination_root: 'memory/imports/shared-drive/',
+      approved_file_count: 1,
+      approved_total_size: 1024,
+      excluded_file_count: 1,
+      excluded_total_size: 1073741824,
+      unsupported_file_count: 0,
+      skipped_file_count: 2,
+      excluded_by_rule: { batch_size_limit: 1 },
+      approved_files: [],
+      approved_file_list_truncated: false,
+      created_at: '2026-05-16T00:00:01Z',
+    })
+
+    const wrapper = await mountSuspended(ImportDialog, {
+      props: { visible: true },
+    })
+    await wrapper.findAll('.import-dialog__mode-btn')[1]!.trigger('click')
+    await wrapper.find('.import-dialog__browse-btn').trigger('click')
+    await flushPromises()
+    await wrapper.find('.import-dialog__import-btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('File too large 1')
+    expect(wrapper.text()).toContain('Scan limit 1')
+    expect(wrapper.text()).toContain('Import size limit 1')
+    expect(wrapper.text()).toContain('Showing the first 2 files from a larger scan.')
+  })
+
   it('folder mode starts approved import after review', async () => {
     sourceImportMocks.pickFolderSource.mockResolvedValue({
       source_token: 'source-token',
@@ -417,6 +504,7 @@ describe('components/ImportDialog.vue', () => {
       imported_file_count: 1,
       skipped_file_count: 0,
       failed_file_count: 0,
+      warning_file_count: 1,
       created_note_count: 1,
       total_bytes: 20,
       processed_bytes: 20,
@@ -436,6 +524,7 @@ describe('components/ImportDialog.vue', () => {
       skipped_file_count: 0,
       failed_file_count: 0,
       duplicate_file_count: 0,
+      warning_file_count: 1,
       created_note_count: 1,
       imported_extension_counts: { '.md': 1 },
       imported_folder_counts: { '.': 1 },
@@ -465,7 +554,77 @@ describe('components/ImportDialog.vue', () => {
     await flushPromises()
     expect(sourceImportMocks.getImportCompletion).toHaveBeenCalledWith('import_1')
     expect(wrapper.text()).toContain('Ready to ask')
+    expect(wrapper.text()).toContain('Imported with warnings 1')
     expect(wrapper.text()).toContain('Which files should I review first?')
+  })
+
+  it('folder mode lists prior imports and reopens their completion controls', async () => {
+    sourceImportMocks.listImports.mockResolvedValue([
+      {
+        batch_id: 'import_history_1',
+        scan_id: 'scan_history',
+        selection_id: 'sel_history',
+        duplicate_policy: 'skip',
+        source_kind: 'local_folder',
+        source_display_name: 'Client Archive',
+        destination_root: 'memory/imports/client-archive-import1/',
+        state: 'completed',
+        total_file_count: 4,
+        imported_file_count: 3,
+        skipped_file_count: 1,
+        failed_file_count: 0,
+        created_note_count: 3,
+        total_bytes: 4096,
+        processed_bytes: 4096,
+        current_file: null,
+        files: [],
+        started_at: '2026-05-16T00:00:02Z',
+        updated_at: '2026-05-16T00:00:03Z',
+        finished_at: '2026-05-16T00:00:03Z',
+      },
+    ])
+    sourceImportMocks.getImportCompletion.mockResolvedValue({
+      batch_id: 'import_history_1',
+      source_display_name: 'Client Archive',
+      state: 'completed',
+      destination_root: 'memory/imports/client-archive-import1/',
+      total_file_count: 4,
+      imported_file_count: 3,
+      skipped_file_count: 1,
+      failed_file_count: 0,
+      duplicate_file_count: 1,
+      created_note_count: 3,
+      imported_extension_counts: { '.md': 2, '.xlsx': 1 },
+      imported_folder_counts: { '.': 2, Finance: 1 },
+      suggested_questions: [
+        {
+          question: 'What changed in this client archive?',
+          reason: 'general',
+        },
+      ],
+      can_ask_about_import: true,
+      updated_at: '2026-05-16T00:00:03Z',
+    })
+
+    const wrapper = await mountSuspended(ImportDialog, {
+      props: { visible: true },
+    })
+    await wrapper.findAll('.import-dialog__mode-btn')[1]!.trigger('click')
+    await flushPromises()
+
+    expect(sourceImportMocks.listImports).toHaveBeenCalledWith(10)
+    expect(wrapper.text()).toContain('Recent source imports')
+    expect(wrapper.text()).toContain('Client Archive')
+    expect(wrapper.text()).toContain('3/4 files')
+
+    await wrapper.find('.import-dialog__folder-history-row').trigger('click')
+    await flushPromises()
+
+    expect(sourceImportMocks.getImportCompletion).toHaveBeenCalledWith('import_history_1')
+    expect(wrapper.text()).toContain('Ready to ask')
+    expect(wrapper.text()).toContain('What changed in this client archive?')
+    expect(wrapper.find('.import-dialog__rescan-btn').exists()).toBe(true)
+    expect(wrapper.find('.import-dialog__remove-btn').exists()).toBe(true)
   })
 
   it('folder mode can keep duplicate content as separate notes', async () => {

@@ -79,6 +79,96 @@
           </button>
         </div>
 
+        <div class="import-dialog__folder-history">
+          <div class="import-dialog__folder-history-header">
+            <h3 class="import-dialog__folder-history-title">Recent source imports</h3>
+            <button
+              type="button"
+              class="import-dialog__refresh-btn"
+              :disabled="folderImportHistoryLoading"
+              @click="loadFolderImportHistory"
+            >
+              {{ folderImportHistoryLoading ? '...' : 'Refresh' }}
+            </button>
+          </div>
+          <div v-if="folderImportHistoryError" class="import-dialog__error">
+            {{ folderImportHistoryError }}
+          </div>
+          <ul v-if="folderImportHistoryRows.length" class="import-dialog__folder-history-list">
+            <li
+              v-for="row in folderImportHistoryRows"
+              :key="row.batch_id"
+              class="import-dialog__folder-history-item"
+            >
+              <button
+                type="button"
+                class="import-dialog__folder-history-row"
+                :class="{
+                  'import-dialog__folder-history-row--active': row.batch_id === folderImport?.batch_id,
+                  [`import-dialog__folder-history-row--${row.state}`]: true,
+                }"
+                @click="openFolderImportHistoryItem(row)"
+              >
+                <span class="import-dialog__folder-history-line">
+                  <span class="import-dialog__recent-name" :title="row.source_display_name">
+                    {{ row.source_display_name }}
+                  </span>
+                  <span class="import-dialog__recent-status">
+                    {{ humanizeReason(row.state) }}
+                  </span>
+                </span>
+                <span class="import-dialog__recent-meta">
+                  {{ formatDate(row.started_at) }}
+                  · {{ row.imported_file_count }}/{{ row.total_file_count }} files
+                  · {{ row.created_note_count }} notes
+                  <span v-if="row.skipped_file_count">
+                    · {{ row.skipped_file_count }} skipped
+                  </span>
+                  <span v-if="row.failed_file_count">
+                    · {{ row.failed_file_count }} failed
+                  </span>
+                </span>
+              </button>
+            </li>
+          </ul>
+          <p
+            v-else-if="!folderImportHistoryLoading && !folderImportHistoryError"
+            class="import-dialog__recent-empty"
+          >
+            No source imports yet.
+          </p>
+        </div>
+
+        <FolderSourceImportDetail
+          v-if="folderImport && !folderScan"
+          :batch="folderImport"
+          :status-label="folderImportStatusLabel"
+          :progress-percent="folderImportProgressPercent"
+          :can-cancel="folderImportCanCancel"
+          :can-remove="folderImportCanRemove"
+          :can-rescan="folderImportCanRescan"
+          :cancelling="folderImportCancelling"
+          :rescanning="folderRescanning"
+          :removing="folderImportRemoving"
+          :completion="folderImportCompletion"
+          :completion-loading="folderImportCompletionLoading"
+          :type-rows="folderImportTypeRows"
+          :question-rows="folderImportQuestionRows"
+          :problem-count="folderImportProblemCount"
+          :review-loading="folderImportReviewLoading"
+          :review-reason-rows="folderImportReviewReasonRows"
+          :review-rows="folderImportReviewRows"
+          :review-truncated="folderImportReviewTruncated"
+          :rescan="folderRescan"
+          :rescan-status-rows="folderRescanStatusRows"
+          :rescan-import-starting="folderRescanImportStarting"
+          @cancel="cancelFolderImport"
+          @rescan="rescanFolderImport"
+          @remove="requestRemoveFolderImport"
+          @ask-question="askFolderImportQuestion"
+          @start-rescan-import="startFolderRescanImport"
+        />
+
         <div v-if="folderGrant" class="import-dialog__source-card">
           <div>
             <div class="import-dialog__source-name">{{ folderGrant.display_name }}</div>
@@ -135,6 +225,15 @@
                 <small>{{ formatBytes(folderSelection.excluded_total_size) }}</small>
               </strong>
             </div>
+            <div v-if="approvalRuleRows.length" class="import-dialog__approval-reasons">
+              <span
+                v-for="row in approvalRuleRows"
+                :key="row.reason"
+                class="import-dialog__chip import-dialog__chip--warn"
+              >
+                {{ humanizeReason(row.reason) }} {{ row.count }}
+              </span>
+            </div>
             <p class="import-dialog__sublabel">
               File contents stay unread until the approved import step.
             </p>
@@ -151,245 +250,35 @@
             Updating review...
           </div>
 
-          <div v-if="folderImport" class="import-dialog__batch">
-            <div class="import-dialog__batch-header">
-              <span>{{ folderImportStatusLabel }}</span>
-              <strong>
-                {{ folderImport.imported_file_count }}/{{ folderImport.total_file_count }}
-              </strong>
-            </div>
-            <div class="import-dialog__batch-bar">
-              <span :style="{ width: folderImportProgressPercent }" />
-            </div>
-            <div class="import-dialog__batch-meta">
-              {{ folderImport.created_note_count }} notes
-              <span v-if="folderImport.skipped_file_count">
-                · {{ folderImport.skipped_file_count }} skipped
-              </span>
-              <span v-if="folderImport.failed_file_count">
-                · {{ folderImport.failed_file_count }} failed
-              </span>
-            </div>
-            <div v-if="folderImport.current_file" class="import-dialog__source-path">
-              {{ folderImport.current_file }}
-            </div>
-            <div class="import-dialog__source-path">
-              {{ folderImport.destination_root }}
-            </div>
-            <div
-              v-if="folderImportCanCancel || folderImportCanRemove || folderImportCanRescan"
-              class="import-dialog__batch-actions"
-            >
-              <button
-                v-if="folderImportCanCancel"
-                type="button"
-                class="import-dialog__stop-btn"
-                :disabled="folderImportCancelling"
-                @click="cancelFolderImport"
-              >
-                <Icon name="ph:stop-bold" class="icon--sm" />
-                {{ folderImportCancelling ? 'Cancelling...' : 'Cancel import' }}
-              </button>
-              <button
-                v-if="folderImportCanRescan"
-                type="button"
-                class="import-dialog__rescan-btn"
-                :disabled="folderRescanning"
-                @click="rescanFolderImport"
-              >
-                <Icon name="ph:arrows-clockwise-bold" class="icon--sm" />
-                {{ folderRescanning ? 'Scanning...' : 'Scan again' }}
-              </button>
-              <button
-                v-if="folderImportCanRemove"
-                type="button"
-                class="import-dialog__remove-btn"
-                :disabled="folderImportRemoving"
-                @click="requestRemoveFolderImport"
-              >
-                <Icon name="ph:trash-bold" class="icon--sm" />
-                {{ folderImportRemoving ? 'Removing...' : 'Remove import' }}
-              </button>
-            </div>
-          </div>
-
-          <div
-            v-if="folderImportCompletion || folderImportCompletionLoading"
-            class="import-dialog__completion"
-          >
-            <div class="import-dialog__completion-header">
-              <span>Ready to ask</span>
-              <strong>
-                {{ folderImportCompletion?.created_note_count ?? folderImport?.created_note_count ?? 0 }}
-                {{ (folderImportCompletion?.created_note_count ?? folderImport?.created_note_count ?? 0) === 1 ? 'note' : 'notes' }}
-              </strong>
-            </div>
-            <div v-if="folderImportCompletionLoading" class="import-dialog__progress">
-              Preparing import summary...
-            </div>
-            <template v-else-if="folderImportCompletion">
-              <div class="import-dialog__completion-grid">
-                <div class="import-dialog__completion-stat">
-                  <span>Imported</span>
-                  <strong>{{ folderImportCompletion.imported_file_count }}</strong>
-                </div>
-                <div class="import-dialog__completion-stat">
-                  <span>Duplicates</span>
-                  <strong>{{ folderImportCompletion.duplicate_file_count }}</strong>
-                </div>
-                <div class="import-dialog__completion-stat">
-                  <span>Skipped</span>
-                  <strong>{{ folderImportCompletion.skipped_file_count }}</strong>
-                </div>
-                <div class="import-dialog__completion-stat">
-                  <span>Failed</span>
-                  <strong>{{ folderImportCompletion.failed_file_count }}</strong>
-                </div>
-              </div>
-              <div v-if="folderImportTypeRows.length" class="import-dialog__chips">
-                <span
-                  v-for="row in folderImportTypeRows"
-                  :key="row.extension"
-                  class="import-dialog__chip"
-                >
-                  {{ row.extension }} {{ row.count }}
-                </span>
-              </div>
-              <div
-                v-if="folderImportCompletion.can_ask_about_import && folderImportQuestionRows.length"
-                class="import-dialog__questions"
-              >
-                <button
-                  v-for="question in folderImportQuestionRows"
-                  :key="question.question"
-                  type="button"
-                  class="import-dialog__question-btn"
-                  @click="askFolderImportQuestion(question.question)"
-                >
-                  {{ question.question }}
-                </button>
-              </div>
-            </template>
-          </div>
-
-          <div
-            v-if="folderImportProblemCount > 0 || folderImportReviewLoading"
-            class="import-dialog__issues"
-          >
-            <div class="import-dialog__issues-header">
-              <span>Skipped and failed files</span>
-              <strong>
-                {{ folderImportProblemCount }}
-                {{ folderImportProblemCount === 1 ? 'file' : 'files' }}
-              </strong>
-            </div>
-            <div class="import-dialog__issues-grid">
-              <div class="import-dialog__issues-stat">
-                <span>Skipped</span>
-                <strong>{{ folderImport?.skipped_file_count ?? 0 }}</strong>
-              </div>
-              <div class="import-dialog__issues-stat">
-                <span>Failed</span>
-                <strong>{{ folderImport?.failed_file_count ?? 0 }}</strong>
-              </div>
-            </div>
-            <div v-if="folderImportReviewReasonRows.length" class="import-dialog__chips">
-              <span
-                v-for="row in folderImportReviewReasonRows"
-                :key="row.reason"
-                class="import-dialog__chip import-dialog__chip--warn"
-              >
-                {{ humanizeReason(row.reason) }} {{ row.count }}
-              </span>
-            </div>
-            <div v-if="folderImportReviewLoading" class="import-dialog__progress">
-              Preparing skipped file review...
-            </div>
-            <ul v-else-if="folderImportReviewRows.length" class="import-dialog__issue-list">
-              <li
-                v-for="file in folderImportReviewRows"
-                :key="`${file.status}-${file.file_id}`"
-                class="import-dialog__issue-file"
-                :class="`import-dialog__issue-file--${file.status}`"
-              >
-                <div class="import-dialog__issue-main">
-                  <span class="import-dialog__file-name" :title="file.relpath">
-                    {{ file.relpath }}
-                  </span>
-                  <span class="import-dialog__issue-status">
-                    {{ humanizeReason(file.status) }}
-                  </span>
-                </div>
-                <div class="import-dialog__issue-meta">
-                  {{ formatBytes(file.size) }}
-                  <span v-if="file.reason">{{ humanizeReason(file.reason) }}</span>
-                </div>
-                <div class="import-dialog__issue-hint">
-                  {{ folderIssueActionHint(file) }}
-                </div>
-              </li>
-            </ul>
-            <p
-              v-if="!folderImportReviewLoading && folderImportReviewTruncated"
-              class="import-dialog__sublabel"
-            >
-              Showing the first {{ folderImportReviewRows.length }} files from a larger review.
-            </p>
-          </div>
-
-          <div v-if="folderRescan" class="import-dialog__rescan">
-            <div class="import-dialog__rescan-header">
-              <span>Since last import</span>
-              <strong>
-                {{ folderRescan.importable_file_count }}
-                {{ folderRescan.importable_file_count === 1 ? 'file' : 'files' }}
-              </strong>
-            </div>
-            <div class="import-dialog__rescan-grid">
-              <div
-                v-for="row in folderRescanStatusRows"
-                :key="row.label"
-                class="import-dialog__rescan-stat"
-              >
-                <span>{{ row.label }}</span>
-                <strong>{{ row.count }}</strong>
-              </div>
-            </div>
-            <p v-if="folderRescan.missing_file_count" class="import-dialog__sublabel">
-              Missing files are reported only; they are not removed.
-            </p>
-            <ul v-if="folderRescan.files.length" class="import-dialog__scan-files">
-              <li
-                v-for="file in folderRescan.files"
-                :key="`${file.status}-${file.id}`"
-                class="import-dialog__scan-file"
-                :class="`import-dialog__rescan-file--${file.status}`"
-              >
-                <span class="import-dialog__file-name" :title="file.relpath">
-                  {{ file.relpath }}
-                </span>
-                <span class="import-dialog__file-meta">
-                  {{ formatBytes(file.status === 'missing' ? (file.previous_size ?? 0) : file.size) }}
-                  <span v-if="file.reason">{{ humanizeReason(file.reason) }}</span>
-                  <span v-else>{{ humanizeReason(file.status) }}</span>
-                </span>
-              </li>
-            </ul>
-            <p v-if="folderRescan.file_list_truncated" class="import-dialog__sublabel">
-              Showing the first {{ folderRescan.files.length }} files from a larger rescan.
-            </p>
-            <div v-if="folderRescan.importable_file_count > 0" class="import-dialog__batch-actions">
-              <button
-                type="button"
-                class="import-dialog__change-btn"
-                :disabled="folderRescanImportStarting"
-                @click="startFolderRescanImport"
-              >
-                <Icon name="ph:upload-simple-bold" class="icon--sm" />
-                {{ folderRescanImportStarting ? 'Importing...' : 'Import changes' }}
-              </button>
-            </div>
-          </div>
+          <FolderSourceImportDetail
+            v-if="folderImport"
+            :batch="folderImport"
+            :status-label="folderImportStatusLabel"
+            :progress-percent="folderImportProgressPercent"
+            :can-cancel="folderImportCanCancel"
+            :can-remove="folderImportCanRemove"
+            :can-rescan="folderImportCanRescan"
+            :cancelling="folderImportCancelling"
+            :rescanning="folderRescanning"
+            :removing="folderImportRemoving"
+            :completion="folderImportCompletion"
+            :completion-loading="folderImportCompletionLoading"
+            :type-rows="folderImportTypeRows"
+            :question-rows="folderImportQuestionRows"
+            :problem-count="folderImportProblemCount"
+            :review-loading="folderImportReviewLoading"
+            :review-reason-rows="folderImportReviewReasonRows"
+            :review-rows="folderImportReviewRows"
+            :review-truncated="folderImportReviewTruncated"
+            :rescan="folderRescan"
+            :rescan-status-rows="folderRescanStatusRows"
+            :rescan-import-starting="folderRescanImportStarting"
+            @cancel="cancelFolderImport"
+            @rescan="rescanFolderImport"
+            @remove="requestRemoveFolderImport"
+            @ask-question="askFolderImportQuestion"
+            @start-rescan-import="startFolderRescanImport"
+          />
 
           <div class="import-dialog__scan-section">
             <div class="import-dialog__scan-heading">Destination</div>
@@ -644,23 +533,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import FolderSourceImportDetail from '~/components/FolderSourceImportDetail.vue'
+import { useFolderSourceImportDialog } from '~/composables/useFolderSourceImportDialog'
 import { useIngestStatus } from '~/composables/useIngestStatus'
-import { useSourceImport } from '~/composables/useSourceImport'
-import type {
-  SourceGrantResponse,
-  SourceImportBatchSummary,
-  SourceImportCompletionSummary,
-  SourceImportFileReviewItem,
-  SourceImportFileReviewReport,
-  SourceImportSuggestedQuestion,
-  SourceImportRescanReport,
-  SourceScanReport,
-  SourceSelectionSummary,
-} from '~/composables/useSourceImport'
 
 const ingest = useIngestStatus()
-const sourceImport = useSourceImport()
 
 defineProps<{
   visible: boolean
@@ -697,32 +575,79 @@ const projectFilter = ref('')
 const uploading = ref(false)
 const error = ref('')
 const success = ref('')
-const folderPicking = ref(false)
-const folderArchivePicking = ref(false)
-const folderSamplePicking = ref(false)
-const folderScanning = ref(false)
-const folderGrant = ref<SourceGrantResponse | null>(null)
-const folderScan = ref<SourceScanReport | null>(null)
-const folderSelection = ref<SourceSelectionSummary | null>(null)
-const folderSelectionLoading = ref(false)
-const folderImport = ref<SourceImportBatchSummary | null>(null)
-const folderImportStarting = ref(false)
-const folderImportCancelling = ref(false)
-const folderImportRemoving = ref(false)
-const folderRemoveConfirmOpen = ref(false)
-const folderImportCompletion = ref<SourceImportCompletionSummary | null>(null)
-const folderImportCompletionLoading = ref(false)
-const folderImportReview = ref<SourceImportFileReviewReport | null>(null)
-const folderImportReviewLoading = ref(false)
-const folderRescan = ref<SourceImportRescanReport | null>(null)
-const folderRescanning = ref(false)
-const folderRescanImportStarting = ref(false)
-const includeHiddenInFolderScan = ref(false)
-const importDuplicateContent = ref(false)
-const excludedFileIds = ref<string[]>([])
-const excludedExtensions = ref<string[]>([])
-const excludedFolders = ref<string[]>([])
-let folderImportPollTimer: ReturnType<typeof setTimeout> | null = null
+
+const {
+  approvalRuleRows,
+  askFolderImportQuestion,
+  cancelFolderImport,
+  chooseArchiveSource,
+  chooseFolderSource,
+  chooseSampleDataset,
+  confirmRemoveFolderImport,
+  extensionRows,
+  folderArchivePicking,
+  folderGrant,
+  folderHiddenToggleLabel,
+  folderImport,
+  folderImportActive,
+  folderImportCanCancel,
+  folderImportCanRemove,
+  folderImportCanRescan,
+  folderImportCancelling,
+  folderImportCompletion,
+  folderImportCompletionLoading,
+  folderImportHistoryError,
+  folderImportHistoryLoading,
+  folderImportHistoryRows,
+  folderImportProblemCount,
+  folderImportProgressPercent,
+  folderImportQuestionRows,
+  folderImportRemoving,
+  folderImportReviewLoading,
+  folderImportReviewReasonRows,
+  folderImportReviewRows,
+  folderImportReviewTruncated,
+  folderImportStatusLabel,
+  folderImportTerminal,
+  folderImportTypeRows,
+  folderPicking,
+  folderRemoveConfirmMessage,
+  folderRemoveConfirmOpen,
+  folderRescan,
+  folderRescanImportStarting,
+  folderRescanStatusRows,
+  folderRescanning,
+  folderReviewLocked,
+  folderRows,
+  folderSamplePicking,
+  folderScan,
+  folderScanning,
+  folderScanningLabel,
+  folderSelection,
+  folderSelectionLoading,
+  folderSourceIsArchive,
+  handleFolderPrimaryAction,
+  humanizeReason,
+  importDuplicateContent,
+  includeHiddenInFolderScan,
+  isExcludedExtension,
+  isExcludedFile,
+  isExcludedFolder,
+  loadFolderImportHistory,
+  openFolderImportHistoryItem,
+  requestRemoveFolderImport,
+  resetFolderMode,
+  rescanFolderImport,
+  skipRows,
+  startFolderRescanImport,
+  toggleExtensionExclusion,
+  toggleFileExclusion,
+  toggleFolderExclusion,
+} = useFolderSourceImportDialog({
+  error,
+  success,
+  onImported: result => emit('imported', result),
+})
 
 type FileState = 'pending' | 'uploading' | 'ok' | 'error'
 interface FileStatus { state: FileState; error?: string }
@@ -737,164 +662,6 @@ const acceptAttr = computed(() =>
   mode.value === 'jira'
     ? '.xml,.csv'
     : '.md,.txt,.pdf,.csv,.xml,.json,.docx,.xlsx,.pptx,.html,.htm,.rtf,.eml,.zip'
-)
-
-const extensionRows = computed(() => {
-  if (!folderScan.value) return []
-  return Object.entries(folderScan.value.counts_by_extension)
-    .map(([extension, count]) => ({ extension, count }))
-    .sort((a, b) => b.count - a.count || a.extension.localeCompare(b.extension))
-})
-
-const skipRows = computed(() => {
-  if (!folderScan.value) return []
-  return Object.entries(folderScan.value.skipped_by_reason)
-    .map(([reason, count]) => ({ reason, count }))
-    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
-})
-
-const folderRows = computed(() => {
-  if (!folderScan.value) return []
-  return folderScan.value.folder_summary
-    .filter(row => row.relpath !== '.')
-    .slice(0, 12)
-})
-
-const folderSourceIsArchive = computed(() =>
-  folderGrant.value?.source_kind === 'local_archive' ||
-  folderScan.value?.source_kind === 'local_archive' ||
-  folderImport.value?.source_kind === 'local_archive'
-)
-
-const folderHiddenToggleLabel = computed(() =>
-  folderSourceIsArchive.value ? 'Include hidden archive entries' : 'Include hidden files and folders'
-)
-
-const folderScanningLabel = computed(() =>
-  folderSourceIsArchive.value
-    ? 'Scanning archive file names, types, sizes, and folders...'
-    : 'Scanning file names, types, sizes, and folders...'
-)
-
-const folderImportActive = computed(() =>
-  folderImportStarting.value ||
-  folderImportCancelling.value ||
-  folderImportRemoving.value ||
-  folderRescanImportStarting.value ||
-  folderImport.value?.state === 'queued' ||
-  folderImport.value?.state === 'importing' ||
-  folderImport.value?.state === 'cancelling' ||
-  folderImport.value?.state === 'removing'
-)
-
-const folderImportTerminal = computed(() =>
-  !!folderImport.value &&
-  !['queued', 'importing', 'cancelling', 'removing'].includes(folderImport.value.state)
-)
-
-const folderImportCanCancel = computed(() =>
-  !!folderImport.value &&
-  ['queued', 'importing'].includes(folderImport.value.state)
-)
-
-const folderImportCanRemove = computed(() =>
-  !!folderImport.value &&
-  ['completed', 'failed', 'cancelled', 'interrupted'].includes(folderImport.value.state) &&
-  !folderImportActive.value
-)
-
-const folderImportCanRescan = computed(() =>
-  !!folderImport.value &&
-  ['completed', 'failed', 'cancelled', 'interrupted'].includes(folderImport.value.state) &&
-  !folderRescanning.value &&
-  !folderImportActive.value &&
-  !folderImportRemoving.value
-)
-
-const folderImportStatusLabel = computed(() => {
-  if (folderImportRemoving.value || folderImport.value?.state === 'removing') {
-    return 'Removing import'
-  }
-  if (folderImportCancelling.value || folderImport.value?.state === 'cancelling') {
-    return 'Cancelling import'
-  }
-  if (folderImportActive.value) return 'Creating memory'
-  return humanizeReason(folderImport.value?.state ?? '')
-})
-
-const folderRescanStatusRows = computed(() => {
-  if (!folderRescan.value) return []
-  return [
-    { label: 'New', count: folderRescan.value.new_file_count },
-    { label: 'Changed', count: folderRescan.value.changed_file_count },
-    { label: 'Unchanged', count: folderRescan.value.unchanged_file_count },
-    { label: 'Missing', count: folderRescan.value.missing_file_count },
-  ]
-})
-
-const folderImportProblemCount = computed(() =>
-  (folderImport.value?.skipped_file_count ?? 0) +
-  (folderImport.value?.failed_file_count ?? 0)
-)
-
-const folderImportReviewReasonRows = computed(() => {
-  if (!folderImportReview.value) return []
-  return Object.entries(folderImportReview.value.reason_counts)
-    .map(([reason, count]) => ({ reason, count }))
-    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
-    .slice(0, 6)
-})
-
-const folderImportReviewRows = computed<SourceImportFileReviewItem[]>(() => {
-  if (folderImportReview.value?.files.length) return folderImportReview.value.files
-  if (!folderImport.value?.files.length) return []
-  return folderImport.value.files
-    .filter(file => file.status === 'skipped' || file.status === 'failed')
-    .slice(0, 8)
-    .map(file => ({
-      ...file,
-      status: file.status as 'skipped' | 'failed',
-      can_retry: folderIssueCanRetry(file),
-      can_fix_locally: folderIssueCanFixLocally(file),
-    }))
-})
-
-const folderImportReviewTruncated = computed(() => {
-  if (folderImportReview.value) return folderImportReview.value.file_list_truncated
-  return folderImportReviewRows.value.length < folderImportProblemCount.value
-})
-
-const folderImportTypeRows = computed(() => {
-  if (!folderImportCompletion.value) return []
-  return Object.entries(folderImportCompletion.value.imported_extension_counts)
-    .map(([extension, count]) => ({ extension, count }))
-    .slice(0, 5)
-})
-
-const folderImportQuestionRows = computed<SourceImportSuggestedQuestion[]>(() =>
-  folderImportCompletion.value?.suggested_questions ?? []
-)
-
-const folderRemoveConfirmMessage = computed(() => {
-  const count = folderImport.value?.created_note_count ?? 0
-  const noun = count === 1 ? 'note' : 'notes'
-  return `${count} created ${noun} will be moved out of memory. Unrelated notes will stay.`
-})
-
-const folderImportProgressPercent = computed(() => {
-  if (!folderImport.value || folderImport.value.total_file_count <= 0) return '0%'
-  const done =
-    folderImport.value.imported_file_count +
-    folderImport.value.skipped_file_count +
-    folderImport.value.failed_file_count
-  return `${Math.min(100, Math.round((done / folderImport.value.total_file_count) * 100))}%`
-})
-
-const folderReviewLocked = computed(() =>
-  folderSelectionLoading.value ||
-  folderRescanning.value ||
-  folderImportActive.value ||
-  folderImportTerminal.value
 )
 
 const primaryDisabled = computed(() => {
@@ -944,29 +711,6 @@ const primaryLabel = computed(() => {
   return 'Import'
 })
 
-function resetFolderReview() {
-  clearFolderImportPoll()
-  folderScan.value = null
-  folderSelection.value = null
-  folderSelectionLoading.value = false
-  folderImport.value = null
-  folderImportStarting.value = false
-  folderImportCancelling.value = false
-  folderImportRemoving.value = false
-  folderRemoveConfirmOpen.value = false
-  folderImportCompletion.value = null
-  folderImportCompletionLoading.value = false
-  folderImportReview.value = null
-  folderImportReviewLoading.value = false
-  folderRescan.value = null
-  folderRescanning.value = false
-  folderRescanImportStarting.value = false
-  importDuplicateContent.value = false
-  excludedFileIds.value = []
-  excludedExtensions.value = []
-  excludedFolders.value = []
-}
-
 function setMode(next: Mode) {
   if (mode.value === next) return
   mode.value = next
@@ -975,10 +719,7 @@ function setMode(next: Mode) {
   fileStatuses.value = []
   error.value = ''
   success.value = ''
-  folderGrant.value = null
-  folderArchivePicking.value = false
-  includeHiddenInFolderScan.value = false
-  resetFolderReview()
+  resetFolderMode()
   if (next === 'jira' && recentImports.value.length === 0) {
     loadRecentImports()
   }
@@ -1056,363 +797,10 @@ async function handleImport() {
 
 async function handlePrimaryAction() {
   if (mode.value === 'folder') {
-    if (folderScan.value) {
-      await startFolderImport()
-      return
-    }
-    await scanFolderSource()
+    await handleFolderPrimaryAction()
     return
   }
   await handleImport()
-}
-
-async function chooseFolderSource() {
-  folderPicking.value = true
-  error.value = ''
-  success.value = ''
-  resetFolderReview()
-  try {
-    folderGrant.value = await sourceImport.pickFolderSource()
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Folder selection failed'
-  } finally {
-    folderPicking.value = false
-  }
-}
-
-async function chooseArchiveSource() {
-  folderArchivePicking.value = true
-  error.value = ''
-  success.value = ''
-  resetFolderReview()
-  try {
-    folderGrant.value = await sourceImport.pickArchiveSource()
-    success.value = 'ZIP archive selected. Scan it when ready.'
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Archive selection failed'
-  } finally {
-    folderArchivePicking.value = false
-  }
-}
-
-async function chooseSampleDataset() {
-  folderSamplePicking.value = true
-  error.value = ''
-  success.value = ''
-  resetFolderReview()
-  try {
-    folderGrant.value = await sourceImport.pickSampleDataset()
-    success.value = 'Sample folder selected. Scan it when ready.'
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Sample folder selection failed'
-  } finally {
-    folderSamplePicking.value = false
-  }
-}
-
-async function scanFolderSource() {
-  if (!folderGrant.value) return
-  folderScanning.value = true
-  error.value = ''
-  success.value = ''
-  resetFolderReview()
-  try {
-    folderScan.value = await sourceImport.scanSource(folderGrant.value.source_token, {
-      includeHidden: includeHiddenInFolderScan.value,
-    })
-    await refreshFolderSelection()
-    success.value =
-      `Scan ready: ${folderScan.value.supported_file_count} supported files, ` +
-      `${folderScan.value.skipped_file_count} skipped.`
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Source scan failed'
-  } finally {
-    folderScanning.value = false
-  }
-}
-
-async function refreshFolderSelection() {
-  if (!folderScan.value) return
-  folderSelectionLoading.value = true
-  error.value = ''
-  folderImport.value = null
-  folderImportCompletion.value = null
-  folderImportReview.value = null
-  folderRescan.value = null
-  clearFolderImportPoll()
-  try {
-    folderSelection.value = await sourceImport.createSelection(folderScan.value.scan_id, {
-      excludedFileIds: excludedFileIds.value,
-      excludedExtensions: excludedExtensions.value,
-      excludedFolders: excludedFolders.value,
-    })
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to update folder review'
-  } finally {
-    folderSelectionLoading.value = false
-  }
-}
-
-async function startFolderImport() {
-  if (!folderScan.value || !folderSelection.value) return
-  folderImportStarting.value = true
-  error.value = ''
-  success.value = ''
-  folderImportCompletion.value = null
-  folderImportReview.value = null
-  folderRescan.value = null
-  try {
-    folderImport.value = importDuplicateContent.value
-      ? await sourceImport.startImport(
-          folderScan.value.scan_id,
-          folderSelection.value.selection_id,
-          { duplicatePolicy: 'import' },
-        )
-      : await sourceImport.startImport(
-          folderScan.value.scan_id,
-          folderSelection.value.selection_id,
-        )
-    success.value = `Import started: ${folderImport.value.total_file_count} files approved.`
-    scheduleFolderImportPoll()
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Folder import failed to start'
-  } finally {
-    folderImportStarting.value = false
-  }
-}
-
-async function cancelFolderImport() {
-  if (!folderImport.value || !folderImportCanCancel.value || folderImportCancelling.value) return
-  const batch = folderImport.value
-
-  folderImportCancelling.value = true
-  error.value = ''
-  success.value = ''
-  try {
-    folderImport.value = await sourceImport.cancelImport(batch.batch_id)
-    success.value = 'Cancelling import after the current file finishes.'
-    scheduleFolderImportPoll()
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to cancel import'
-  } finally {
-    folderImportCancelling.value = false
-  }
-}
-
-function requestRemoveFolderImport() {
-  if (!folderImport.value || !folderImportCanRemove.value || folderImportRemoving.value) return
-  folderRemoveConfirmOpen.value = true
-}
-
-async function confirmRemoveFolderImport() {
-  if (!folderImport.value || !folderImportCanRemove.value || folderImportRemoving.value) return
-  const batch = folderImport.value
-
-  folderImportRemoving.value = true
-  error.value = ''
-  success.value = ''
-  folderImportCompletion.value = null
-  folderRescan.value = null
-  clearFolderImportPoll()
-  try {
-    folderImport.value = await sourceImport.removeImport(batch.batch_id, batch.batch_id)
-    success.value =
-      `Removed import: ${folderImport.value.created_note_count} created notes moved out of memory.`
-    folderImportReview.value = null
-    emit('imported', folderImport.value as unknown as Record<string, unknown>)
-    folderRemoveConfirmOpen.value = false
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to remove import'
-    folderRemoveConfirmOpen.value = false
-  } finally {
-    folderImportRemoving.value = false
-  }
-}
-
-async function rescanFolderImport() {
-  if (!folderImport.value || !folderImportCanRescan.value || folderRescanning.value) return
-  const batch = folderImport.value
-
-  folderRescanning.value = true
-  error.value = ''
-  success.value = ''
-  folderImportCompletion.value = null
-  folderImportReview.value = null
-  folderRescan.value = null
-  try {
-    folderRescan.value = await sourceImport.rescanImport(batch.batch_id)
-    if (folderRescan.value.importable_file_count > 0) {
-      success.value =
-        `Scan again ready: ${folderRescan.value.new_file_count} new and ` +
-        `${folderRescan.value.changed_file_count} changed files.`
-    } else {
-      success.value = 'Scan again found no new or changed files.'
-      void refreshFolderImportCompletion()
-      void refreshFolderImportReview()
-    }
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to scan source again'
-  } finally {
-    folderRescanning.value = false
-  }
-}
-
-async function startFolderRescanImport() {
-  if (!folderRescan.value?.scan_id || folderRescan.value.importable_file_count === 0) return
-  if (folderRescanImportStarting.value || folderImportActive.value) return
-
-  folderRescanImportStarting.value = true
-  error.value = ''
-  success.value = ''
-  folderImportCompletion.value = null
-  folderImportReview.value = null
-  try {
-    const selection = await sourceImport.createSelection(folderRescan.value.scan_id, {})
-    folderImport.value = importDuplicateContent.value
-      ? await sourceImport.startImport(
-          folderRescan.value.scan_id,
-          selection.selection_id,
-          { duplicatePolicy: 'import' },
-        )
-      : await sourceImport.startImport(
-          folderRescan.value.scan_id,
-          selection.selection_id,
-        )
-    folderSelection.value = selection
-    success.value =
-      `Importing ${folderImport.value.total_file_count} new or changed files.`
-    folderRescan.value = null
-    scheduleFolderImportPoll()
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to import source changes'
-  } finally {
-    folderRescanImportStarting.value = false
-  }
-}
-
-async function refreshFolderImportCompletion() {
-  const batch = folderImport.value
-  if (!batch || batch.imported_file_count === 0 || batch.state === 'removed') {
-    folderImportCompletion.value = null
-    return
-  }
-  folderImportCompletionLoading.value = true
-  try {
-    folderImportCompletion.value = await sourceImport.getImportCompletion(batch.batch_id)
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to load import summary'
-  } finally {
-    folderImportCompletionLoading.value = false
-  }
-}
-
-async function refreshFolderImportReview() {
-  const batch = folderImport.value
-  if (!batch || folderImportProblemCount.value === 0) {
-    folderImportReview.value = null
-    return
-  }
-  folderImportReviewLoading.value = true
-  try {
-    folderImportReview.value = await sourceImport.getImportReview(batch.batch_id, 100)
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to load skipped file review'
-  } finally {
-    folderImportReviewLoading.value = false
-  }
-}
-
-function clearFolderImportPoll() {
-  if (folderImportPollTimer) {
-    clearTimeout(folderImportPollTimer)
-    folderImportPollTimer = null
-  }
-}
-
-function scheduleFolderImportPoll() {
-  clearFolderImportPoll()
-  const batchId = folderImport.value?.batch_id
-  if (!batchId || folderImportTerminal.value) {
-    if (folderImport.value?.state === 'completed') {
-      success.value =
-        `Imported ${folderImport.value.imported_file_count} files ` +
-        `and created ${folderImport.value.created_note_count} notes.`
-      emit('imported', folderImport.value as unknown as Record<string, unknown>)
-      void refreshFolderImportCompletion()
-      void refreshFolderImportReview()
-    } else if (folderImport.value?.state === 'cancelled') {
-      success.value =
-        `Import cancelled: ${folderImport.value.imported_file_count} files imported ` +
-        `and ${folderImport.value.skipped_file_count} skipped.`
-      emit('imported', folderImport.value as unknown as Record<string, unknown>)
-      void refreshFolderImportCompletion()
-      void refreshFolderImportReview()
-    } else if (folderImport.value?.state === 'interrupted') {
-      error.value = 'Import was interrupted. Created notes remain until you remove the import.'
-      void refreshFolderImportCompletion()
-      void refreshFolderImportReview()
-    } else if (folderImport.value?.state === 'failed') {
-      void refreshFolderImportCompletion()
-      void refreshFolderImportReview()
-    }
-    return
-  }
-  folderImportPollTimer = setTimeout(async () => {
-    try {
-      folderImport.value = await sourceImport.getImport(batchId)
-      scheduleFolderImportPoll()
-    } catch (err: unknown) {
-      error.value = err instanceof Error ? err.message : 'Failed to refresh import progress'
-    }
-  }, 900)
-}
-
-function askFolderImportQuestion(question: string) {
-  const batch = folderImport.value
-  if (!batch || !question.trim()) return
-  void navigateTo({
-    path: '/main',
-    query: {
-      import_batch_id: batch.batch_id,
-      q: question,
-    },
-  })
-}
-
-function isExcludedFile(id: string): boolean {
-  return excludedFileIds.value.includes(id)
-}
-
-function isExcludedExtension(extension: string): boolean {
-  return excludedExtensions.value.includes(extension)
-}
-
-function isExcludedFolder(relpath: string): boolean {
-  return excludedFolders.value.includes(relpath)
-}
-
-async function toggleFileExclusion(id: string) {
-  if (folderReviewLocked.value) return
-  excludedFileIds.value = toggleListValue(excludedFileIds.value, id)
-  await refreshFolderSelection()
-}
-
-async function toggleExtensionExclusion(extension: string) {
-  if (folderReviewLocked.value) return
-  excludedExtensions.value = toggleListValue(excludedExtensions.value, extension)
-  await refreshFolderSelection()
-}
-
-async function toggleFolderExclusion(relpath: string) {
-  if (folderReviewLocked.value) return
-  excludedFolders.value = toggleListValue(excludedFolders.value, relpath)
-  await refreshFolderSelection()
-}
-
-function toggleListValue(values: string[], value: string): string[] {
-  return values.includes(value)
-    ? values.filter(item => item !== value)
-    : [...values, value]
 }
 
 async function importGenericBatch() {
@@ -1550,119 +938,18 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(precision)} ${units[unit]}`
 }
 
-function folderIssueCanRetry(file: { status: string; reason?: string | null }): boolean {
-  const reason = (file.reason ?? '').toLowerCase()
-  if (reason.includes('duplicate_content')) return false
-  if (file.status === 'failed') return true
-  return [
-    'app_closed_during_import',
-    'cancelled_by_user',
-    'no longer available',
-    'outside the selected folder',
-    'permission',
-    'unreadable',
-  ].some(marker => reason.includes(marker))
-}
-
-function folderIssueCanFixLocally(file: { reason?: string | null }): boolean {
-  const reason = (file.reason ?? '').toLowerCase()
-  return [
-    'encrypted',
-    'file_too_large',
-    'limit',
-    'nested_archive',
-    'no longer available',
-    'online_only',
-    'outside the selected folder',
-    'password',
-    'permission',
-    'placeholder',
-    'source file',
-    'unreadable',
-    'unsupported',
-  ].some(marker => reason.includes(marker))
-}
-
-function folderIssueActionHint(file: SourceImportFileReviewItem): string {
-  const reason = (file.reason ?? '').toLowerCase()
-  if (reason.includes('duplicate_content')) {
-    return file.duplicate_of
-      ? `Already imported from ${file.duplicate_of}.`
-      : 'Already imported from another file in this batch.'
-  }
-  if (reason.includes('cancelled_by_user')) {
-    return 'Scan again when you are ready to import it.'
-  }
-  if (reason.includes('app_closed_during_import')) {
-    return 'Scan again to retry the unfinished file.'
-  }
-  if (reason.includes('password') || reason.includes('encrypted')) {
-    return 'Export an unlocked copy, then import it.'
-  }
-  if (reason.includes('online_only') || reason.includes('placeholder')) {
-    return 'Download it to this computer, then scan again.'
-  }
-  if (reason.includes('nested_archive')) {
-    return 'Extract the nested archive locally, then import it as its own source.'
-  }
-  if (
-    reason.includes('no longer available') ||
-    reason.includes('outside the selected folder')
-  ) {
-    return 'Put the file back in the folder, then scan again.'
-  }
-  if (reason.includes('permission') || reason.includes('unreadable')) {
-    return 'Check local file permissions, then scan again.'
-  }
-  if (reason.includes('unsupported')) {
-    return 'Convert it to a supported document type.'
-  }
-  if (reason.includes('archive_')) {
-    return 'Extract or repair the archive locally, then scan again.'
-  }
-  if (reason.includes('too large') || reason.includes('limit')) {
-    return 'Split or reduce the file before importing.'
-  }
-  if (file.status === 'failed') {
-    return 'Check that the file opens locally, then scan again.'
-  }
-  return 'This file was left out of memory for this import.'
-}
-
-function humanizeReason(reason: string): string {
-  const labels: Record<string, string> = {
-    archive_duplicate_member: 'Duplicate archive path',
-    archive_empty: 'Empty archive',
-    archive_entry_limit: 'Archive limit',
-    archive_member_not_found: 'Archive file missing',
-    archive_size_limit: 'Archive too large',
-    archive_unreadable: 'Unreadable archive',
-    archive_unsafe_path: 'Unsafe archive path',
-    duplicate_content: 'Duplicate',
-    duplicate_content_existing_import: 'Already imported',
-    nested_archive: 'Nested archive',
-    online_only_placeholder: 'Online-only file',
-    previous_duplicate_content: 'Already imported',
-  }
-  if (labels[reason]) return labels[reason]
-  return reason
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (ch) => ch.toUpperCase())
-}
-
-// Lazy-load history when dialog becomes visible while in Jira mode.
+// Lazy-load history when the dialog switches into a history-backed mode.
 watch(
   () => mode.value,
   (m) => {
     if (m === 'jira' && recentImports.value.length === 0) {
       loadRecentImports()
     }
+    if (m === 'folder' && folderImportHistoryRows.value.length === 0) {
+      loadFolderImportHistory()
+    }
   }
 )
-
-onUnmounted(() => {
-  clearFolderImportPoll()
-})
 </script>
 
 <style scoped>
@@ -1856,6 +1143,74 @@ onUnmounted(() => {
   justify-content: flex-start;
   flex-wrap: wrap;
 }
+.import-dialog__folder-history {
+  padding-top: 0.25rem;
+}
+.import-dialog__folder-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+.import-dialog__folder-history-title {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.import-dialog__folder-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 190px;
+  overflow-y: auto;
+}
+.import-dialog__folder-history-item {
+  margin: 0;
+}
+.import-dialog__folder-history-row {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.import-dialog__folder-history-row--active {
+  border-color: rgba(96, 165, 250, 0.58);
+  background: rgba(96, 165, 250, 0.08);
+}
+.import-dialog__folder-history-row--completed {
+  border-left: 3px solid #22c55e;
+}
+.import-dialog__folder-history-row--cancelled,
+.import-dialog__folder-history-row--interrupted {
+  border-left: 3px solid #f59e0b;
+}
+.import-dialog__folder-history-row--failed {
+  border-left: 3px solid #ef4444;
+}
+.import-dialog__folder-history-row--removed {
+  border-left: 3px solid #64748b;
+}
+.import-dialog__folder-history-row--queued,
+.import-dialog__folder-history-row--importing,
+.import-dialog__folder-history-row--cancelling,
+.import-dialog__folder-history-row--removing {
+  border-left: 3px solid #60a5fa;
+}
+.import-dialog__folder-history-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+}
 .import-dialog__source-card {
   display: flex;
   justify-content: space-between;
@@ -1937,6 +1292,12 @@ onUnmounted(() => {
 .import-dialog__approval .import-dialog__sublabel {
   grid-column: 1 / -1;
 }
+.import-dialog__approval-reasons {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
 .import-dialog__approval-stat span {
   display: block;
   font-size: 0.68rem;
@@ -1953,263 +1314,6 @@ onUnmounted(() => {
   font-size: 0.68rem;
   font-weight: 400;
   opacity: 0.65;
-}
-.import-dialog__batch {
-  padding: 0.7rem;
-  border: 1px solid rgba(96, 165, 250, 0.38);
-  border-radius: 6px;
-  background: rgba(96, 165, 250, 0.045);
-}
-.import-dialog__batch-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  font-size: 0.82rem;
-}
-.import-dialog__batch-header strong {
-  flex: 0 0 auto;
-}
-.import-dialog__batch-bar {
-  height: 6px;
-  margin-top: 0.5rem;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-}
-.import-dialog__batch-bar span {
-  display: block;
-  height: 100%;
-  min-width: 4px;
-  background: #60a5fa;
-  transition: width 0.2s ease;
-}
-.import-dialog__batch-meta {
-  margin-top: 0.45rem;
-  font-size: 0.74rem;
-  opacity: 0.72;
-}
-.import-dialog__batch-actions {
-  margin-top: 0.65rem;
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-}
-.import-dialog__stop-btn,
-.import-dialog__rescan-btn,
-.import-dialog__change-btn,
-.import-dialog__remove-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.35rem 0.65rem;
-  border: 1px solid rgba(239, 68, 68, 0.5);
-  border-radius: 4px;
-  background: rgba(239, 68, 68, 0.08);
-  color: #fca5a5;
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.76rem;
-}
-.import-dialog__stop-btn {
-  border-color: rgba(245, 158, 11, 0.5);
-  background: rgba(245, 158, 11, 0.08);
-  color: #fbbf24;
-}
-.import-dialog__rescan-btn {
-  border-color: rgba(96, 165, 250, 0.5);
-  background: rgba(96, 165, 250, 0.08);
-  color: #93c5fd;
-}
-.import-dialog__change-btn {
-  border-color: rgba(34, 197, 94, 0.5);
-  background: rgba(34, 197, 94, 0.08);
-  color: #86efac;
-}
-.import-dialog__stop-btn:disabled,
-.import-dialog__rescan-btn:disabled,
-.import-dialog__change-btn:disabled,
-.import-dialog__remove-btn:disabled {
-  opacity: 0.55;
-  cursor: wait;
-}
-.import-dialog__completion {
-  padding: 0.7rem;
-  border: 1px solid rgba(34, 197, 94, 0.32);
-  border-radius: 6px;
-  background: rgba(34, 197, 94, 0.035);
-}
-.import-dialog__completion-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  font-size: 0.82rem;
-}
-.import-dialog__completion-header strong {
-  flex: 0 0 auto;
-}
-.import-dialog__completion-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.4rem;
-  margin-top: 0.55rem;
-  margin-bottom: 0.55rem;
-}
-.import-dialog__completion-stat {
-  padding: 0.45rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.025);
-}
-.import-dialog__completion-stat span {
-  display: block;
-  font-size: 0.64rem;
-  opacity: 0.62;
-}
-.import-dialog__completion-stat strong {
-  display: block;
-  margin-top: 0.12rem;
-  font-size: 0.88rem;
-}
-.import-dialog__questions {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin-top: 0.65rem;
-}
-.import-dialog__question-btn {
-  width: 100%;
-  min-height: 2rem;
-  padding: 0.45rem 0.55rem;
-  border: 1px solid rgba(34, 197, 94, 0.34);
-  border-radius: 4px;
-  background: rgba(34, 197, 94, 0.07);
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.76rem;
-  line-height: 1.25;
-  text-align: left;
-}
-.import-dialog__issues {
-  padding: 0.7rem;
-  border: 1px solid rgba(245, 158, 11, 0.35);
-  border-radius: 6px;
-  background: rgba(245, 158, 11, 0.04);
-}
-.import-dialog__issues-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  font-size: 0.82rem;
-}
-.import-dialog__issues-header strong {
-  flex: 0 0 auto;
-}
-.import-dialog__issues-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.4rem;
-  margin-top: 0.55rem;
-  margin-bottom: 0.5rem;
-}
-.import-dialog__issues-stat {
-  padding: 0.45rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.025);
-}
-.import-dialog__issues-stat span {
-  display: block;
-  font-size: 0.64rem;
-  opacity: 0.62;
-}
-.import-dialog__issues-stat strong {
-  display: block;
-  margin-top: 0.12rem;
-  font-size: 0.88rem;
-}
-.import-dialog__issue-list {
-  list-style: none;
-  margin: 0.65rem 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  max-height: 230px;
-  overflow-y: auto;
-}
-.import-dialog__issue-file {
-  padding: 0.45rem 0.55rem;
-  border: 1px solid var(--color-border, #333);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.02);
-}
-.import-dialog__issue-file--failed {
-  border-left: 3px solid #ef4444;
-}
-.import-dialog__issue-file--skipped {
-  border-left: 3px solid #f59e0b;
-}
-.import-dialog__issue-main {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-}
-.import-dialog__issue-status {
-  flex: 0 0 auto;
-  font-size: 0.68rem;
-  opacity: 0.68;
-  text-transform: uppercase;
-}
-.import-dialog__issue-meta {
-  display: flex;
-  gap: 0.45rem;
-  margin-top: 0.18rem;
-  font-size: 0.72rem;
-  opacity: 0.68;
-}
-.import-dialog__issue-hint {
-  margin-top: 0.22rem;
-  font-size: 0.74rem;
-  opacity: 0.82;
-}
-.import-dialog__rescan {
-  padding: 0.7rem;
-  border: 1px solid rgba(34, 197, 94, 0.32);
-  border-radius: 6px;
-  background: rgba(34, 197, 94, 0.035);
-}
-.import-dialog__rescan-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  font-size: 0.82rem;
-}
-.import-dialog__rescan-header strong {
-  flex: 0 0 auto;
-}
-.import-dialog__rescan-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.4rem;
-  margin-top: 0.55rem;
-}
-.import-dialog__rescan-stat {
-  padding: 0.45rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.025);
-}
-.import-dialog__rescan-stat span {
-  display: block;
-  font-size: 0.64rem;
-  opacity: 0.62;
-}
-.import-dialog__rescan-stat strong {
-  display: block;
-  margin-top: 0.12rem;
-  font-size: 0.88rem;
 }
 .import-dialog__scan-section {
   padding-top: 0.25rem;
@@ -2282,22 +1386,6 @@ onUnmounted(() => {
   border-left: 3px solid #f59e0b;
 }
 .import-dialog__scan-file--skipped {
-  border-left: 3px solid #64748b;
-}
-.import-dialog__rescan-file--new {
-  border-left: 3px solid #22c55e;
-}
-.import-dialog__rescan-file--changed {
-  border-left: 3px solid #60a5fa;
-}
-.import-dialog__rescan-file--missing {
-  border-left: 3px solid #ef4444;
-}
-.import-dialog__rescan-file--unsupported {
-  border-left: 3px solid #f59e0b;
-}
-.import-dialog__rescan-file--skipped,
-.import-dialog__rescan-file--unchanged {
   border-left: 3px solid #64748b;
 }
 .import-dialog__file-toggle {

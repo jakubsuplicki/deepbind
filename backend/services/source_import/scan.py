@@ -22,6 +22,13 @@ from services.source_import.cloud_placeholders import (
     display_extension_for_cloud_placeholder,
     filename_indicates_cloud_placeholder,
 )
+from services.source_import.limits import (
+    DEFAULT_SCAN_MAX_FILES,
+    FILE_LIST_PREVIEW_LIMIT,
+    FOLDER_SUMMARY_LIMIT as SOURCE_FOLDER_SUMMARY_LIMIT,
+    LARGEST_FILES_LIMIT as SOURCE_LARGEST_FILES_LIMIT,
+    MAX_FILE_BYTES,
+)
 from services.source_import.models import (
     SourceScanFileItem,
     SourceScanFolderSummary,
@@ -31,10 +38,10 @@ from services.source_import.models import (
 )
 
 
-DEFAULT_MAX_FILES = 25_000
-FILE_LIST_LIMIT = 500
-LARGEST_FILES_LIMIT = 10
-FOLDER_SUMMARY_LIMIT = 20
+DEFAULT_MAX_FILES = DEFAULT_SCAN_MAX_FILES
+FILE_LIST_LIMIT = FILE_LIST_PREVIEW_LIMIT
+LARGEST_FILES_LIMIT = SOURCE_LARGEST_FILES_LIMIT
+FOLDER_SUMMARY_LIMIT = SOURCE_FOLDER_SUMMARY_LIMIT
 
 SKIP_DIR_NAMES = {
     ".cache",
@@ -216,6 +223,20 @@ def scan_folder(
             ))
             return
 
+        if member.size > MAX_FILE_BYTES:
+            record_skip("file_too_large", member.size)
+            add_file_item(SourceScanFileItem(
+                id=_safe_file_id(member.relpath),
+                relpath=member.relpath,
+                filename=member.filename,
+                extension=member.extension,
+                size=member.size,
+                modified_at=member.modified_at,
+                status="skipped",
+                reason="file_too_large",
+            ))
+            return
+
         total_size_seen += max(member.size, 0)
         counts_by_extension[member.extension] += 1
         folder_key = PurePosixPath(member.relpath).parent.as_posix()
@@ -367,6 +388,20 @@ def scan_folder(
                     add_archive_member(member)
                 continue
 
+            if size > MAX_FILE_BYTES:
+                record_skip("file_too_large", size)
+                add_file_item(SourceScanFileItem(
+                    id=_safe_file_id(rel),
+                    relpath=rel,
+                    filename=entry.name,
+                    extension=extension,
+                    size=size,
+                    modified_at=modified_at,
+                    status="skipped",
+                    reason="file_too_large",
+                ))
+                continue
+
             total_size_seen += max(size, 0)
             counts_by_extension[extension] += 1
             folder_key = Path(rel).parent.as_posix()
@@ -513,6 +548,20 @@ def scan_archive(
                 modified_at=member.modified_at,
                 status="skipped",
                 reason="nested_archive",
+            ))
+            return
+
+        if member.size > MAX_FILE_BYTES:
+            record_skip("file_too_large", member.size)
+            add_file_item(SourceScanFileItem(
+                id=_safe_file_id(member.relpath),
+                relpath=member.relpath,
+                filename=member.filename,
+                extension=member.extension,
+                size=member.size,
+                modified_at=member.modified_at,
+                status="skipped",
+                reason="file_too_large",
             ))
             return
 

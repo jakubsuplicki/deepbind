@@ -6,6 +6,7 @@ chat WebSocket emits a ``trace`` event before ``done`` when context is
 non-empty.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -172,6 +173,106 @@ async def test_build_context_trace_empty_when_no_results(monkeypatch):
     assert text is None
     assert tokens == 0
     assert trace == []
+
+
+@pytest.mark.anyio
+async def test_import_scoped_context_uses_hybrid_allowlist(monkeypatch):
+    """Import-scoped questions use hybrid scoring while staying inside the batch."""
+    from services import context_builder
+
+    batch = SimpleNamespace(
+        batch_id="import_1",
+        source_display_name="Client Demo",
+        files=[
+            SimpleNamespace(
+                status="done",
+                note_paths=[
+                    "imports/client/first.md",
+                    "imports/client/second.md",
+                ],
+            ),
+            SimpleNamespace(status="skipped", note_paths=["imports/client/skipped.md"]),
+        ],
+    )
+
+    async def _batch_summary(batch_id, workspace_path=None):
+        assert batch_id == "import_1"
+        return batch
+
+    calls = {}
+
+    async def _retrieve(
+        query,
+        limit=5,
+        workspace_path=None,
+        path_allowlist=None,
+        deduplicate_folders=True,
+    ):
+        calls["query"] = query
+        calls["limit"] = limit
+        calls["path_allowlist"] = path_allowlist
+        calls["deduplicate_folders"] = deduplicate_folders
+        return [
+            {
+                "path": "imports/client/second.md",
+                "title": "Second",
+                "_score": 0.92,
+                "_signals": {"bm25": 0.2, "cosine": 0.92, "graph": 0.1},
+                "_best_chunk": "semantic match from the second document",
+            },
+            {
+                "path": "inbox/unrelated.md",
+                "title": "Unrelated",
+                "_score": 1.0,
+                "_signals": {"bm25": 1.0},
+                "_best_chunk": "must not leak",
+            },
+            {
+                "path": "imports/client/first.md",
+                "title": "First",
+                "_score": 0.5,
+                "_signals": {"bm25": 0.5, "cosine": 0.0, "graph": 0.0},
+                "_best_chunk": "keyword match from the first document",
+            },
+        ]
+
+    async def _get_note(path, workspace_path=None):
+        relpath = "second.md" if path.endswith("second.md") else "first.md"
+        title = "Second" if path.endswith("second.md") else "First"
+        return {
+            "title": title,
+            "content": (
+                "---\n"
+                f"title: {title}\n"
+                f"source_relpath: {relpath}\n"
+                "---\n\n"
+                f"{title} body"
+            ),
+        }
+
+    monkeypatch.setattr(
+        "services.source_import.manifest.get_batch_summary",
+        _batch_summary,
+    )
+    monkeypatch.setattr("services.context_builder.retrieval.retrieve", _retrieve)
+    monkeypatch.setattr("services.context_builder.memory_service.get_note", _get_note)
+
+    text, trace = await context_builder._build_import_scoped_context(
+        "import_1",
+        "Which budget item matters?",
+    )
+
+    assert calls["path_allowlist"] == {
+        "imports/client/first.md",
+        "imports/client/second.md",
+    }
+    assert calls["deduplicate_folders"] is False
+    assert text and "must not leak" not in text
+    assert text.index('source_relpath="second.md"') < text.index('source_relpath="first.md"')
+    assert trace[0]["path"] == "imports/client/second.md"
+    assert trace[0]["via"] == "import_batch"
+    assert trace[0]["signals"]["cosine"] == 0.92
+    assert trace[0]["signals"]["import_scope"] == 1.0
 
 
 @pytest.mark.anyio

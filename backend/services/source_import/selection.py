@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
+from services.source_import.limits import MAX_APPROVED_BYTES_PER_BATCH
 from services.source_import.models import (
     SourceScanFileItem,
     SourceScanResult,
@@ -88,6 +89,8 @@ def build_selection(
             rule = "file_type"
         elif any(_is_in_folder(item.relpath, folder) for folder in excluded_folders):
             rule = "folder"
+        elif approved_total_size + max(item.size, 0) > MAX_APPROVED_BYTES_PER_BATCH:
+            rule = "batch_size_limit"
 
         if rule:
             excluded_by_rule[rule] += 1

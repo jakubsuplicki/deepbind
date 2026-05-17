@@ -594,13 +594,21 @@ async def retrieve(
     query: str,
     limit: int = 5,
     workspace_path=None,
+    path_allowlist: Optional[Set[str]] = None,
+    deduplicate_folders: bool = True,
 ) -> List[Dict]:
     """Hybrid retrieval combining BM25, chunk cosine similarity and graph scoring.
 
     When ``JARVIS_FEATURE_JIRA_RETRIEVAL=1`` is set, also runs intent
     parsing, enrichment scoring, facet filtering, and post-fusion boosts.
     """
-    intent, results = await retrieve_with_intent(query, limit=limit, workspace_path=workspace_path)
+    intent, results = await retrieve_with_intent(
+        query,
+        limit=limit,
+        workspace_path=workspace_path,
+        path_allowlist=path_allowlist,
+        deduplicate_folders=deduplicate_folders,
+    )
     return results
 
 
@@ -609,6 +617,8 @@ async def retrieve_with_intent(
     limit: int = 5,
     workspace_path=None,
     facets_override: Optional[FacetFilter] = None,
+    path_allowlist: Optional[Set[str]] = None,
+    deduplicate_folders: bool = True,
 ) -> tuple:
     """Full retrieval returning both ``(QueryIntent, results)``."""
     if not query or not query.strip():
@@ -619,15 +629,23 @@ async def retrieve_with_intent(
     # Parse intent (always — cheap and deterministic)
     intent = parse_intent(query)
 
+    allowed_paths = set(path_allowlist) if path_allowlist is not None else None
+    if allowed_paths is not None and not allowed_paths:
+        return intent, []
+
     # Merge explicit facet overrides from API
     if facets_override and not facets_override.is_empty:
         intent.facets = facets_override
 
     # --- Signal 1: BM25 candidates ---
+    candidate_fetch_limit = limit * 3
+    if allowed_paths is not None:
+        candidate_fetch_limit = max(limit * 5, len(allowed_paths))
     fts_candidates = await memory_service.list_notes(
         search=query,
-        limit=limit * 3,
+        limit=candidate_fetch_limit,
         workspace_path=workspace_path,
+        path_allowlist=allowed_paths,
     )
 
     max_bm25 = max(
@@ -660,9 +678,17 @@ async def retrieve_with_intent(
                 chunk_results = None
                 try:
                     from services.embedding_service import search_similar_chunks
-                    chunk_results = await search_similar_chunks(
-                        query, limit=limit * 3, workspace_path=workspace_path,
-                    )
+                    if allowed_paths is not None:
+                        chunk_results = await search_similar_chunks(
+                            query,
+                            limit=candidate_fetch_limit,
+                            workspace_path=workspace_path,
+                            path_allowlist=allowed_paths,
+                        )
+                    else:
+                        chunk_results = await search_similar_chunks(
+                            query, limit=candidate_fetch_limit, workspace_path=workspace_path,
+                        )
                 except Exception:
                     pass
 
@@ -690,9 +716,17 @@ async def retrieve_with_intent(
                 else:
                     # Fallback to note-level cosine
                     from services.embedding_service import search_similar
-                    similar = await search_similar(
-                        query, limit=limit * 3, workspace_path=workspace_path,
-                    )
+                    if allowed_paths is not None:
+                        similar = await search_similar(
+                            query,
+                            limit=candidate_fetch_limit,
+                            workspace_path=workspace_path,
+                            path_allowlist=allowed_paths,
+                        )
+                    else:
+                        similar = await search_similar(
+                            query, limit=candidate_fetch_limit, workspace_path=workspace_path,
+                        )
                     if similar:
                         cosine_available = True
                         for path, score in similar:
@@ -715,6 +749,22 @@ async def retrieve_with_intent(
             pass
         except Exception as exc:
             logger.warning("Cosine retrieval failed: %s", exc)
+
+    if allowed_paths is not None:
+        for path in sorted(allowed_paths):
+            if path in candidate_pool:
+                continue
+            meta = await _get_note_meta(path, workspace_path)
+            if meta:
+                candidate_pool[path] = {
+                    **meta,
+                    "_bm25": 0.0,
+                    "_cosine": 0.0,
+                    "_graph": 0.0,
+                    "_enrichment": 0.0,
+                    "_best_chunk": None,
+                    "_best_section": None,
+                }
 
     if not candidate_pool:
         return intent, []
@@ -894,7 +944,7 @@ async def retrieve_with_intent(
         except Exception as exc:
             logger.warning("Reranker pass skipped: %s", exc)
 
-    result = _cluster_dedup(scored, limit)
+    result = _cluster_dedup(scored, limit) if deduplicate_folders else scored[:limit]
 
     # Clean internal fields but KEEP _best_chunk, _best_section, _score and
     # _signals for context_builder (the trace UI in step 28a reports both).

@@ -196,8 +196,10 @@ async def start_source_import_endpoint(
     response_model=list[SourceImportBatchSummary],
     dependencies=[Depends(require_functional)],
 )
-async def list_source_imports_endpoint() -> list[SourceImportBatchSummary]:
-    return await list_batch_summaries()
+async def list_source_imports_endpoint(
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[SourceImportBatchSummary]:
+    return await list_batch_summaries(limit=limit)
 
 
 @router.get(

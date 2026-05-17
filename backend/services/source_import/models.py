@@ -4,6 +4,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from services.source_import.limits import MAX_SCAN_REQUEST_FILES
+
 
 SourceGrantKind = Literal["local_folder", "local_archive"]
 SourceDuplicatePolicy = Literal["skip", "import"]
@@ -45,7 +47,7 @@ class SourceGrantResponse(BaseModel):
 class SourceScanRequest(BaseModel):
     source_token: str = Field(min_length=16)
     include_hidden: bool = False
-    max_files: Optional[int] = Field(default=None, ge=1, le=100_000)
+    max_files: Optional[int] = Field(default=None, ge=1, le=MAX_SCAN_REQUEST_FILES)
 
 
 class SourceScanFileItem(BaseModel):
@@ -182,6 +184,7 @@ class SourceImportFileOutcome(BaseModel):
     reason: Optional[str] = None
     duplicate_of: Optional[str] = None
     content_hash: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
     note_paths: list[str] = Field(default_factory=list)
 
 
@@ -229,6 +232,7 @@ class SourceImportCompletionSummary(BaseModel):
     skipped_file_count: int = 0
     failed_file_count: int = 0
     duplicate_file_count: int = 0
+    warning_file_count: int = 0
     created_note_count: int = 0
     imported_extension_counts: dict[str, int] = Field(default_factory=dict)
     imported_folder_counts: dict[str, int] = Field(default_factory=dict)
@@ -250,6 +254,7 @@ class SourceImportBatchSummary(BaseModel):
     imported_file_count: int = 0
     skipped_file_count: int = 0
     failed_file_count: int = 0
+    warning_file_count: int = 0
     created_note_count: int = 0
     total_bytes: int = 0
     processed_bytes: int = 0

@@ -319,41 +319,94 @@ async def _build_import_scoped_context(
         return None, []
 
     query_keywords = _extract_keywords(user_message)
-    candidates: list[dict] = []
-    for index, path in enumerate(note_paths[:300]):
+    scoped_note_paths = note_paths[:300]
+    allowed_paths = set(scoped_note_paths)
+
+    selected: list[dict] = []
+    try:
+        hybrid_results = await retrieval.retrieve(
+            user_message,
+            limit=5,
+            workspace_path=workspace_path,
+            path_allowlist=allowed_paths,
+            deduplicate_folders=False,
+        )
+    except Exception:
+        logger.info("Hybrid import-scoped retrieval unavailable for batch %s", import_batch_id)
+        hybrid_results = []
+
+    for result in hybrid_results:
+        path = str(result.get("path") or "")
+        if path not in allowed_paths:
+            continue
         try:
             note = await memory_service.get_note(path, workspace_path=workspace_path)
         except Exception:
             continue
-        title = str(note.get("title") or path)
+        title = str(note.get("title") or result.get("title") or path)
         content = str(note.get("content") or "")
         fm, body = parse_frontmatter(content)
         source_relpath = str(fm.get("source_relpath") or path)
-        score_text = f"{title} {path} {source_relpath} {body}"
-        score = _score_import_note(query_keywords, score_text, index)
-        candidates.append(
+        signals = {
+            key: round(float(value), 3)
+            for key, value in dict(result.get("_signals") or {}).items()
+        }
+        signals["import_scope"] = 1.0
+        selected.append(
             {
                 "path": path,
                 "title": title,
                 "source_relpath": source_relpath,
                 "body": body,
-                "_score": score,
+                "best_chunk": result.get("_best_chunk"),
+                "_score": float(result.get("_score", 0.0)),
+                "_signals": signals,
             }
         )
+        if len(selected) >= 5:
+            break
 
-    if not candidates:
-        return None, []
+    if not selected:
+        candidates: list[dict] = []
+        for index, path in enumerate(scoped_note_paths):
+            try:
+                note = await memory_service.get_note(path, workspace_path=workspace_path)
+            except Exception:
+                continue
+            title = str(note.get("title") or path)
+            content = str(note.get("content") or "")
+            fm, body = parse_frontmatter(content)
+            source_relpath = str(fm.get("source_relpath") or path)
+            score_text = f"{title} {path} {source_relpath} {body}"
+            score = _score_import_note(query_keywords, score_text, index)
+            candidates.append(
+                {
+                    "path": path,
+                    "title": title,
+                    "source_relpath": source_relpath,
+                    "body": body,
+                    "best_chunk": None,
+                    "_score": score,
+                    "_signals": {"import_scope": round(float(score), 3)},
+                }
+            )
 
-    candidates.sort(
-        key=lambda item: (item["_score"], item["title"]),
-        reverse=True,
-    )
-    selected = candidates[:5]
+        if not candidates:
+            return None, []
+
+        candidates.sort(
+            key=lambda item: (item["_score"], item["title"]),
+            reverse=True,
+        )
+        selected = candidates[:5]
+
     note_parts = []
     trace: List[dict] = []
     for item in selected:
         path = item["path"]
-        snippet = _best_import_snippet(item["body"], query_keywords)
+        snippet = str(item.get("best_chunk") or "").strip()
+        if not snippet:
+            snippet = _best_import_snippet(item["body"], query_keywords)
         path_attr = escape(path, quote=True)
         relpath_attr = escape(str(item["source_relpath"]), quote=True)
         note_parts.append(
@@ -370,7 +423,7 @@ async def _build_import_scoped_context(
                 "via": "import_batch",
                 "edge_type": None,
                 "tier": None,
-                "signals": {"import_scope": round(float(item["_score"]), 3)},
+                "signals": item["_signals"],
             }
         )
 
