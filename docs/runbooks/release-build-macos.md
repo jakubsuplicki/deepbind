@@ -2,7 +2,7 @@
 title: Release Build — macOS
 type: runbook
 status: active
-last_updated: 2026-05-01
+last_updated: 2026-05-18
 related_adrs:
   - 003-desktop-distribution-tauri-and-sidecars
   - 015-single-target-local-only-stack
@@ -151,6 +151,8 @@ Verify the install carried the ticket and capabilities through:
 xcrun stapler validate /Applications/DeepFilesAI.app
 /usr/libexec/PlistBuddy -c "Print :JarvisBundleCapabilities" /Applications/DeepFilesAI.app/Contents/Info.plist
 ```
+
+Before promoting a build for demos, also run the buyer-facing source-import smoke in [Folder Source Import Demo Smoke](folder-source-import-demo-smoke.md). That pass verifies the bundled sample dataset, local mixed-folder import, synced-folder offline behavior, remove/re-import safety, and import-scoped question trace from the packaged app.
 
 ---
 

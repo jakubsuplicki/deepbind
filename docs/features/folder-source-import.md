@@ -1,6 +1,6 @@
 ---
 title: Folder Source Import
-status: in-progress
+status: review-ready
 type: feature
 sources:
   - backend/main.py
@@ -48,17 +48,17 @@ sources:
   - frontend/tests/components/ImportDialog.test.ts
   - frontend/tests/pages/memory.test.ts
 depends_on: [memory, pdf-section-split, smart-connect, retrieval-trace, desktop-shell-graduation]
-last_reviewed: 2026-05-16
-last_updated: 2026-05-17
+last_reviewed: 2026-05-18
+last_updated: 2026-05-18
 ---
 
 # Folder Source Import
 
 ## Summary
 
-Folder Source Import is the planned buyer-visible import flow for local and synced business folders. It lets a non-developer choose a folder, review a metadata-only inventory, approve exactly what DeepFilesAI may read, and then turn approved files into local Markdown memory with progress, evidence, and recovery controls.
+Folder Source Import is the buyer-visible import flow for local and synced business folders. It lets a non-developer choose a folder, review a metadata-only inventory, approve exactly what DeepFilesAI may read, and then turn approved files into local Markdown memory with progress, evidence, and recovery controls.
 
-This feature complements the existing single-file upload path documented in [memory.md](memory.md). The durable product rule is still the same: Markdown under `memory/` is the source of truth, while SQLite, embeddings, chunks, graph edges, suggestions, and import manifests are derived or operational layers.
+This feature complements the existing single-file upload path documented in [memory.md](memory.md). The durable product rule is still the same: Markdown under `memory/` is the source of truth, while SQLite, embeddings, chunks, graph edges, suggestions, and import manifests are derived or operational layers. The implementation is review-ready; packaged desktop validation should follow the [Folder Source Import Demo Smoke](../runbooks/folder-source-import-demo-smoke.md) runbook.
 
 ## Definition of Done
 
@@ -79,6 +79,7 @@ This feature complements the existing single-file upload path documented in [mem
 - App shutdown, cancellation, folder-name collisions, and hard limits have explicit user-visible behavior.
 - No cloud connector, OAuth flow, telemetry, or network dependency is introduced.
 - Tests cover scan consent, import lifecycle, extractor fixtures, archive guards, and frontend review/progress states.
+- Manual desktop smoke is tracked in [Folder Source Import Demo Smoke](../runbooks/folder-source-import-demo-smoke.md).
 
 ## Non-goals
 
@@ -454,11 +455,12 @@ Backend internals may keep more technical stage names, but the frontend should p
 
 **ZIP support has three paths.** Single-file ZIP ingest creates a safe listing note and does not extract child files. Folder/source import expands ZIP files found inside the selected folder into guarded child rows, then extracts only approved children to temporary files. Standalone ZIP source import uses the same guarded child review/import path without adding the archive filename as a destination folder segment. Encrypted archive members are rejected from central-directory metadata as `archive_encrypted`; nested archive policy is still later work.
 
-**This doc is in progress.** Step 29a and 29b exist, 29c now has reusable extractors plus the first approved folder import worker, 29d covers removal, cancellation, interrupted-batch recovery, skipped/failed review, and explicit scan-again/import-changes, 29e has deterministic completion summaries, import-scoped suggested questions, and open-imported-notes handoff back to Memory, 29f has the first bundled fictional sample dataset, conservative online-only placeholder handling, cross-batch content dedupe, explicit duplicate-content choice, ZIP child import from selected folders, standalone ZIP source picking, and explicit nested-archive skips, 29g applies hybrid scoring inside the import-batch allowlist, 29h adds recent source import history, the first named source-import limits are enforced with visible reasons, extractor warnings now surface in Markdown, manifest rows, completion summaries, and per-file completion details, direct extractor tests now pin representative business-format quality, encrypted archives are rejected before extraction, scan attention can be copied as a relative-path issue report, and the bundled sample folder has end-to-end smoke coverage. Later slices still own dependency-backed parser evaluation, OCR/scanned documents, legacy Office formats, and deeper corpus-specific malformed-file hardening.
+**Implementation is review-ready, with manual desktop smoke pending.** Step 29a and 29b exist, 29c has reusable extractors plus the first approved folder import worker, 29d covers removal, cancellation, interrupted-batch recovery, skipped/failed review, and explicit scan-again/import-changes, 29e has deterministic completion summaries, import-scoped suggested questions, and open-imported-notes handoff back to Memory, 29f has the first bundled fictional sample dataset, conservative online-only placeholder handling, cross-batch content dedupe, explicit duplicate-content choice, ZIP child import from selected folders, standalone ZIP source picking, and explicit nested-archive skips, 29g applies hybrid scoring inside the import-batch allowlist, 29h adds recent source import history, the first named source-import limits are enforced with visible reasons, extractor warnings surface in Markdown, manifest rows, completion summaries, and per-file completion details, direct extractor tests pin representative business-format quality, encrypted archives are rejected before extraction, scan attention can be copied as a relative-path issue report, and the bundled sample folder has end-to-end backend smoke coverage. Later slices still own dependency-backed parser evaluation, OCR/scanned documents, legacy Office formats, and deeper corpus-specific malformed-file hardening.
 
 ## Related
 
 - [Step 29 - Folder and Source Import Demo Flow](../steps/step-29-folder-source-import-demo-flow.spec.md)
+- [Folder Source Import Demo Smoke](../runbooks/folder-source-import-demo-smoke.md)
 - [Memory System](memory.md)
 - [PDF Section Split](pdf-section-split.md)
 - [Smart Connect](smart-connect.md)
