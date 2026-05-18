@@ -69,6 +69,16 @@ async def _wait_for_import(client, batch_id: str) -> dict:
     raise AssertionError("source import did not finish")
 
 
+def _bundled_sample_root() -> Path:
+    return (
+        Path(__file__).parents[2]
+        / "desktop"
+        / "src-tauri"
+        / "sample-data"
+        / "deepfiles-demo-folder"
+    )
+
+
 def _write_xlsx_fixture(path: Path, *, rows: int = 2) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     rows_xml = "\n".join(
@@ -109,6 +119,20 @@ def _write_xlsx_fixture(path: Path, *, rows: int = 2) -> Path:
             """,
         )
     return path
+
+
+def _mark_first_zip_member_encrypted(path: Path) -> None:
+    data = bytearray(path.read_bytes())
+    for signature, flag_offset in (
+        (b"PK\x03\x04", 6),
+        (b"PK\x01\x02", 8),
+    ):
+        index = data.find(signature)
+        assert index >= 0
+        offset = index + flag_offset
+        flags = int.from_bytes(data[offset:offset + 2], "little") | 0x1
+        data[offset:offset + 2] = flags.to_bytes(2, "little")
+    path.write_bytes(data)
 
 
 @pytest.mark.anyio
@@ -529,6 +553,26 @@ async def test_scan_skips_zip_archive_with_unsafe_path(client, tmp_path):
 
 
 @pytest.mark.anyio
+async def test_scan_skips_zip_archive_with_encrypted_member(client, tmp_path):
+    archive = tmp_path / "locked.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("secret.md", "# Secret")
+    _mark_first_zip_member_encrypted(archive)
+
+    token = await _grant(client, tmp_path)
+    r = await client.post("/api/source-import/scan", json={"source_token": token})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["supported_file_count"] == 0
+    assert body["skipped_file_count"] == 1
+    assert body["skipped_by_reason"] == {"archive_encrypted": 1}
+    assert body["files"][0]["relpath"] == "locked.zip"
+    assert body["files"][0]["status"] == "skipped"
+    assert body["files"][0]["reason"] == "archive_encrypted"
+
+
+@pytest.mark.anyio
 async def test_archive_grant_rejects_non_zip_file(client, tmp_path):
     source = tmp_path / "notes.md"
     source.write_text("# Notes", encoding="utf-8")
@@ -592,13 +636,7 @@ async def test_cloud_placeholder_detector_uses_cloud_provider_xattrs(
 
 @pytest.mark.anyio
 async def test_bundled_sample_dataset_scans_as_supported_demo_source():
-    sample_root = (
-        Path(__file__).parents[2]
-        / "desktop"
-        / "src-tauri"
-        / "sample-data"
-        / "deepfiles-demo-folder"
-    )
+    sample_root = _bundled_sample_root()
 
     result = scan_folder(sample_root, scan_id="scan_sample")
     report = result.report
@@ -622,6 +660,120 @@ async def test_bundled_sample_dataset_scans_as_supported_demo_source():
     archive_doc = extract_business_document(sample_root / "Archive" / "handover-pack.zip")
     assert archive_doc.source_type == "zip"
     assert "checklist.txt" in archive_doc.markdown
+
+
+@pytest.mark.anyio
+async def test_bundled_sample_dataset_imports_end_to_end_as_demo_source(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    (workspace / "memory").mkdir(parents=True)
+    (workspace / "app").mkdir()
+    await init_database(workspace / "app" / "jarvis.db")
+    monkeypatch.setattr(get_settings(), "workspace_path", workspace)
+
+    async def _fake_connect(*_args, **_kwargs):
+        return SimpleNamespace(model_dump=lambda: {})
+
+    monkeypatch.setattr("services.connection_service.connect_note", _fake_connect)
+    monkeypatch.setattr("services.ingest_jobs.schedule_graph_rebuild", lambda **_kwargs: None)
+
+    sample_root = _bundled_sample_root()
+    token = await _grant(client, sample_root)
+    scan = await client.post("/api/source-import/scan", json={"source_token": token})
+    assert scan.status_code == 200
+    scan_body = scan.json()
+    assert scan_body["source_display_name"] == "deepfiles-demo-folder"
+    assert scan_body["unsupported_file_count"] == 0
+    assert scan_body["skipped_file_count"] == 0
+    assert scan_body["supported_file_count"] >= 9
+    assert {
+        ".csv",
+        ".eml",
+        ".html",
+        ".md",
+        ".rtf",
+        ".txt",
+    }.issubset(scan_body["counts_by_extension"])
+
+    selection = await client.post(
+        f"/api/source-import/scans/{scan_body['scan_id']}/selection",
+        json={},
+    )
+    assert selection.status_code == 200
+    selection_body = selection.json()
+    assert selection_body["approved_file_count"] == scan_body["supported_file_count"]
+
+    started = await client.post(
+        f"/api/source-import/scans/{scan_body['scan_id']}/start",
+        json={"selection_id": selection_body["selection_id"]},
+    )
+    assert started.status_code == 200
+    batch_id = started.json()["batch_id"]
+
+    finished = await _wait_for_import(client, batch_id)
+    assert finished["state"] == "completed"
+    assert finished["imported_file_count"] == selection_body["approved_file_count"]
+    assert finished["skipped_file_count"] == 0
+    assert finished["failed_file_count"] == 0
+    assert finished["created_note_count"] >= finished["imported_file_count"]
+
+    by_relpath = {item["relpath"]: item for item in finished["files"]}
+    assert "Archive/handover-pack.zip/checklist.txt" in by_relpath
+    assert "Emails/customer-follow-up.eml" in by_relpath
+    archive_note_path = by_relpath["Archive/handover-pack.zip/checklist.txt"]["note_paths"][0]
+    archive_content = (workspace / "memory" / archive_note_path).read_text(encoding="utf-8")
+    archive_fm, archive_body = parse_frontmatter(archive_content)
+    assert archive_fm["source_relpath"] == "Archive/handover-pack.zip/checklist.txt"
+    assert archive_fm["source_archive_relpath"] == "Archive/handover-pack.zip"
+    assert archive_fm["source_archive_member_path"] == "checklist.txt"
+    assert "Import the sample folder first during training" in archive_body
+
+    note_paths = {
+        path
+        for item in finished["files"]
+        for path in item["note_paths"]
+    }
+    assert len(note_paths) >= finished["imported_file_count"]
+    combined_notes = "\n".join(
+        (workspace / "memory" / path).read_text(encoding="utf-8")
+        for path in sorted(note_paths)
+    )
+    assert str(sample_root) not in combined_notes
+    assert "source_root_path" not in combined_notes
+    assert "Priya Shah" in combined_notes
+    assert "supplier pricing" in combined_notes
+
+    completion = await client.get(f"/api/source-import/imports/{batch_id}/completion")
+    assert completion.status_code == 200
+    completion_body = completion.json()
+    assert completion_body["can_ask_about_import"] is True
+    assert completion_body["imported_file_count"] == finished["imported_file_count"]
+    assert completion_body["duplicate_file_count"] == 0
+    assert completion_body["imported_extension_counts"][".md"] >= 3
+    assert completion_body["imported_extension_counts"][".html"] == 2
+    assert completion_body["imported_folder_counts"]["Archive/handover-pack.zip"] == 2
+    suggested = {row["question"] for row in completion_body["suggested_questions"]}
+    assert "Which files mention pricing, budget, dates, or status?" in suggested
+    assert "What decisions or follow-ups appear in the emails?" in suggested
+
+    from services.system_prompt import build_system_prompt_with_stats
+
+    _prompt, stats = await build_system_prompt_with_stats(
+        "Which files mention supplier pricing?",
+        workspace_path=workspace,
+        import_batch_id=batch_id,
+    )
+    assert "Only notes created by this import batch" in stats["retrieval_block"]
+    assert stats["trace"]
+    assert {
+        item["via"] for item in stats["trace"]
+    } == {"import_batch"}
+    assert {
+        item["path"] for item in stats["trace"]
+    }.issubset(note_paths)
 
 
 @pytest.mark.anyio

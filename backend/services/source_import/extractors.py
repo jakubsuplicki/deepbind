@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from defusedxml import ElementTree as ET
+from defusedxml.common import DefusedXmlException
 from services.source_import.archives import (
     ArchiveError,
     open_safe_zip,
@@ -70,9 +71,16 @@ def extract_business_document(file_path: Path, display_name: Optional[str] = Non
     raise ExtractorError(f"Unsupported business document type: {ext}")
 
 
-def _cap(text: str) -> str:
+def _add_warning(warnings: list[str], message: str) -> None:
+    if message not in warnings:
+        warnings.append(message)
+
+
+def _cap(text: str, warnings: Optional[list[str]] = None, label: str = "Content") -> str:
     if len(text) <= MAX_RENDERED_CHARS:
         return text
+    if warnings is not None:
+        _add_warning(warnings, f"{label} truncated to {MAX_RENDERED_CHARS} characters")
     return text[:MAX_RENDERED_CHARS].rstrip() + "\n\n[content truncated]\n"
 
 
@@ -86,8 +94,28 @@ def _read_zip_xml(zf: zipfile.ZipFile, name: str) -> ET.Element:
             return ET.parse(fh).getroot()
     except KeyError as exc:
         raise ExtractorError(f"Missing required Office XML part: {name}") from exc
-    except ET.ParseError as exc:
+    except RuntimeError as exc:
+        reason = str(exc).lower()
+        if "password" in reason or "encrypted" in reason:
+            raise ExtractorError(
+                f"Office XML part is password-protected or encrypted: {name}"
+            ) from exc
+        raise ExtractorError(f"Could not read Office XML part: {name}") from exc
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise ExtractorError(f"Could not read Office XML part: {name}") from exc
+    except (ET.ParseError, DefusedXmlException) as exc:
         raise ExtractorError(f"Could not parse Office XML part: {name}") from exc
+
+
+def _office_core_title(zf: zipfile.ZipFile, fallback: str) -> str:
+    try:
+        root = _read_zip_xml(zf, "docProps/core.xml")
+    except ExtractorError:
+        return fallback
+    for node in root.iter():
+        if _local_name(node.tag) == "title" and node.text and node.text.strip():
+            return node.text.strip()
+    return fallback
 
 
 def _open_safe_zip(path: Path) -> zipfile.ZipFile:
@@ -165,6 +193,7 @@ def _extract_docx(path: Path, display_name: str) -> ExtractedDocument:
     title = Path(display_name).stem
     warnings: list[str] = []
     with _open_safe_zip(path) as zf:
+        title = _office_core_title(zf, title)
         root = _read_zip_xml(zf, "word/document.xml")
         body = next((child for child in root.iter() if _local_name(child.tag) == "body"), None)
         if body is None:
@@ -188,14 +217,16 @@ def _extract_docx(path: Path, display_name: str) -> ExtractedDocument:
                 table = _docx_table_markdown(child)
                 if table:
                     blocks.extend([table, ""])
-        markdown = _cap("\n".join(blocks).strip() + "\n")
+        markdown = _cap("\n".join(blocks).strip() + "\n", warnings, "DOCX markdown")
     return ExtractedDocument(title=title, markdown=markdown, source_type="docx", warnings=warnings)
 
 
-def _xlsx_shared_strings(zf: zipfile.ZipFile) -> list[str]:
+def _xlsx_shared_strings(zf: zipfile.ZipFile, warnings: list[str]) -> list[str]:
     try:
         root = _read_zip_xml(zf, "xl/sharedStrings.xml")
-    except ExtractorError:
+    except ExtractorError as exc:
+        if not str(exc).startswith("Missing required Office XML part"):
+            _add_warning(warnings, f"Shared strings unavailable: {exc}")
         return []
     strings: list[str] = []
     for si in [child for child in root if _local_name(child.tag) == "si"]:
@@ -248,12 +279,15 @@ def _extract_xlsx(path: Path, display_name: str) -> ExtractedDocument:
     title = Path(display_name).stem
     warnings: list[str] = []
     with _open_safe_zip(path) as zf:
-        shared_strings = _xlsx_shared_strings(zf)
+        title = _office_core_title(zf, title)
+        shared_strings = _xlsx_shared_strings(zf, warnings)
         sheets = _xlsx_sheet_paths(zf)
         blocks: list[str] = [f"# {title}", ""]
         for sheet_name, sheet_path in sheets:
             root = _read_zip_xml(zf, sheet_path)
             rows: list[list[str]] = []
+            populated_rows = 0
+            column_warning_added = False
             for row in root.iter():
                 if _local_name(row.tag) != "row":
                     continue
@@ -263,16 +297,33 @@ def _extract_xlsx(path: Path, display_name: str) -> ExtractedDocument:
                     if _local_name(cell.tag) == "c"
                 ]
                 if any(values):
+                    populated_rows += 1
+                    if (
+                        len(values) > XLSX_MAX_PREVIEW_COLS
+                        and any(value for value in values[XLSX_MAX_PREVIEW_COLS:])
+                        and not column_warning_added
+                    ):
+                        _add_warning(
+                            warnings,
+                            f"{sheet_name}: preview limited to first {XLSX_MAX_PREVIEW_COLS} columns",
+                        )
+                        column_warning_added = True
+                    if populated_rows > XLSX_MAX_PREVIEW_ROWS:
+                        _add_warning(
+                            warnings,
+                            f"{sheet_name}: preview limited to {XLSX_MAX_PREVIEW_ROWS} rows",
+                        )
+                        break
                     rows.append(values[:XLSX_MAX_PREVIEW_COLS])
-                if len(rows) >= XLSX_MAX_PREVIEW_ROWS:
-                    warnings.append(f"{sheet_name}: preview limited to {XLSX_MAX_PREVIEW_ROWS} rows")
-                    break
             blocks.extend([f"## {sheet_name}", ""])
             if rows:
                 blocks.extend([_markdown_table(rows), ""])
             else:
                 blocks.extend(["No populated cells found.", ""])
-    markdown = _cap("\n".join(blocks).strip() + "\n")
+        if not sheets:
+            blocks.extend(["No worksheets found.", ""])
+            _add_warning(warnings, "No worksheets found in workbook")
+    markdown = _cap("\n".join(blocks).strip() + "\n", warnings, "XLSX markdown")
     return ExtractedDocument(title=title, markdown=markdown, source_type="xlsx", warnings=warnings)
 
 
@@ -285,11 +336,15 @@ def _extract_pptx(path: Path, display_name: str) -> ExtractedDocument:
     title = Path(display_name).stem
     warnings: list[str] = []
     with _open_safe_zip(path) as zf:
+        title = _office_core_title(zf, title)
         slide_names = sorted(
             [name for name in zf.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", name)],
             key=_slide_sort_key,
         )
         blocks: list[str] = [f"# {title}", ""]
+        if not slide_names:
+            blocks.extend(["No readable slides found.", ""])
+            _add_warning(warnings, "No slides found in presentation")
         for idx, slide_name in enumerate(slide_names, start=1):
             root = _read_zip_xml(zf, slide_name)
             texts = [t.text.strip() for t in root.iter() if _local_name(t.tag) == "t" and t.text and t.text.strip()]
@@ -299,7 +354,8 @@ def _extract_pptx(path: Path, display_name: str) -> ExtractedDocument:
                 blocks.append("")
             else:
                 blocks.extend(["No readable text found.", ""])
-    markdown = _cap("\n".join(blocks).strip() + "\n")
+                _add_warning(warnings, f"Slide {idx}: no readable text found")
+    markdown = _cap("\n".join(blocks).strip() + "\n", warnings, "PPTX markdown")
     return ExtractedDocument(title=title, markdown=markdown, source_type="pptx", warnings=warnings)
 
 
@@ -308,18 +364,32 @@ def _extract_html(path: Path, display_name: str) -> ExtractedDocument:
     from bs4 import BeautifulSoup
     from markdownify import markdownify as md
 
+    warnings: list[str] = []
     raw = path.read_text(encoding="utf-8", errors="replace")
-    extracted = trafilatura.extract(
-        raw,
-        include_comments=False,
-        include_tables=True,
-        output_format="html",
-    )
-    html_body = extracted or raw
     soup = BeautifulSoup(raw, "html.parser")
     title = (soup.title.string.strip() if soup.title and soup.title.string else Path(display_name).stem)
-    markdown = _cap(f"# {title}\n\n{md(html_body, heading_style='ATX').strip()}\n")
-    return ExtractedDocument(title=title, markdown=markdown, source_type="html")
+    for tag in soup(["script", "style", "noscript", "template"]):
+        tag.decompose()
+    try:
+        extracted = trafilatura.extract(
+            raw,
+            include_comments=False,
+            include_tables=True,
+            output_format="html",
+        )
+    except Exception as exc:
+        extracted = None
+        _add_warning(warnings, f"HTML main content extraction failed: {exc.__class__.__name__}")
+    if extracted:
+        extracted_soup = BeautifulSoup(extracted, "html.parser")
+        for tag in extracted_soup(["script", "style", "noscript", "template"]):
+            tag.decompose()
+        html_body = str(extracted_soup)
+    else:
+        html_body = str(soup.body or soup)
+        _add_warning(warnings, "HTML main content extraction unavailable; converted page body")
+    markdown = _cap(f"# {title}\n\n{md(html_body, heading_style='ATX').strip()}\n", warnings, "HTML markdown")
+    return ExtractedDocument(title=title, markdown=markdown, source_type="html", warnings=warnings)
 
 
 def _decode_text_file(path: Path) -> str:
@@ -351,9 +421,13 @@ def _strip_rtf(text: str) -> str:
 
 def _extract_rtf(path: Path, display_name: str) -> ExtractedDocument:
     title = Path(display_name).stem
+    warnings: list[str] = []
     body = _strip_rtf(_decode_text_file(path))
-    markdown = _cap(f"# {title}\n\n{body}\n")
-    return ExtractedDocument(title=title, markdown=markdown, source_type="rtf")
+    if not body:
+        body = "(No readable RTF text found.)"
+        _add_warning(warnings, "No readable RTF text found")
+    markdown = _cap(f"# {title}\n\n{body}\n", warnings, "RTF markdown")
+    return ExtractedDocument(title=title, markdown=markdown, source_type="rtf", warnings=warnings)
 
 
 def _part_filename(part: Message) -> str:
@@ -370,7 +444,9 @@ def _extract_eml(path: Path, display_name: str) -> ExtractedDocument:
     subject = str(msg.get("subject") or Path(display_name).stem)
     from_ = str(msg.get("from") or "")
     to = str(msg.get("to") or "")
+    cc = str(msg.get("cc") or "")
     date = str(msg.get("date") or "")
+    warnings: list[str] = []
     attachments: list[str] = []
     body_parts: list[str] = []
     html_parts: list[str] = []
@@ -402,12 +478,14 @@ def _extract_eml(path: Path, display_name: str) -> ExtractedDocument:
         body = "\n\n".join(part for part in html_parts if part)
     if not body:
         body = "(No readable message body found.)"
+        _add_warning(warnings, "No readable email body found")
 
     lines = [
         f"# {subject}",
         "",
         f"- From: {from_}" if from_ else "",
         f"- To: {to}" if to else "",
+        f"- Cc: {cc}" if cc else "",
         f"- Date: {date}" if date else "",
         "",
         body,
@@ -415,8 +493,10 @@ def _extract_eml(path: Path, display_name: str) -> ExtractedDocument:
     if attachments:
         lines.extend(["", "## Attachments", ""])
         lines.extend(f"- {name}" for name in attachments)
-    markdown = _cap("\n".join(line for line in lines if line != "").strip() + "\n")
-    return ExtractedDocument(title=subject, markdown=markdown, source_type="eml")
+        suffix = "attachment" if len(attachments) == 1 else "attachments"
+        _add_warning(warnings, f"{len(attachments)} {suffix} listed but not imported")
+    markdown = _cap("\n".join(line for line in lines if line != "").strip() + "\n", warnings, "Email markdown")
+    return ExtractedDocument(title=subject, markdown=markdown, source_type="eml", warnings=warnings)
 
 
 def _extract_zip_inventory(path: Path, display_name: str) -> ExtractedDocument:
@@ -433,6 +513,8 @@ def _extract_zip_inventory(path: Path, display_name: str) -> ExtractedDocument:
     markdown = _cap(
         f"# {title}\n\n"
         "This archive was imported as a safe inventory. Files inside the archive are not extracted in this step.\n\n"
-        f"{body}\n"
+        f"{body}\n",
+        warnings,
+        "ZIP inventory",
     )
     return ExtractedDocument(title=title, markdown=markdown, source_type="zip", warnings=warnings)

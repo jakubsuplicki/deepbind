@@ -161,6 +161,8 @@
         "frontend/app/composables/useIngestStatus.ts",
         "backend/tests/test_embedding_service.py",
         "backend/tests/test_ingest_service.py",
+        "backend/tests/test_source_import_extractors.py",
+        "backend/tests/test_source_import_scan.py",
         "backend/tests/test_memory_api.py",
         "backend/tests/test_memory_reindex.py",
         "backend/tests/test_memory_service.py",
@@ -177,8 +179,11 @@
         "preferences-settings",
         "ingest-benchmark"
       ],
-      "last_updated": "2026-05-17",
+      "last_updated": "2026-05-18",
       "status": "current",
+      "_note_2026_05_18": "Source import business extraction now hardens malformed and encrypted container cases. `archives.validate_zip_infos()` rejects encrypted ZIP/Office members as `archive_encrypted` before extraction, `_read_zip_xml()` converts malformed or unreadable required Office XML into safe `ExtractorError` messages, and malformed optional XLSX shared strings become extractor warnings when worksheets can still be imported. Direct extractor and source-scan tests cover the new paths. The folder import completion UI now surfaces per-file warning details when manifest rows include extractor warnings, scan review shows a top-level needs-attention summary for skipped/unsupported files, scan attention can be copied as a relative-path issue report without the absolute source root, scan/rescan/skipped-file rows share readable labels plus repair hints for common source-import skip/error reasons, and Memory can open the first generated note from the completed import.",
+      "_note_2026_05_17h": "The bundled sample folder now has an end-to-end backend smoke test for the real source-import demo path. The test grants the sample folder, runs metadata scan and approval, imports all supported sample files, verifies generated Markdown avoids absolute source roots, checks ZIP-child archive provenance, checks data/email completion questions, and asserts import-scoped retrieval traces stay inside manifest-created notes.",
+      "_note_2026_05_17g": "Business document extractor quality now has direct regression coverage separate from full ingest/import lifecycle tests. DOCX/XLSX/PPTX preserve Office core-property titles when available, XLSX row/column preview limits emit extractor warnings, HTML fallback conversion strips script/style/template content, EML records Cc and lists attachments without importing them, and empty/limited conversions surface visible warnings that flow through `fast_ingest` into Markdown.",
       "_note_2026_05_17f": "Business document extractor warnings now flow into memory and folder-import completion state. `fast_ingest` records warnings in generated Markdown frontmatter/body and returns them to source import; the manifest stores per-file warnings and completion summaries expose `warning_file_count` so the UI can show imported-with-warnings separately from skipped or failed files.",
       "_note_2026_05_17e": "Folder import limits are now named in `backend/services/source_import/limits.py` and enforced before content extraction where possible. Scan/file/batch/archive caps surface visible reasons such as `scan_file_limit`, `file_too_large`, `batch_size_limit`, `archive_entry_limit`, and `archive_size_limit` instead of silently trimming what becomes Markdown memory.",
       "_note_2026_05_17d": "Folder import batch detail rendering moved into `frontend/app/components/FolderSourceImportDetail.vue`, shared by the active import flow and reopened history rows so progress, completion, skipped-file review, rescan, cancel, remove, and suggested-question controls stay consistent.",
@@ -220,6 +225,7 @@
         "backend/services/source_import/store.py",
         "backend/services/source_import/worker.py",
         "backend/tests/test_ingest_service.py",
+        "backend/tests/test_source_import_extractors.py",
         "backend/tests/test_source_import_scan.py",
         "desktop/src-tauri/Cargo.toml",
         "desktop/src-tauri/tauri.conf.json",
@@ -235,7 +241,8 @@
         "frontend/app/components/ImportDialog.vue",
         "frontend/app/components/FolderSourceImportDetail.vue",
         "frontend/tests/composables/useChat.test.ts",
-        "frontend/tests/components/ImportDialog.test.ts"
+        "frontend/tests/components/ImportDialog.test.ts",
+        "frontend/tests/pages/memory.test.ts"
       ],
       "depends_on": [
         "memory",
@@ -244,8 +251,11 @@
         "retrieval-trace",
         "desktop-shell-graduation"
       ],
-      "last_updated": "2026-05-17",
+      "last_updated": "2026-05-18",
       "status": "in-progress",
+      "_note_2026_05_18": "Archive and Office extractor hardening landed for the folder/source import path. ZIP central-directory validation now rejects encrypted members with `archive_encrypted` during scan or single-file ZIP inventory, required Office XML parse/read failures surface as safe importer errors, and optional malformed XLSX shared strings are warning-only if sheet data remains readable. Tests cover direct extractor errors/warnings and metadata scan skip reporting. `FolderSourceImportDetail.vue` now lists affected file paths and warning text for imported-with-warnings rows and emits a View imported notes action from manifest-generated note paths, while `useFolderSourceImportDialog.ts` maps encrypted/archive/password/source states to buyer-readable labels and shared fix-local hints that render in scan, rescan, and skipped-file review rows. `ImportDialog.vue` also shows a top-level scan needs-attention summary with supported-ready counts and the highest-priority repair hints before approval, can copy those scan issues as a relative-path report without the absolute source root, and `memory.vue` can close the modal, activate the imported folder, and select the first created note.",
+      "_note_2026_05_17i": "Bundled sample dataset confidence now goes beyond scanability. `test_bundled_sample_dataset_imports_end_to_end_as_demo_source` runs the normal grant, metadata scan, selection, approved import, completion summary, ZIP-child provenance, and import-scoped retrieval path against `desktop/src-tauri/sample-data/deepfiles-demo-folder`. Completion question ordering now prioritizes skipped/failed remediation, structured-data, and email prompts before lower-specificity document prompts under the capped suggested-question list.",
+      "_note_2026_05_17h": "Direct business-format extractor tests now pin representative DOCX, XLSX, PPTX, HTML, RTF, EML, and ZIP behavior. Extractors preserve Office core titles, surface row/column/truncation preview warnings, warn on blank decks and unreadable RTF/email bodies, sanitize HTML fallback conversion, include email Cc, list attachments as metadata only, and expose archive inventory preview limits as warnings.",
       "_note_2026_05_17g": "Imported-with-warnings is now a first-class folder import completion state. Business extractor warnings returned from `fast_ingest` are stored in `source_import_files.warnings`, returned on batch files, counted as `warning_file_count` in completion summaries, and shown by `FolderSourceImportDetail.vue` while the generated Markdown keeps `extractor_warnings` plus an `Import warnings` section.",
       "_note_2026_05_17f": "Source-import limits now live in `backend/services/source_import/limits.py` and are wired through scan, selection, archive guards, and import start. The scanner reports `scan_file_limit` and `file_too_large`, selection enforces `batch_size_limit` before approval handoff, archive validation keeps entry/decompressed-size guard reasons, and the worker rejects stale over-limit selections before reading content.",
       "_note_2026_05_17e": "The folder import progress/completion/review/rescan controls are now rendered by `frontend/app/components/FolderSourceImportDetail.vue` and used from both the active scan/import path and recent-history reopening path. This keeps the two entry points behaviorally aligned while `ImportDialog.vue` owns the broader modal shell.",

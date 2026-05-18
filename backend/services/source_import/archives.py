@@ -17,6 +17,7 @@ from services.source_import.limits import (
 ZIP_EXTENSION = ".zip"
 MAX_ZIP_ENTRIES = MAX_ARCHIVE_ENTRIES
 MAX_ZIP_UNCOMPRESSED_BYTES = MAX_ARCHIVE_UNCOMPRESSED_BYTES
+ZIP_ENCRYPTED_FLAG = 0x1
 
 
 class ArchiveError(Exception):
@@ -74,13 +75,18 @@ def validate_zip_infos(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     total = 0
     seen: set[str] = set()
     for info in infos:
+        member_path = _validate_member_path(info.filename)
+        if info.flag_bits & ZIP_ENCRYPTED_FLAG:
+            raise ArchiveError(
+                "archive_encrypted",
+                "Archive contains password-protected or encrypted files",
+            )
         if info.is_dir():
-            _validate_member_path(info.filename)
             continue
-        member_path = _validate_member_path(info.filename).as_posix()
-        if member_path in seen:
+        member_name = member_path.as_posix()
+        if member_name in seen:
             raise ArchiveError("archive_duplicate_member", "Archive contains duplicate file paths")
-        seen.add(member_path)
+        seen.add(member_name)
         total += max(info.file_size, 0)
         if total > MAX_ZIP_UNCOMPRESSED_BYTES:
             raise ArchiveError("archive_size_limit", "Archive is too large after decompression")

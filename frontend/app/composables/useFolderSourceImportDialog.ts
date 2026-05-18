@@ -8,6 +8,7 @@ import type {
   SourceImportFileReviewReport,
   SourceImportRescanReport,
   SourceImportSuggestedQuestion,
+  SourceScanFileItem,
   SourceScanReport,
   SourceSelectionSummary,
 } from '~/composables/useSourceImport'
@@ -16,6 +17,41 @@ interface UseFolderSourceImportDialogOptions {
   error: Ref<string>
   success: Ref<string>
   onImported: (result: Record<string, unknown>) => void
+}
+
+interface FolderScanIssueSummaryRow {
+  reason: string
+  count: number
+  hint: string
+}
+
+interface FolderScanIssueSummary {
+  title: string
+  body: string
+  rows: FolderScanIssueSummaryRow[]
+  extraReasonCount: number
+}
+
+interface FolderScanIssueReasonRow {
+  reason: string
+  count: number
+}
+
+function fileCountLabel(count: number): string {
+  return `${count} file${count === 1 ? '' : 's'}`
+}
+
+function formatIssueBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  const precision = value >= 10 || unit === 0 ? 0 : 1
+  return `${value.toFixed(precision)} ${units[unit]}`
 }
 
 export function folderIssueCanRetry(file: { status: string; reason?: string | null }): boolean {
@@ -35,6 +71,7 @@ export function folderIssueCanRetry(file: { status: string; reason?: string | nu
 export function folderIssueCanFixLocally(file: { reason?: string | null }): boolean {
   const reason = (file.reason ?? '').toLowerCase()
   return [
+    'archive_',
     'encrypted',
     'file_too_large',
     'limit',
@@ -51,8 +88,18 @@ export function folderIssueCanFixLocally(file: { reason?: string | null }): bool
   ].some(marker => reason.includes(marker))
 }
 
-export function folderIssueActionHint(file: SourceImportFileReviewItem): string {
+export function folderSourceImportActionHint(file: {
+  status?: string
+  reason?: string | null
+  duplicate_of?: string | null
+}): string {
   const reason = (file.reason ?? '').toLowerCase()
+  if (
+    reason.includes('duplicate_content_existing_import') ||
+    reason.includes('previous_duplicate_content')
+  ) {
+    return 'Already imported from a previous source import.'
+  }
   if (reason.includes('duplicate_content')) {
     return file.duplicate_of
       ? `Already imported from ${file.duplicate_of}.`
@@ -63,6 +110,18 @@ export function folderIssueActionHint(file: SourceImportFileReviewItem): string 
   }
   if (reason.includes('app_closed_during_import')) {
     return 'Scan again to retry the unfinished file.'
+  }
+  if (reason.includes('missing_from_source') || file.status === 'missing') {
+    return 'Reported only. Existing imported notes are not removed.'
+  }
+  if (reason.includes('metadata_changed') || file.status === 'changed') {
+    return 'Ready to import as an updated note.'
+  }
+  if (file.status === 'new') {
+    return 'Ready to import after you approve the changes.'
+  }
+  if (reason.includes('previous_import_not_completed')) {
+    return 'Scan again to retry this file.'
   }
   if (reason.includes('password') || reason.includes('encrypted')) {
     return 'Export an unlocked copy, then import it.'
@@ -88,12 +147,21 @@ export function folderIssueActionHint(file: SourceImportFileReviewItem): string 
   if (reason.includes('archive_')) {
     return 'Extract or repair the archive locally, then scan again.'
   }
-  if (reason.includes('too large') || reason.includes('limit')) {
+  if (reason.includes('too large') || reason.includes('too_large') || reason.includes('limit')) {
     return 'Split or reduce the file before importing.'
   }
   if (file.status === 'failed') {
     return 'Check that the file opens locally, then scan again.'
   }
+  if (file.status === 'unsupported' || file.status === 'skipped') {
+    return 'This file will be left out of memory.'
+  }
+  return ''
+}
+
+export function folderIssueActionHint(file: SourceImportFileReviewItem): string {
+  const hint = folderSourceImportActionHint(file)
+  if (hint) return hint
   return 'This file was left out of memory for this import.'
 }
 
@@ -101,6 +169,7 @@ export function humanizeSourceImportReason(reason: string): string {
   const labels: Record<string, string> = {
     archive_duplicate_member: 'Duplicate archive path',
     archive_empty: 'Empty archive',
+    archive_encrypted: 'Encrypted archive',
     archive_entry_limit: 'Archive limit',
     archive_member_not_found: 'Archive file missing',
     archive_size_limit: 'Archive too large',
@@ -110,15 +179,109 @@ export function humanizeSourceImportReason(reason: string): string {
     duplicate_content: 'Duplicate',
     duplicate_content_existing_import: 'Already imported',
     file_too_large: 'File too large',
+    metadata_changed: 'Changed',
+    missing_from_source: 'Missing from source',
     nested_archive: 'Nested archive',
+    password_protected: 'Password protected',
     online_only_placeholder: 'Online-only file',
     previous_duplicate_content: 'Already imported',
+    previous_import_not_completed: 'Previous import incomplete',
     scan_file_limit: 'Scan limit',
+    symlink_outside_root: 'Outside selected folder',
+    unreadable_file: 'Unreadable file',
+    unsupported_file_type: 'Unsupported file type',
   }
   if (labels[reason]) return labels[reason]
   return reason
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (ch) => ch.toUpperCase())
+}
+
+function scanIssueReasonRows(scan: SourceScanReport): FolderScanIssueReasonRow[] {
+  const reasonRows = Object.entries(scan.skipped_by_reason)
+    .map(([reason, count]) => ({ reason, count }))
+
+  if (
+    scan.unsupported_file_count > 0 &&
+    !reasonRows.some(row => row.reason === 'unsupported_file_type')
+  ) {
+    reasonRows.push({
+      reason: 'unsupported_file_type',
+      count: scan.unsupported_file_count,
+    })
+  }
+
+  return reasonRows.sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
+}
+
+function sourceKindLabel(scan: SourceScanReport): string {
+  return scan.source_kind === 'local_archive' ? 'ZIP archive' : 'folder'
+}
+
+function issueFileReason(file: SourceScanFileItem): string {
+  if (file.reason) return file.reason
+  if (file.status === 'unsupported') return 'unsupported_file_type'
+  return file.status
+}
+
+export function buildSourceImportScanIssueReport(scan: SourceScanReport): string {
+  const attentionCount = scan.unsupported_file_count + scan.skipped_file_count
+  const lines = [
+    'DeepFilesAI source scan issue report',
+    `Source: ${scan.source_display_name}`,
+    `Source type: ${sourceKindLabel(scan)}`,
+    `Scan ID: ${scan.scan_id}`,
+    `Scanned at: ${scan.created_at}`,
+    'Scan mode: metadata-only; file contents were not read.',
+    `Ready for approval: ${scan.supported_file_count}`,
+    `Need attention: ${attentionCount}`,
+    `Unsupported: ${scan.unsupported_file_count}`,
+    `Skipped: ${scan.skipped_file_count}`,
+    `Total files seen: ${scan.total_files_seen}`,
+    `Total size seen: ${formatIssueBytes(scan.total_size_seen)}`,
+    `Destination: ${scan.proposed_destination_root}`,
+    '',
+    'Issue summary:',
+  ]
+
+  const reasonRows = scanIssueReasonRows(scan)
+  if (reasonRows.length) {
+    for (const row of reasonRows) {
+      const hint = folderSourceImportActionHint({
+        status: row.reason === 'unsupported_file_type' ? 'unsupported' : 'skipped',
+        reason: row.reason,
+      })
+      lines.push(
+        `- ${humanizeSourceImportReason(row.reason)}: ${row.count}${hint ? ` - ${hint}` : ''}`,
+      )
+    }
+  } else {
+    lines.push('- No skipped or unsupported files were reported.')
+  }
+
+  const affectedFiles = scan.files
+    .filter(file => file.status === 'skipped' || file.status === 'unsupported')
+    .slice(0, 20)
+
+  if (affectedFiles.length) {
+    lines.push('', 'Affected files shown:')
+    for (const file of affectedFiles) {
+      const reason = issueFileReason(file)
+      const hint = folderSourceImportActionHint({
+        status: file.status,
+        reason,
+      })
+      lines.push(
+        `- ${file.relpath} (${humanizeSourceImportReason(reason)}, ${formatIssueBytes(file.size)})${hint ? ` - ${hint}` : ''}`,
+      )
+    }
+  }
+
+  if (scan.file_list_truncated) {
+    lines.push('', `Only the first ${scan.files.length} scan rows were shown by the app.`)
+  }
+
+  return lines.join('\n')
 }
 
 export function useFolderSourceImportDialog(options: UseFolderSourceImportDialogOptions) {
@@ -163,10 +326,43 @@ export function useFolderSourceImportDialog(options: UseFolderSourceImportDialog
 
   const skipRows = computed(() => {
     if (!folderScan.value) return []
-    return Object.entries(folderScan.value.skipped_by_reason)
-      .map(([reason, count]) => ({ reason, count }))
-      .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
+    return scanIssueReasonRows(folderScan.value)
+      .filter(row => row.reason !== 'unsupported_file_type')
   })
+
+  const scanIssueSummary = computed<FolderScanIssueSummary | null>(() => {
+    const scan = folderScan.value
+    if (!scan) return null
+
+    const attentionCount = scan.unsupported_file_count + scan.skipped_file_count
+    if (attentionCount <= 0) return null
+
+    const reasonRows = scanIssueReasonRows(scan)
+
+    const rows = reasonRows.slice(0, 3).map(row => ({
+      ...row,
+      hint: folderSourceImportActionHint({
+        status: row.reason === 'unsupported_file_type' ? 'unsupported' : 'skipped',
+        reason: row.reason,
+      }),
+    }))
+
+    const readyCount = scan.supported_file_count
+    return {
+      title: `${fileCountLabel(attentionCount)} ${attentionCount === 1 ? 'needs' : 'need'} attention`,
+      body: readyCount > 0
+        ? `${fileCountLabel(readyCount)} ready for approval. Fix the items below and scan again if you want them included.`
+        : 'No supported files are ready yet. Fix the items below, then scan again.',
+      rows,
+      extraReasonCount: Math.max(reasonRows.length - rows.length, 0),
+    }
+  })
+
+  const scanIssueReport = computed(() =>
+    folderScan.value && scanIssueSummary.value
+      ? buildSourceImportScanIssueReport(folderScan.value)
+      : ''
+  )
 
   const approvalRuleRows = computed(() => {
     if (!folderSelection.value) return []
@@ -524,6 +720,23 @@ export function useFolderSourceImportDialog(options: UseFolderSourceImportDialog
     await scanFolderSource()
   }
 
+  async function copyScanIssueReport() {
+    const report = scanIssueReport.value
+    if (!report) return
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+      options.error.value = 'Clipboard is not available in this window.'
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(report)
+      options.error.value = ''
+      options.success.value = 'Issue report copied.'
+    } catch (err: unknown) {
+      options.error.value =
+        err instanceof Error ? err.message : 'Failed to copy issue report'
+    }
+  }
+
   async function cancelFolderImport() {
     if (!folderImport.value || !folderImportCanCancel.value || folderImportCancelling.value) return
     const batch = folderImport.value
@@ -776,6 +989,7 @@ export function useFolderSourceImportDialog(options: UseFolderSourceImportDialog
     chooseFolderSource,
     chooseSampleDataset,
     confirmRemoveFolderImport,
+    copyScanIssueReport,
     extensionRows,
     folderArchivePicking,
     folderGrant,
@@ -821,6 +1035,7 @@ export function useFolderSourceImportDialog(options: UseFolderSourceImportDialog
     folderSourceIsArchive,
     handleFolderPrimaryAction,
     humanizeReason: humanizeSourceImportReason,
+    folderSourceImportActionHint,
     importDuplicateContent,
     includeHiddenInFolderScan,
     isExcludedExtension,
@@ -833,6 +1048,8 @@ export function useFolderSourceImportDialog(options: UseFolderSourceImportDialog
     resetFolderReview,
     rescanFolderImport,
     scanFolderSource,
+    scanIssueReport,
+    scanIssueSummary,
     skipRows,
     startFolderImport,
     startFolderRescanImport,

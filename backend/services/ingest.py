@@ -974,7 +974,8 @@ async def fast_ingest(
         except ExtractorError as exc:
             raise IngestError(str(exc)) from exc
         extractor_warnings = list(extracted.warnings)
-        md_name = f"{_slugify(extracted.title) or _slugify(title) or 'document'}.md"
+        title = extracted.title
+        md_name = f"{_slugify(title) or 'document'}.md"
         target = _unique_path(folder / md_name)
         fm = {
             "title": extracted.title,

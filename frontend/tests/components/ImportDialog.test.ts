@@ -356,6 +356,12 @@ describe('components/ImportDialog.vue', () => {
   })
 
   it('folder scan review surfaces readable import limit reasons', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+
     sourceImportMocks.pickFolderSource.mockResolvedValue({
       source_token: 'source-token',
       source_kind: 'local_folder',
@@ -435,8 +441,26 @@ describe('components/ImportDialog.vue', () => {
 
     expect(wrapper.text()).toContain('File too large 1')
     expect(wrapper.text()).toContain('Scan limit 1')
+    expect(wrapper.text()).toContain('2 files need attention')
+    expect(wrapper.text()).toContain('2 files ready for approval. Fix the items below and scan again if you want them included.')
     expect(wrapper.text()).toContain('Import size limit 1')
+    expect(wrapper.text()).toContain('Split or reduce the file before importing.')
     expect(wrapper.text()).toContain('Showing the first 2 files from a larger scan.')
+
+    const copyReportButton = wrapper.find('.import-dialog__scan-report-btn')
+    expect(copyReportButton.exists()).toBe(true)
+    await copyReportButton.trigger('click')
+    await flushPromises()
+
+    expect(writeText).toHaveBeenCalledTimes(1)
+    const report = writeText.mock.calls[0]?.[0] as string
+    expect(report).toContain('DeepFilesAI source scan issue report')
+    expect(report).toContain('Source: Shared Drive')
+    expect(report).toContain('Scan mode: metadata-only; file contents were not read.')
+    expect(report).toContain('File too large: 1 - Split or reduce the file before importing.')
+    expect(report).toContain('Huge.pdf (File too large, 2.0 GB)')
+    expect(report).not.toContain('/Users/me/Shared Drive')
+    expect(wrapper.text()).toContain('Issue report copied.')
   })
 
   it('folder mode starts approved import after review', async () => {
@@ -509,7 +533,23 @@ describe('components/ImportDialog.vue', () => {
       total_bytes: 20,
       processed_bytes: 20,
       current_file: null,
-      files: [],
+      files: [
+        {
+          file_id: 'brief-md',
+          relpath: 'brief.md',
+          filename: 'brief.md',
+          extension: '.md',
+          size: 20,
+          modified_at: null,
+          status: 'done',
+          stage: 'done',
+          reason: null,
+          duplicate_of: null,
+          content_hash: 'hash-brief',
+          warnings: ['Pipeline: preview limited to 80 rows'],
+          note_paths: ['memory/imports/client-a-import1/brief.md'],
+        },
+      ],
       started_at: '2026-05-16T00:00:02Z',
       updated_at: '2026-05-16T00:00:03Z',
       finished_at: '2026-05-16T00:00:03Z',
@@ -555,7 +595,88 @@ describe('components/ImportDialog.vue', () => {
     expect(sourceImportMocks.getImportCompletion).toHaveBeenCalledWith('import_1')
     expect(wrapper.text()).toContain('Ready to ask')
     expect(wrapper.text()).toContain('Imported with warnings 1')
+    expect(wrapper.text()).toContain('Check imported notes')
+    expect(wrapper.text()).toContain('Pipeline: preview limited to 80 rows')
     expect(wrapper.text()).toContain('Which files should I review first?')
+
+    const viewNotesButton = wrapper.find('.import-dialog__view-notes-btn')
+    expect(viewNotesButton.exists()).toBe(true)
+    await viewNotesButton.trigger('click')
+    expect(wrapper.emitted('view-notes')?.[0]).toEqual([
+      ['memory/imports/client-a-import1/brief.md'],
+    ])
+  })
+
+  it('folder scan review gives encrypted archives a readable label', async () => {
+    sourceImportMocks.pickArchiveSource.mockResolvedValue({
+      source_token: 'archive-source-token',
+      source_kind: 'local_archive',
+      display_name: 'locked.zip',
+      root_path: '/Users/me/locked.zip',
+      expires_at: '2026-05-16T00:00:00Z',
+    })
+    sourceImportMocks.scanSource.mockResolvedValue({
+      scan_id: 'scan_locked_archive',
+      source_kind: 'local_archive',
+      source_display_name: 'locked.zip',
+      source_root_path: '/Users/me/locked.zip',
+      proposed_destination_root: 'memory/imports/locked/',
+      total_files_seen: 1,
+      total_size_seen: 128,
+      supported_file_count: 0,
+      unsupported_file_count: 0,
+      skipped_file_count: 1,
+      skipped_by_reason: { archive_encrypted: 1 },
+      counts_by_extension: {},
+      largest_files: [],
+      folder_summary: [],
+      files: [
+        {
+          id: 'locked-zip',
+          relpath: 'locked.zip',
+          filename: 'locked.zip',
+          extension: '.zip',
+          size: 128,
+          modified_at: null,
+          status: 'skipped',
+          reason: 'archive_encrypted',
+        },
+      ],
+      file_list_truncated: false,
+      limit_hit: false,
+      created_at: '2026-05-16T00:00:01Z',
+    })
+    sourceImportMocks.createSelection.mockResolvedValue({
+      selection_id: 'sel_locked',
+      scan_id: 'scan_locked_archive',
+      source_display_name: 'locked.zip',
+      proposed_destination_root: 'memory/imports/locked/',
+      approved_file_count: 0,
+      approved_total_size: 0,
+      excluded_file_count: 0,
+      excluded_total_size: 0,
+      unsupported_file_count: 0,
+      skipped_file_count: 1,
+      excluded_by_rule: {},
+      approved_files: [],
+      approved_file_list_truncated: false,
+      created_at: '2026-05-16T00:00:02Z',
+    })
+
+    const wrapper = await mountSuspended(ImportDialog, {
+      props: { visible: true },
+    })
+    await wrapper.findAll('.import-dialog__mode-btn')[1]!.trigger('click')
+    await wrapper.find('.import-dialog__archive-btn').trigger('click')
+    await flushPromises()
+    await wrapper.find('.import-dialog__import-btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Encrypted archive 1')
+    expect(wrapper.text()).toContain('1 file needs attention')
+    expect(wrapper.text()).toContain('No supported files are ready yet. Fix the items below, then scan again.')
+    expect(wrapper.text()).toContain('Export an unlocked copy, then import it.')
+    expect(wrapper.text()).not.toContain('Archive Encrypted')
   })
 
   it('folder mode lists prior imports and reopens their completion controls', async () => {
@@ -1172,6 +1293,8 @@ describe('components/ImportDialog.vue', () => {
     expect(sourceImportMocks.rescanImport).toHaveBeenCalledWith('import_1')
     expect(wrapper.text()).toContain('Since last import')
     expect(wrapper.text()).toContain('Scan again ready: 1 new and 1 changed files')
+    expect(wrapper.text()).toContain('Ready to import after you approve the changes.')
+    expect(wrapper.text()).toContain('Ready to import as an updated note.')
 
     await wrapper.find('.import-dialog__change-btn').trigger('click')
     await flushPromises()

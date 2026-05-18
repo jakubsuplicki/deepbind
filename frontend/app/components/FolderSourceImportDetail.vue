@@ -102,6 +102,47 @@
           Imported with warnings {{ completion.warning_file_count }}
         </span>
       </div>
+      <div
+        v-if="importedNotePaths.length"
+        class="import-dialog__completion-actions"
+      >
+        <button
+          type="button"
+          class="import-dialog__view-notes-btn"
+          @click="$emit('view-notes', importedNotePaths)"
+        >
+          <Icon name="ph:books-bold" class="icon--sm" />
+          View imported notes
+        </button>
+      </div>
+      <div
+        v-if="warningRows.length"
+        class="import-dialog__warning-review"
+      >
+        <div class="import-dialog__warning-title">
+          Check imported notes
+        </div>
+        <ul class="import-dialog__warning-list">
+          <li
+            v-for="file in warningRows"
+            :key="file.file_id"
+            class="import-dialog__warning-file"
+          >
+            <span class="import-dialog__file-name" :title="file.relpath">
+              {{ file.relpath }}
+            </span>
+            <span class="import-dialog__warning-text">
+              {{ file.summary }}
+            </span>
+          </li>
+        </ul>
+        <p
+          v-if="warningFileCount > warningRows.length"
+          class="import-dialog__sublabel"
+        >
+          Showing {{ warningRows.length }} of {{ warningFileCount }} warning files.
+        </p>
+      </div>
       <div v-if="typeRows.length" class="import-dialog__chips">
         <span
           v-for="row in typeRows"
@@ -221,14 +262,22 @@
         class="import-dialog__scan-file"
         :class="`import-dialog__rescan-file--${file.status}`"
       >
-        <span class="import-dialog__file-name" :title="file.relpath">
-          {{ file.relpath }}
-        </span>
-        <span class="import-dialog__file-meta">
-          {{ formatBytes(file.status === 'missing' ? (file.previous_size ?? 0) : file.size) }}
-          <span v-if="file.reason">{{ humanizeSourceImportReason(file.reason) }}</span>
-          <span v-else>{{ humanizeSourceImportReason(file.status) }}</span>
-        </span>
+        <div class="import-dialog__scan-file-row">
+          <span class="import-dialog__file-name" :title="file.relpath">
+            {{ file.relpath }}
+          </span>
+          <span class="import-dialog__file-meta">
+            {{ formatBytes(file.status === 'missing' ? (file.previous_size ?? 0) : file.size) }}
+            <span v-if="file.reason">{{ humanizeSourceImportReason(file.reason) }}</span>
+            <span v-else>{{ humanizeSourceImportReason(file.status) }}</span>
+          </span>
+        </div>
+        <div
+          v-if="folderSourceImportActionHint(file)"
+          class="import-dialog__scan-file-hint"
+        >
+          {{ folderSourceImportActionHint(file) }}
+        </div>
       </li>
     </ul>
     <p v-if="rescan.file_list_truncated" class="import-dialog__sublabel">
@@ -249,8 +298,10 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import {
   folderIssueActionHint,
+  folderSourceImportActionHint,
   humanizeSourceImportReason,
 } from '~/composables/useFolderSourceImportDialog'
 import type {
@@ -261,7 +312,7 @@ import type {
   SourceImportSuggestedQuestion,
 } from '~/composables/useSourceImport'
 
-defineProps<{
+const props = defineProps<{
   batch: SourceImportBatchSummary
   statusLabel: string
   progressPercent: string
@@ -291,7 +342,29 @@ defineEmits<{
   remove: []
   'ask-question': [question: string]
   'start-rescan-import': []
+  'view-notes': [notePaths: string[]]
 }>()
+
+const importedNotePaths = computed(() => {
+  const paths = props.batch.files.flatMap(file => file.note_paths ?? [])
+  return Array.from(new Set(paths)).filter(path => path.length > 0)
+})
+
+const warningFiles = computed(() =>
+  props.batch.files.filter(file => (file.warnings ?? []).length > 0)
+)
+
+const warningFileCount = computed(() =>
+  props.completion?.warning_file_count ?? props.batch.warning_file_count ?? warningFiles.value.length
+)
+
+const warningRows = computed(() =>
+  warningFiles.value.slice(0, 4).map(file => ({
+    file_id: file.file_id,
+    relpath: file.relpath,
+    summary: (file.warnings ?? []).slice(0, 2).join('; '),
+  }))
+)
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
@@ -430,6 +503,24 @@ function formatBytes(bytes: number): string {
   margin-top: 0.12rem;
   font-size: 0.88rem;
 }
+.import-dialog__completion-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.55rem;
+}
+.import-dialog__view-notes-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.38rem 0.65rem;
+  border: 1px solid rgba(34, 197, 94, 0.42);
+  border-radius: 4px;
+  background: rgba(34, 197, 94, 0.08);
+  color: #86efac;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+}
 .import-dialog__questions {
   display: flex;
   flex-direction: column;
@@ -449,6 +540,37 @@ function formatBytes(bytes: number): string {
   font-size: 0.76rem;
   line-height: 1.25;
   text-align: left;
+}
+.import-dialog__warning-review {
+  margin-top: 0.6rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.035);
+}
+.import-dialog__warning-title {
+  font-size: 0.76rem;
+  color: #fbbf24;
+}
+.import-dialog__warning-list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+}
+.import-dialog__warning-file {
+  display: grid;
+  grid-template-columns: minmax(0, 0.42fr) minmax(0, 0.58fr);
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.74rem;
+}
+.import-dialog__warning-text {
+  min-width: 0;
+  opacity: 0.78;
+  overflow-wrap: anywhere;
 }
 .import-dialog__issues {
   padding: 0.7rem;
@@ -598,15 +720,23 @@ function formatBytes(bytes: number): string {
   overflow-y: auto;
 }
 .import-dialog__scan-file {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
   padding: 0.4rem 0.55rem;
   border: 1px solid var(--color-border, #333);
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.02);
   font-size: 0.8rem;
+}
+.import-dialog__scan-file-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.import-dialog__scan-file-hint {
+  margin-top: 0.22rem;
+  font-size: 0.73rem;
+  line-height: 1.28;
+  opacity: 0.72;
 }
 .import-dialog__rescan-file--new {
   border-left: 3px solid #22c55e;

@@ -31,6 +31,25 @@ const MOCK_DETAIL = {
   updated_at: '2026-01-01T00:00:00',
 }
 
+const IMPORTED_NOTES = [
+  {
+    path: 'imports-client-a/brief.md',
+    title: 'Client Brief',
+    folder: 'imports-client-a',
+    tags: ['imported'],
+    updated_at: '2026-05-18T00:00:00',
+    word_count: 88,
+  },
+]
+
+const IMPORTED_DETAIL = {
+  path: 'imports-client-a/brief.md',
+  title: 'Client Brief',
+  content: '---\ntitle: Client Brief\ntags: [imported]\n---\n\nImported content.',
+  frontmatter: { title: 'Client Brief', tags: ['imported'] },
+  updated_at: '2026-05-18T00:00:00',
+}
+
 function registerNotesEndpoints(notes = MOCK_NOTES) {
   registerEndpoint('/api/memory/notes', () => notes)
   // Path is URL-encoded when fetched via encodeURIComponent(path)
@@ -125,5 +144,36 @@ describe('pages/memory.vue', () => {
     const wrapper = await mountSuspended(MemoryPage)
     await flushPromises()
     expect(wrapper.find('.note-viewer__empty').text()).toBe('Select a note to view')
+  })
+
+  it('opens imported notes from folder import completion', async () => {
+    registerNotesEndpoints(IMPORTED_NOTES)
+    registerEndpoint('/api/memory/notes/imports-client-a%2Fbrief.md', () => IMPORTED_DETAIL)
+    const wrapper = await mountSuspended(MemoryPage, {
+      global: {
+        stubs: {
+          ImportDialog: {
+            template: `
+              <button
+                class="test-view-imported-notes"
+                type="button"
+                @click="$emit('view-notes', ['memory/imports-client-a/brief.md'])"
+              >
+                View imported notes
+              </button>
+            `,
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('.test-view-imported-notes').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('.note-viewer__title').text()).toBe('Client Brief')
+    expect(wrapper.find('.note-list__item--active').text()).toContain('Client Brief')
+    expect(wrapper.find('.note-list__folder-btn--active').text()).toBe('imports-client-a')
   })
 })

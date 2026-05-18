@@ -185,6 +185,7 @@ def _can_fix_locally(*, reason: Optional[str]) -> bool:
     return any(
         marker in reason_text
         for marker in (
+            "archive_",
             "encrypted",
             "file_too_large",
             "limit",
@@ -280,25 +281,18 @@ def _build_suggested_questions(
         "What risks, open questions, or decisions appear across these files?",
     )
 
+    if skipped_file_count or failed_file_count:
+        _add_question(
+            questions,
+            seen,
+            "What important files were skipped or failed, and what should I fix?",
+            reason="issues",
+        )
     if extensions & {".csv", ".xlsx", ".xml", ".json"}:
         _add_question(
             questions,
             seen,
             "Which files mention pricing, budget, dates, or status?",
-            reason="file_types",
-        )
-    if extensions & {".docx", ".pdf", ".txt", ".rtf", ".md"}:
-        _add_question(
-            questions,
-            seen,
-            "Summarize the requirements and commitments in these documents.",
-            reason="file_types",
-        )
-    if ".pptx" in extensions:
-        _add_question(
-            questions,
-            seen,
-            "What are the main points across the decks?",
             reason="file_types",
         )
     if ".eml" in extensions:
@@ -308,12 +302,19 @@ def _build_suggested_questions(
             "What decisions or follow-ups appear in the emails?",
             reason="file_types",
         )
-    if skipped_file_count or failed_file_count:
+    if ".pptx" in extensions:
         _add_question(
             questions,
             seen,
-            "What important files were skipped or failed, and what should I fix?",
-            reason="issues",
+            "What are the main points across the decks?",
+            reason="file_types",
+        )
+    if extensions & {".docx", ".pdf", ".txt", ".rtf", ".md"}:
+        _add_question(
+            questions,
+            seen,
+            "Summarize the requirements and commitments in these documents.",
+            reason="file_types",
         )
 
     top_folder = next(

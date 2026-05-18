@@ -167,6 +167,7 @@
           @remove="requestRemoveFolderImport"
           @ask-question="askFolderImportQuestion"
           @start-rescan-import="startFolderRescanImport"
+          @view-notes="viewFolderImportNotes"
         />
 
         <div v-if="folderGrant" class="import-dialog__source-card">
@@ -278,11 +279,50 @@
             @remove="requestRemoveFolderImport"
             @ask-question="askFolderImportQuestion"
             @start-rescan-import="startFolderRescanImport"
+            @view-notes="viewFolderImportNotes"
           />
 
           <div class="import-dialog__scan-section">
             <div class="import-dialog__scan-heading">Destination</div>
             <div class="import-dialog__source-path">{{ folderScan.proposed_destination_root }}</div>
+          </div>
+
+          <div
+            v-if="scanIssueSummary && !folderImport"
+            class="import-dialog__scan-alert"
+            role="status"
+          >
+            <div class="import-dialog__scan-alert-header">
+              <div class="import-dialog__scan-alert-copy">
+                <strong>{{ scanIssueSummary.title }}</strong>
+                <p>{{ scanIssueSummary.body }}</p>
+              </div>
+              <button
+                v-if="scanIssueReport"
+                type="button"
+                class="import-dialog__scan-report-btn"
+                @click="copyScanIssueReport"
+              >
+                <Icon name="ph:copy-bold" class="icon--sm" />
+                Copy report
+              </button>
+            </div>
+            <ul class="import-dialog__scan-alert-list">
+              <li
+                v-for="row in scanIssueSummary.rows"
+                :key="row.reason"
+                class="import-dialog__scan-alert-row"
+              >
+                <span>{{ humanizeReason(row.reason) }} {{ row.count }}</span>
+                <small v-if="row.hint">{{ row.hint }}</small>
+              </li>
+            </ul>
+            <p
+              v-if="scanIssueSummary.extraReasonCount"
+              class="import-dialog__scan-alert-more"
+            >
+              {{ scanIssueSummary.extraReasonCount }} more issue type{{ scanIssueSummary.extraReasonCount === 1 ? '' : 's' }}
+            </p>
           </div>
 
           <div v-if="extensionRows.length" class="import-dialog__scan-section">
@@ -339,24 +379,32 @@
               class="import-dialog__scan-file"
               :class="`import-dialog__scan-file--${file.status}`"
             >
-              <label
-                v-if="file.status === 'supported'"
-                class="import-dialog__file-toggle"
-                :title="isExcludedFile(file.id) ? 'Excluded' : 'Included'"
+              <div class="import-dialog__scan-file-row">
+                <label
+                  v-if="file.status === 'supported'"
+                  class="import-dialog__file-toggle"
+                  :title="isExcludedFile(file.id) ? 'Excluded' : 'Included'"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="!isExcludedFile(file.id)"
+                    :disabled="folderReviewLocked"
+                    @change="toggleFileExclusion(file.id)"
+                  />
+                </label>
+                <span class="import-dialog__file-name" :title="file.relpath">{{ file.relpath }}</span>
+                <span class="import-dialog__file-meta">
+                  {{ formatBytes(file.size) }}
+                  <span v-if="file.reason">{{ humanizeReason(file.reason) }}</span>
+                  <span v-else>{{ file.status }}</span>
+                </span>
+              </div>
+              <div
+                v-if="folderSourceImportActionHint(file)"
+                class="import-dialog__scan-file-hint"
               >
-                <input
-                  type="checkbox"
-                  :checked="!isExcludedFile(file.id)"
-                  :disabled="folderReviewLocked"
-                  @change="toggleFileExclusion(file.id)"
-                />
-              </label>
-              <span class="import-dialog__file-name" :title="file.relpath">{{ file.relpath }}</span>
-              <span class="import-dialog__file-meta">
-                {{ formatBytes(file.size) }}
-                <span v-if="file.reason">{{ humanizeReason(file.reason) }}</span>
-                <span v-else>{{ file.status }}</span>
-              </span>
+                {{ folderSourceImportActionHint(file) }}
+              </div>
             </li>
           </ul>
 
@@ -547,6 +595,7 @@ defineProps<{
 const emit = defineEmits<{
   close: []
   imported: [result: Record<string, unknown>]
+  'view-notes': [notePaths: string[]]
 }>()
 
 type Mode = 'generic' | 'folder' | 'jira'
@@ -584,6 +633,7 @@ const {
   chooseFolderSource,
   chooseSampleDataset,
   confirmRemoveFolderImport,
+  copyScanIssueReport,
   extensionRows,
   folderArchivePicking,
   folderGrant,
@@ -625,6 +675,7 @@ const {
   folderScanningLabel,
   folderSelection,
   folderSelectionLoading,
+  folderSourceImportActionHint,
   folderSourceIsArchive,
   handleFolderPrimaryAction,
   humanizeReason,
@@ -638,6 +689,8 @@ const {
   requestRemoveFolderImport,
   resetFolderMode,
   rescanFolderImport,
+  scanIssueReport,
+  scanIssueSummary,
   skipRows,
   startFolderRescanImport,
   toggleExtensionExclusion,
@@ -801,6 +854,10 @@ async function handlePrimaryAction() {
     return
   }
   await handleImport()
+}
+
+function viewFolderImportNotes(notePaths: string[]) {
+  emit('view-notes', notePaths)
 }
 
 async function importGenericBatch() {
@@ -1318,6 +1375,74 @@ watch(
 .import-dialog__scan-section {
   padding-top: 0.25rem;
 }
+.import-dialog__scan-alert {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(245, 158, 11, 0.36);
+  border-left: 3px solid #f59e0b;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.08);
+}
+.import-dialog__scan-alert-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+.import-dialog__scan-alert-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  min-width: 0;
+}
+.import-dialog__scan-alert-copy strong {
+  font-size: 0.86rem;
+}
+.import-dialog__scan-alert-copy p,
+.import-dialog__scan-alert-more {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  opacity: 0.76;
+}
+.import-dialog__scan-alert-list {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+.import-dialog__scan-alert-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  font-size: 0.78rem;
+}
+.import-dialog__scan-alert-row small {
+  color: #fbbf24;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+.import-dialog__scan-alert-more {
+  margin-top: 0.45rem;
+}
+.import-dialog__scan-report-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.12);
+  color: #fef3c7;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+}
+.import-dialog__scan-report-btn:hover {
+  border-color: rgba(251, 191, 36, 0.75);
+  background: rgba(251, 191, 36, 0.11);
+}
 .import-dialog__scan-heading {
   margin-bottom: 0.35rem;
   font-size: 0.78rem;
@@ -1369,15 +1494,23 @@ watch(
   overflow-y: auto;
 }
 .import-dialog__scan-file {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
   padding: 0.4rem 0.55rem;
   border: 1px solid var(--color-border, #333);
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.02);
   font-size: 0.8rem;
+}
+.import-dialog__scan-file-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.import-dialog__scan-file-hint {
+  margin-top: 0.22rem;
+  font-size: 0.73rem;
+  line-height: 1.28;
+  opacity: 0.72;
 }
 .import-dialog__scan-file--supported {
   border-left: 3px solid #22c55e;

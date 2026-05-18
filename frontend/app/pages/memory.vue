@@ -73,6 +73,7 @@
       :visible="showImport"
       @close="showImport = false"
       @imported="onImported"
+      @view-notes="onViewImportedNotes"
     />
     <LinkIngestDialog
       v-model="showUrlImport"
@@ -197,6 +198,36 @@ async function onImported(result?: Record<string, unknown>) {
     showImport.value = false
   }
   await Promise.all([loadNotes(), loadOrphans(), loadCoverage()])
+}
+
+function normalizeImportedNotePath(path: string): string {
+  let normalized = path.trim().replace(/\\/g, '/').replace(/^\/+/, '')
+  if (normalized.startsWith('memory/')) {
+    normalized = normalized.slice('memory/'.length)
+  }
+  return normalized
+}
+
+function folderForNotePath(path: string): string | null {
+  const idx = path.lastIndexOf('/')
+  return idx > 0 ? path.slice(0, idx) : null
+}
+
+async function onViewImportedNotes(notePaths: string[]) {
+  const paths = notePaths
+    .map(normalizeImportedNotePath)
+    .filter(path => path.length > 0)
+  const firstPath = paths[0] ?? null
+
+  showImport.value = false
+  searchQuery.value = ''
+  searchMode.value = 'keyword'
+  activeFolder.value = firstPath ? folderForNotePath(firstPath) : null
+
+  await Promise.all([loadNotes(), loadOrphans(), loadCoverage()])
+  if (firstPath) {
+    await onSelectNote(firstPath)
+  }
 }
 
 async function onUrlImported() {

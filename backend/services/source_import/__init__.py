@@ -8,4 +8,5 @@ batch recovery, skipped/failed review, explicit metadata-only
 rescan/import-changes, buyer-demo completion summaries, sample-data grants,
 conservative cloud-placeholder handling, cross-batch content dedupe, and first
 ZIP child scanning/import for folder-contained and standalone archive sources.
+Archive guards reject encrypted members before extraction.
 """
