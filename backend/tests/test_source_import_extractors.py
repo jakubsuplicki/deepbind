@@ -226,6 +226,26 @@ def test_html_fallback_sanitizes_scripts_and_records_warning(tmp_path, monkeypat
     assert doc.warnings == ["HTML main content extraction unavailable; converted page body"]
 
 
+def test_html_fallback_hides_parser_exception_details(tmp_path, monkeypatch):
+    src = tmp_path / "source" / "page.html"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("<html><head><title>Saved Page</title></head><body><p>Body copy.</p></body></html>", encoding="utf-8")
+    import trafilatura
+
+    class ParserConfigError(Exception):
+        pass
+
+    def raise_parser_error(*_args, **_kwargs):
+        raise ParserConfigError("internal parser detail")
+
+    monkeypatch.setattr(trafilatura, "extract", raise_parser_error)
+
+    doc = extract_business_document(src)
+
+    assert "Body copy" in doc.markdown
+    assert doc.warnings == ["HTML main content extraction unavailable; converted page body"]
+
+
 def test_rtf_decodes_text_control_words(tmp_path):
     src = tmp_path / "source" / "memo.rtf"
     src.parent.mkdir(parents=True, exist_ok=True)

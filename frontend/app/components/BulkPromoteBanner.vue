@@ -6,7 +6,7 @@
         <strong>{{ pendingStrong }}</strong>
         high-confidence link{{ pendingStrong === 1 ? '' : 's' }} found
         <span class="bulk-promote__muted">in {{ pendingNotes }} note{{ pendingNotes === 1 ? '' : 's' }}</span>
-        <span class="bulk-promote__hint"> — accept all in one click, no review needed</span>
+        <span class="bulk-promote__hint"> — review first or accept all in one click</span>
       </span>
       <button
         v-if="!confirming"

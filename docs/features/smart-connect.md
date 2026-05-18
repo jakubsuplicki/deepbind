@@ -8,6 +8,7 @@ sources:
   - backend/services/alias_index.py
   - backend/services/dismissed_suggestions.py
   - backend/routers/connections.py
+  - frontend/app/pages/memory.vue
   - frontend/app/components/SmartConnectStatus.vue
   - frontend/app/components/BulkPromoteBanner.vue
   - frontend/app/components/SuggestionsPanel.vue
@@ -16,7 +17,8 @@ depends_on:
   - memory
   - knowledge-graph
   - retrieval
-last_reviewed: 2026-04-26
+last_reviewed: 2026-05-18
+last_updated: 2026-05-18
 ---
 
 ## Summary
@@ -101,8 +103,9 @@ Versioning is stored per-note in frontmatter as `smart_connect.version`. Bumping
 - [alias_index.py](backend/services/alias_index.py) — SQLite-backed phrase index with NFKD normalisation, guardrail filtering (min-length, stopwords, frequency cap), and n-gram body scan
 - [dismissed_suggestions.py](backend/services/dismissed_suggestions.py) — persists user-dismissed `(note_path, target_path)` pairs so they are excluded from all future scoring passes
 - [routers/connections.py](backend/routers/connections.py) — FastAPI router for all `/api/connections/` endpoints including backfill SSE stream, stats, bulk-promote, and coverage
+- [memory.vue](frontend/app/pages/memory.vue) — renders the workspace bulk-review banner and opens the first pending suggestion note from `coverage.pending_note_paths`
 - [SmartConnectStatus.vue](frontend/app/components/SmartConnectStatus.vue) — polling status badge that shows active/idle/warn state, inline progress bar for background section linking, and auto-opens a completion popover
-- [BulkPromoteBanner.vue](frontend/app/components/BulkPromoteBanner.vue) — workspace-level "Link all" banner driven by `pending_strong_suggestions` from the coverage endpoint; requires explicit confirmation before calling `POST /promote-bulk`
+- [BulkPromoteBanner.vue](frontend/app/components/BulkPromoteBanner.vue) — workspace-level "Link all" / "Review" banner driven by `pending_strong_suggestions` and `pending_strong_notes` from the coverage endpoint; requires explicit confirmation before calling `POST /promote-bulk`
 - [SuggestionsPanel.vue](frontend/app/components/SuggestionsPanel.vue) — per-note suggestion list with Keep / Dismiss actions, "Keep all (N)" bulk flow for 2–5 strong suggestions, and "Why?" score breakdown tooltip
 - [SmartConnectSection.vue](frontend/app/components/settings/SmartConnectSection.vue) — Settings panel for triggering backfill; consumes the SSE stream via `fetch()` + `ReadableStream` and renders a live progress bar
 

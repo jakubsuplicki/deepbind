@@ -272,13 +272,16 @@ async function onShowFirstOrphan() {
 }
 
 async function onReviewFirstStrong() {
-  // Open the first note that has a strong suggestion so the user can
-  // inspect what 'Keep all' would actually do.
-  const candidate = notes.value.find((n) => {
-    const arr = (n as { suggested_related?: Array<{ confidence?: number }> }).suggested_related
-    return Array.isArray(arr) && arr.some((s) => (s.confidence ?? 0) >= 0.8)
-  })
-  if (candidate) await onSelectNote(candidate.path)
+  // Open the first note reported by the coverage endpoint. The note list
+  // metadata intentionally does not carry full `suggested_related` objects.
+  const path = coverage.value?.pending_note_paths?.[0]
+  if (!path) return
+
+  searchQuery.value = ''
+  searchMode.value = 'keyword'
+  activeFolder.value = folderForNotePath(path)
+  await loadNotes()
+  await onSelectNote(path)
 }
 
 async function onBulkPromoted() {

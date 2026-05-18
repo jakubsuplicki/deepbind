@@ -370,6 +370,7 @@ def _extract_html(path: Path, display_name: str) -> ExtractedDocument:
     title = (soup.title.string.strip() if soup.title and soup.title.string else Path(display_name).stem)
     for tag in soup(["script", "style", "noscript", "template"]):
         tag.decompose()
+    extracted = None
     try:
         extracted = trafilatura.extract(
             raw,
@@ -377,9 +378,8 @@ def _extract_html(path: Path, display_name: str) -> ExtractedDocument:
             include_tables=True,
             output_format="html",
         )
-    except Exception as exc:
-        extracted = None
-        _add_warning(warnings, f"HTML main content extraction failed: {exc.__class__.__name__}")
+    except Exception:
+        pass
     if extracted:
         extracted_soup = BeautifulSoup(extracted, "html.parser")
         for tag in extracted_soup(["script", "style", "noscript", "template"]):

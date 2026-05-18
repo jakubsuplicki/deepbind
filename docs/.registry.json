@@ -181,6 +181,7 @@
       ],
       "last_updated": "2026-05-18",
       "status": "current",
+      "_note_2026_05_18b": "HTML/HTM business extraction now suppresses raw parser exception class names in user-facing warnings. If main-content extraction is unavailable or raises internally, the import warning says the page body was converted, while the generated Markdown still uses sanitized fallback body conversion.",
       "_note_2026_05_18": "Source import business extraction now hardens malformed and encrypted container cases. `archives.validate_zip_infos()` rejects encrypted ZIP/Office members as `archive_encrypted` before extraction, `_read_zip_xml()` converts malformed or unreadable required Office XML into safe `ExtractorError` messages, and malformed optional XLSX shared strings become extractor warnings when worksheets can still be imported. Direct extractor and source-scan tests cover the new paths. The folder import completion UI now surfaces per-file warning details when manifest rows include extractor warnings, scan review shows a top-level needs-attention summary for skipped/unsupported files, scan attention can be copied as a relative-path issue report without the absolute source root, scan/rescan/skipped-file rows share readable labels plus repair hints for common source-import skip/error reasons, and Memory can open the first generated note from the completed import.",
       "_note_2026_05_17h": "The bundled sample folder now has an end-to-end backend smoke test for the real source-import demo path. The test grants the sample folder, runs metadata scan and approval, imports all supported sample files, verifies generated Markdown avoids absolute source roots, checks ZIP-child archive provenance, checks data/email completion questions, and asserts import-scoped retrieval traces stay inside manifest-created notes.",
       "_note_2026_05_17g": "Business document extractor quality now has direct regression coverage separate from full ingest/import lifecycle tests. DOCX/XLSX/PPTX preserve Office core-property titles when available, XLSX row/column preview limits emit extractor warnings, HTML fallback conversion strips script/style/template content, EML records Cc and lists attachments without importing them, and empty/limited conversions surface visible warnings that flow through `fast_ingest` into Markdown.",
@@ -253,6 +254,7 @@
       ],
       "last_updated": "2026-05-18",
       "status": "current",
+      "_note_2026_05_18c": "HTML/HTM fallback warnings are now buyer-readable during folder import completion: parser internals are hidden and the warning states that main-content extraction was unavailable and the page body was converted.",
       "_note_2026_05_18b": "Folder Source Import is now documented as implementation review-ready with manual desktop smoke pending. `docs/runbooks/folder-source-import-demo-smoke.md` captures the packaged-app validation checklist for bundled sample data, mixed local folders, scan issue reporting, synced-folder offline behavior, re-import/dedupe, cancellation/interruption, removal safety, same-name destination collisions, and import-scoped questions.",
       "_note_2026_05_18": "Archive and Office extractor hardening landed for the folder/source import path. ZIP central-directory validation now rejects encrypted members with `archive_encrypted` during scan or single-file ZIP inventory, required Office XML parse/read failures surface as safe importer errors, and optional malformed XLSX shared strings are warning-only if sheet data remains readable. Tests cover direct extractor errors/warnings and metadata scan skip reporting. `FolderSourceImportDetail.vue` now lists affected file paths and warning text for imported-with-warnings rows and emits a View imported notes action from manifest-generated note paths, while `useFolderSourceImportDialog.ts` maps encrypted/archive/password/source states to buyer-readable labels and shared fix-local hints that render in scan, rescan, and skipped-file review rows. `ImportDialog.vue` also shows a top-level scan needs-attention summary with supported-ready counts and the highest-priority repair hints before approval, can copy those scan issues as a relative-path report without the absolute source root, and `memory.vue` can close the modal, activate the imported folder, and select the first created note.",
       "_note_2026_05_17i": "Bundled sample dataset confidence now goes beyond scanability. `test_bundled_sample_dataset_imports_end_to_end_as_demo_source` runs the normal grant, metadata scan, selection, approved import, completion summary, ZIP-child provenance, and import-scoped retrieval path against `desktop/src-tauri/sample-data/deepfiles-demo-folder`. Completion question ordering now prioritizes skipped/failed remediation, structured-data, and email prompts before lower-specificity document prompts under the capped suggested-question list.",
@@ -655,6 +657,7 @@
         "backend/services/alias_index.py",
         "backend/services/dismissed_suggestions.py",
         "backend/routers/connections.py",
+        "frontend/app/pages/memory.vue",
         "frontend/app/components/SmartConnectStatus.vue",
         "frontend/app/components/BulkPromoteBanner.vue",
         "frontend/app/components/SuggestionsPanel.vue",
@@ -671,15 +674,17 @@
         "backend/tests/test_step28b_plan_b.py",
         "backend/tests/test_suggest_breakdown.py",
         "frontend/tests/components/BackfillPanel.test.ts",
-        "frontend/tests/components/SuggestionsPanel.test.ts"
+        "frontend/tests/components/SuggestionsPanel.test.ts",
+        "frontend/tests/pages/memory.test.ts"
       ],
       "depends_on": [
         "memory",
         "knowledge-graph",
         "retrieval"
       ],
-      "last_updated": "2026-05-04",
+      "last_updated": "2026-05-18",
       "status": "current",
+      "_note_2026_05_18": "Memory page bulk-review now opens the first pending Smart Connect note from `coverage.pending_note_paths` instead of looking for full `suggested_related` objects on note-list metadata. This fixes the workspace Review button after imports/backfills, where the banner had counts but the note list rows did not carry suggestion details. The banner copy now says users can review first or accept all in one click.",
       "_note_2026_05_04c": "ADR 017 \u2014 frontend icons migrated to Phosphor + Simple Icons via @nuxt/icon (offline-bundled). Inline SVGs and functional emoji replaced with <Icon> components; design rules in docs/concepts/icon-system.md."
     },
     "mcp-server": {
