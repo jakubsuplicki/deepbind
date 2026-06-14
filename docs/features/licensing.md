@@ -32,27 +32,29 @@ sources:
 	- frontend/app/utils/apiUrl.ts
 depends_on: []
 last_reviewed: 2026-05-05
-last_updated: 2026-05-05
+last_updated: 2026-06-14
 ---
 
 # Licensing
 
 Ed25519-signed offline license file ([ADR 006](../architecture/decisions/006-offline-signed-license.md)) with operational model per [ADR 019](../architecture/decisions/019-licensing-operational-model.md).
 
+> **Reference implementation.** This subsystem is a reference implementation of fully offline, server-free license verification — signature-checking a file against an Ed25519 public key baked into the binary, with no phone-home and no server lookup. It is not a live activation gate; the state-machine, trial, grace, and clock-rollback mechanics below are documented for their technical design. The text retains the original trial/renewal narrative to describe how the state machine behaves, not to assert a sales relationship.
+
 ## In plain terms
 
-**Trial & activation.** Customer opens the app → 30-day free trial starts automatically. The start date lives in the OS keychain, so reinstalling doesn't reset it. They can paste a license key, double-click a `.deepfileslic` email attachment, or buy from the activation wall. Verification is fully offline — the app checks the file against an Ed25519 public key baked into the binary at build time. No phone-home, no server lookup.
+**Trial & activation.** On first run a 30-day trial starts automatically. The start date lives in the OS keychain, so reinstalling doesn't reset it. The user can paste a license key or double-click a `.deepfileslic` file attachment to install one. Verification is fully offline — the app checks the file against an Ed25519 public key baked into the binary at build time. No phone-home, no server lookup.
 
-**Pricing model.** Annual one-shot purchase. No auto-renewal, no stored payment method. At month 11 the web-app emails a renewal reminder; the customer chooses to repurchase or not. License files are valid for 13 months (12 months entitlement + 30-day grace).
+**Entitlement model.** The reference implementation models an annual entitlement with a 30-day post-expiry grace window; license files are valid for 13 months (12 months entitlement + 30-day grace). Renewal is a matter of installing a fresh license file — there is no auto-renewal and no stored payment method in the app itself.
 
 **The 8 states the app can be in:**
 
 - **Trial active** → free trial, full functionality, slim countdown banner.
 - **Trial expiring** → ≤3 days left, banner turns amber.
-- **Trial expired** → full-screen wall, paste-a-key or "Buy a license."
+- **Trial expired** → full-screen wall, paste-a-key to install a license.
 - **Licensed active** → fully functional, license info in Settings only.
 - **Licensed in-grace** → license expired ≤30 days ago, still works, "Renew now" banner.
-- **Licensed past-grace** → expired >30 days, **read-only mode** — existing chats and notes still browsable, "Open my data folder" surfaces the user's Markdown files. New chats / writes / ingest are blocked. The data sovereignty pitch is provable: we never hold your knowledge hostage.
+- **Licensed past-grace** → expired >30 days, **read-only mode** — existing chats and notes still browsable, "Open my data folder" surfaces the user's Markdown files. New chats / writes / ingest are blocked. The data-sovereignty guarantee is provable: the app never holds your knowledge hostage — your notes remain plaintext Markdown on disk regardless of license state.
 - **Licensed invalid** → license file is malformed or signed with the wrong key. Wall with diagnostic.
 - **Clock invalid** → system clock is more than 5 minutes behind the build epoch / last-seen timestamp (rollback attack OR genuinely-broken CMOS). Diagnostic wall pointing at OS date settings, with paste-a-key still available for legitimate dead-CMOS recovery.
 
@@ -64,7 +66,7 @@ Ed25519-signed offline license file ([ADR 006](../architecture/decisions/006-off
 
 **Verification.** 64 dedicated tests across 5 files cover all 8 states + boundary cases (day-30 exact, 5-minute clock tolerance, gate blocking + read-path-pass-through, foreign-signature rejection, day-rollover semantics). Full backend suite went 1390 → 1454 over the 6 chunks, zero regressions in licensing-touched code. End-to-end smoke verified by signing real licenses with the dev keypair and walking the state machine through every state.
 
-**Out of scope (lives in other repos / operational work).** Stripe checkout + transactional email pipeline (in upcoming `web-app/`); HSM/YubiKey migration of the private key (currently web-app server holds it — interim mitigation); pricing decision; MSA/EULA seat-entitlement legal clauses; customer-facing self-serve resend page.
+**Out of scope (not part of this reference implementation).** Any checkout or transactional-email pipeline for distributing license files; HSM/YubiKey custody of the private signing key; seat-entitlement legal clauses; a self-serve license-resend page. These are deployment concerns outside the offline-verification subsystem documented here.
 
 ## Status: current — all 6 chunks landed
 
@@ -79,7 +81,7 @@ Implementation per [ADR 019 §"Implementation chunks"](../architecture/decisions
 | 5 | `.deepfileslic` file association | ✅ Landed 2026-05-06 |
 | 6 | Clock-tampering defense (build-epoch + keychain monotonic state) | ✅ Landed 2026-05-06 |
 
-End-to-end works: customer downloads app → 30-day trial auto-starts (keychain-tracked, survives reinstall) → trial-active banner with countdown → trial-expiring amber banner ≤3 days → trial-expired wall → paste a `.deepfileslic` (or double-click the email attachment) → license-active → 30-day grace post-expiry → past-grace read-only wall with "Open in Finder" affordance → renew license → license-active again. Clock rollback past `max(build_epoch, monotonic_floor)` triggers a separate `clock_invalid` wall pointing the user at OS date settings.
+End-to-end works: first run → 30-day trial auto-starts (keychain-tracked, survives reinstall) → trial-active banner with countdown → trial-expiring amber banner ≤3 days → trial-expired wall → paste a `.deepfileslic` (or double-click the file attachment) → license-active → 30-day grace post-expiry → past-grace read-only wall with "Open in Finder" affordance → install a fresh license → license-active again. Clock rollback past `max(build_epoch, monotonic_floor)` triggers a separate `clock_invalid` wall pointing the user at OS date settings.
 
 ## How It Works
 
@@ -148,7 +150,7 @@ Three layers driven by the `useLicenseState` composable (which seeds from the `_
 
 - `TrialBanner.vue` — visible during `unlicensed_trial_active`, `unlicensed_trial_expiring`, `licensed_in_grace`. Slim top-of-view countdown + CTA to Settings → License.
 - `LicenseWall.vue` with three variants:
-  - `activation` — trial-expired or licensed-invalid. Full-screen modal with paste-a-key form + "Buy a license" link.
+  - `activation` — trial-expired or licensed-invalid. Full-screen modal with paste-a-key form + a link to obtain a license file.
   - `past-grace` — license expired past 30-day grace. Same paste-a-key + a prominent "Open my data folder" button (the data is plaintext Markdown on disk; ADR 019 §"Past-grace state").
   - `clock-invalid` — diagnostic UI pointing at OS date settings; paste-a-key kept available for the rare dead-CMOS recovery case (per ADR 006 §"Failure UX").
 - `LicenseSection.vue` — always visible in Settings → License. Shows current state pill, customer, expiry, license_id, paste-a-key form, "Reset license" button.

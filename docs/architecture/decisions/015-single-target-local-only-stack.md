@@ -36,7 +36,7 @@ The duel feature was viable when there were two cloud providers with genuinely d
 
 ## Decision drivers
 
-1. **The bundle's contents must match the product story.** ADR 002 says "your data never leaves your laptop." A bundle whose PyInstaller payload includes `anthropic.AsyncAnthropic` makes that claim defensible only by call-graph reasoning, not by inspection. The v1 product's audit story — for the buyers ADR 002 actually serves — requires the literal property, not the structural one.
+1. **The bundle's contents must match the product story.** ADR 002 says "your data never leaves your laptop." A bundle whose PyInstaller payload includes `anthropic.AsyncAnthropic` makes that claim defensible only by call-graph reasoning, not by inspection. The v1 product's audit story — for the operators ADR 002 actually serves — requires the literal property, not the structural one.
 2. **Single-target builds eliminate an entire class of bug.** ADR 014's failure mode (a transitive dependency surviving the exclude list) is the kind of bug that re-surfaces at every dependency bump. Single-target eliminates it permanently.
 3. **LiteLLM's value disappears in a single-provider stack.** LiteLLM's selling point is provider-agnosticism. With Ollama as the sole dispatch target, we pay for an abstraction we no longer need.
 4. **Duel was multi-cloud differentiation. It is not v1 product surface.** Removing it does not subtract from v1 because it was never wired into the production UX in the first place (no page or composable references it).
@@ -93,13 +93,13 @@ This is materially stronger than ADR 014's structural-only signal: a static-anal
 If a future enterprise customer requires a multi-provider build:
 - Restoration is a feature add against a pure-local v1, not a flag flip on a dual-build v1.
 - The duel feature, the LiteLLM dispatcher, and the cloud-SDK paths all exist in the pre-deletion git branch (preserved at the commit immediately before this ADR's chunk 1 lands). Recovery is a cherry-pick + rebase exercise, not a fresh implementation.
-- Any restoration would itself be ADR-worthy — the v1.5+ product team would document why the buyer profile changed.
+- Any restoration would itself be ADR-worthy — the v1.5+ product team would document why the operator profile changed.
 
 ## Audit verification
 
 Same shape as ADR 014's audit-verifiability section, with the literal signals upgraded:
 
-| Question a buyer asks | How to verify | Answer in v1 |
+| Question an auditor asks | How to verify | Answer in v1 |
 |---|---|---|
 | Does the bundle phone Anthropic / OpenAI? | `tcpdump -i any host api.anthropic.com or host api.openai.com` for an hour of normal use | Zero traffic |
 | Is cloud SDK code in the binary? | `find DeepFilesAI.app -name "*anthropic*" -o -name "*openai*" -o -name "*litellm*"` | Returns nothing |
@@ -112,7 +112,7 @@ Same shape as ADR 014's audit-verifiability section, with the literal signals up
 ### A. Restore SDKs to the bundle (ADR 014 retreat)
 The simplest fix to the build crash. Keeps LiteLLM. Requires swapping the `cloud_providers_available()` gate to `is_desktop_bundle()` in `routers/chat.py`. Audit signal weakens to structural-only.
 
-**Rejected** because the audit signal is the product. v1's buyer profile (compliance-led firms, per ADR 002) reads the bundle. "We have the SDKs but they're unreachable" is a sentence that loses procurement reviews. The runtime claim ("no calls happen") is true under both options; the difference is whether a buyer has to take our word for it or can verify it locally with `find`.
+**Rejected** because the audit signal is the product. v1's operator profile (compliance-led firms, per ADR 002) reads the bundle. "We have the SDKs but they're unreachable" is a sentence that loses procurement reviews. The runtime claim ("no calls happen") is true under both options; the difference is whether an auditor has to take our word for it or can verify it locally with `find`.
 
 ### B. Stub `openai` / `anthropic` with shim modules
 Keeps LiteLLM. Provides empty-shell `openai`/`anthropic` packages whose top-level imports satisfy LiteLLM's expectations and whose attribute accesses raise on actual use.
@@ -239,7 +239,7 @@ The work is sequenced so the test suite passes after each chunk and the bundle i
 
 ## Amendment 2026-05-05 — bundle leakage hardening
 
-The commercial-licensing audit at [`docs/research/commercial-licensing-audit.md`](../../research/commercial-licensing-audit.md) (finding 2) discovered that even after this ADR landed, `desktop/sidecar/jarvis-sidecar.spec` still listed `litellm`, `litellm.llms`, `tiktoken_ext`, `tiktoken_ext.openai_public` in `hidden` and `litellm`, `tiktoken`, `tiktoken_ext` in the `datas` `collect_data_files` loop. The dev venv at the time of audit also had `litellm-1.83.7` installed as leftover from the pre-ADR-015 era, so a build executed against that venv would silently re-bundle the cloud SDKs that this ADR's chunk 7 verification step (`find DeepFilesAI.app -name "*anthropic*" …`) was supposed to keep out.
+The commercial-licensing audit (finding 2) discovered that even after this ADR landed, `desktop/sidecar/jarvis-sidecar.spec` still listed `litellm`, `litellm.llms`, `tiktoken_ext`, `tiktoken_ext.openai_public` in `hidden` and `litellm`, `tiktoken`, `tiktoken_ext` in the `datas` `collect_data_files` loop. The dev venv at the time of audit also had `litellm-1.83.7` installed as leftover from the pre-ADR-015 era, so a build executed against that venv would silently re-bundle the cloud SDKs that this ADR's chunk 7 verification step (`find DeepFilesAI.app -name "*anthropic*" …`) was supposed to keep out.
 
 Fix:
 - **Spec hidden_imports + datas:** stale `litellm` / `tiktoken` / `tiktoken_ext` entries removed. Inline comments now explain *why* they're deliberately absent so a future PR doesn't re-add them by reflex.

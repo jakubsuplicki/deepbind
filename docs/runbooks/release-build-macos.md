@@ -2,7 +2,7 @@
 title: Release Build — macOS
 type: runbook
 status: active
-last_updated: 2026-05-18
+last_updated: 2026-06-14
 related_adrs:
   - 003-desktop-distribution-tauri-and-sidecars
   - 015-single-target-local-only-stack
@@ -121,7 +121,7 @@ The script is **idempotent** at the cache level: re-running with no source chang
 
 6. **`[5a/5]` Notarize + staple the `.app`** — zips the `.app`, submits via `xcrun notarytool submit … --wait`, and on Accepted runs `xcrun stapler staple` so Gatekeeper can verify offline.
 
-7. **`[5b/5]` Notarize + staple the `.dmg`** — separate notary submission so the disk image can also be Gatekeeper-verified offline (relevant for compliance customers — no phone-home required).
+7. **`[5b/5]` Notarize + staple the `.dmg`** — separate notary submission so the disk image can also be Gatekeeper-verified offline (relevant for offline/air-gapped installs — no phone-home required).
 
 8. **Verification** — `spctl --assess` and `xcrun stapler validate` on both artifacts. Failures here are printed but don't `exit 1` — inspect the output.
 
@@ -152,13 +152,13 @@ xcrun stapler validate /Applications/DeepFilesAI.app
 /usr/libexec/PlistBuddy -c "Print :JarvisBundleCapabilities" /Applications/DeepFilesAI.app/Contents/Info.plist
 ```
 
-Before promoting a build for demos, also run the buyer-facing source-import smoke in [Folder Source Import Demo Smoke](folder-source-import-demo-smoke.md). That pass verifies the bundled sample dataset, local mixed-folder import, synced-folder offline behavior, remove/re-import safety, and import-scoped question trace from the packaged app.
+Before promoting a build for demos, also run the source-import smoke in [Folder Source Import Demo Smoke](folder-source-import-demo-smoke.md). That pass verifies the bundled sample dataset, local mixed-folder import, synced-folder offline behavior, remove/re-import safety, and import-scoped question trace from the packaged app.
 
 ---
 
 ## Audit-signal verification (ADR 015 §F)
 
-After a successful build, every release candidate must pass these four checks before promotion. They mirror the questions a compliance buyer's procurement review will ask.
+After a successful build, every release candidate must pass these four checks before promotion. They mirror the questions a security auditor's review will ask.
 
 ### 1. Source repo
 

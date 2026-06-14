@@ -107,7 +107,6 @@ Tools call directly into the same backend services that power the FastAPI app (`
 
 - [`refactor.spec.md`](./refactor.spec.md) — historical refactor notes
   (CLI-only, stdio-only architecture)
-- [`../../steps/step-24*-mcp-*.spec.md`](../../steps/) — original design specs
 
 > **Historical note:** earlier versions shipped an optional SSE transport
 > on `127.0.0.1:8765` with a bearer token. That was removed in favour of

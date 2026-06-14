@@ -2,13 +2,13 @@
 
 **Status:** Accepted
 **Date:** 2026-05-05
-**Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 006](006-offline-signed-license.md) · [`docs/research/web-search-commercial-alternatives.md`](../../research/web-search-commercial-alternatives.md) · [`docs/research/commercial-licensing-audit.md`](../../research/commercial-licensing-audit.md) §"Finding 4"
+**Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 006](006-offline-signed-license.md) · the web-search alternatives analysis · the commercial-licensing audit (finding 4)
 
 ## Context
 
 The codebase carries a `web_search` tool — a chat-tool affordance that lets the LLM fall back to the open web when local notes don't cover the question. The implementation in [`backend/services/web_search.py`](../../../backend/services/web_search.py) is a thin wrapper over the [`duckduckgo-search`](https://pypi.org/project/duckduckgo-search/) PyPI package, which scrapes DuckDuckGo's public HTML/JSON endpoints with no API key, no commercial agreement, and a README that explicitly states the package is "for educational purposes only."
 
-The commercial-licensing audit (2026-05-04, finding #4) flagged this as a credibility leak. [`docs/research/web-search-commercial-alternatives.md`](../../research/web-search-commercial-alternatives.md) evaluated the four alternatives and recommended Approach A — BYOK with Tavily as the default provider and Brave Search as a configurable second engine. That recommendation, on closer review, has a v1-shape problem: it requires every user to sign up for a Tavily account, generate an API key, and paste it into Settings before web search will work. For a "self-contained from minute zero" product (ADR 002 / ADR 003 driver #4), that's hostile onboarding for a feature whose actual job is "fall back when notes don't have the answer."
+The commercial-licensing audit (2026-05-04, finding #4) flagged this as a credibility leak. The web-search alternatives analysis evaluated the four alternatives and recommended Approach A — BYOK with Tavily as the default provider and Brave Search as a configurable second engine. That recommendation, on closer review, has a v1-shape problem: it requires every user to sign up for a Tavily account, generate an API key, and paste it into Settings before web search will work. For a "self-contained from minute zero" product (ADR 002 / ADR 003 driver #4), that's hostile onboarding for a feature whose actual job is "fall back when notes don't have the answer."
 
 The other Approach A variants do not survive scrutiny in the v1 product shape:
 
@@ -19,11 +19,11 @@ This leaves three real options: ship BYOK with Tavily, ship a paid-tier entitlem
 
 ## Decision drivers
 
-1. **The "self-contained from minute zero" property is load-bearing.** A buyer's first session should work end-to-end without external account signups. Web search behind a third-party API key violates this; "user types a question, model can answer from notes or refuses cleanly" is the honest v1 contract.
+1. **The "self-contained from minute zero" property is load-bearing.** A user's first session should work end-to-end without external account signups. Web search behind a third-party API key violates this; "user types a question, model can answer from notes or refuses cleanly" is the honest v1 contract.
 2. **Web search is the lowest-value affordance the product offers.** Every other path — local notes, semantic retrieval, knowledge-graph traversal, Jira ingest, URL paste — has an authoritative use case. Web search is "AI assistant that knows things" generic value, available in every cloud chat tool. Removing it does not erode the differentiator (private knowledge over your local data).
 3. **The query-leak risk is structural, not implementation-bound.** Whether DDG, Tavily, or Brave receives the query, the LLM picks the query freely from a context that may include PII, regulated data, or attorney-client material. No provider-swap fixes this; only a UI surface that confirms each query before send fixes it, which is its own design problem we don't have appetite for in v1.
 4. **Commercial-feasibility audit cleanup is converging.** Finding #4 is the last licensing-audit issue with a non-trivial implementation tail. Closing it by removal lets the audit converge to "shipped clean" rather than "shipped clean except for one BYOK toggle." A future v1.5+ web-search re-introduction can take the BYOK shape from a position of strength.
-5. **No customer evidence demands web search.** Pre-release, no users; no buyer signal that "web fallback is the deal-breaker." Reactivation can be evidence-driven if it ever arises.
+5. **No user evidence demands web search.** Pre-release, no users; no user signal that "web fallback is the deal-breaker." Reactivation can be evidence-driven if it ever arises.
 6. **Removal shrinks the dep + compliance surface.** `duckduckgo-search` and its scraping behaviour leave the bundle. The privacy module loses one of its three gates. The chat tool taxonomy shrinks by one. Less surface to audit, document, and maintain.
 
 ## Decision
@@ -50,7 +50,7 @@ This leaves three real options: ship BYOK with Tavily, ship a paid-tier entitlem
 
 ### A. Ship BYOK web search with Tavily-default + Brave-secondary (the locked research recommendation)
 
-The research doc's pick. Honest commercial contract, ZDR options, SOC 2 attestations, free-tier large enough for realistic users. **Rejected for v1** on the "self-contained from minute zero" criterion — a feature that requires a third-party signup before it works is not first-session-ready, and the value of the feature does not justify the onboarding tax. Reactivation in v1.5+ is reasonable if customer evidence demands it.
+The research doc's pick. Honest commercial contract, ZDR options, SOC 2 attestations, free-tier large enough for realistic users. **Rejected for v1** on the "self-contained from minute zero" criterion — a feature that requires a third-party signup before it works is not first-session-ready, and the value of the feature does not justify the onboarding tax. Reactivation in v1.5+ is reasonable if user evidence demands it.
 
 ### B. Ship a vendor-paid managed-key tier as a license entitlement
 
@@ -69,16 +69,16 @@ The decision. Net effect: -45 LoC of service code, -22 LoC of tool spec, -7 LoC 
 ### Positive
 
 - Audit finding #4 closes by removal. Licensing audit converges.
-- The bundle drops `duckduckgo-search` and its scraping behaviour; one fewer outbound network surface to document for buyer compliance review.
+- The bundle drops `duckduckgo-search` and its scraping behaviour; one fewer outbound network surface to document for operator compliance review.
 - Privacy module simplifies — two gates remain (offline mode + url_ingest), down from three.
 - The chat tool taxonomy is smaller and more honest about scope. The system prompt can drop "search notes first before web_search" and replace it with "search notes first; if not found, say so."
 - The "self-contained from minute zero" property is preserved: every shipping feature works without external signups.
-- A future v1.5+ reactivation, if customer evidence demands it, lands as a deliberate addition with a clean ADR — not as a retrofit on top of a half-implemented BYOK toggle.
+- A future v1.5+ reactivation, if user evidence demands it, lands as a deliberate addition with a clean ADR — not as a retrofit on top of a half-implemented BYOK toggle.
 
 ### Negative
 
 - The chat model loses its "I don't know — let me look it up" affordance. For questions outside the user's notes and the model's training cutoff, the answer is "I don't know" or stale training data. Users accustomed to cloud chat tools may notice.
-- The product loses one row of the "AI assistant capabilities" matrix that buyers may scan. Mitigation: nothing on the matrix was a differentiator anyway; the differentiator is the local knowledge surface.
+- The product loses one row of the "AI assistant capabilities" matrix that users may scan. Mitigation: nothing on the matrix was a differentiator anyway; the differentiator is the local knowledge surface.
 
 ### What this changes about existing code
 
@@ -91,6 +91,6 @@ The decision. Net effect: -45 LoC of service code, -22 LoC of tool spec, -7 LoC 
 
 ## Open follow-ups (non-blocking)
 
-1. **v1.5+ web-search reactivation criteria.** Document what evidence would justify re-introducing the feature: a customer interview signal that web fallback is actually requested; a clean BYOK UX pattern that doesn't violate the first-session contract; a paid tier with margin to absorb a managed-key offering. This ADR is the trigger document for that decision.
+1. **v1.5+ web-search reactivation criteria.** Document what evidence would justify re-introducing the feature: a user signal that web fallback is actually requested; a clean BYOK UX pattern that doesn't violate the first-session contract; a paid tier with margin to absorb a managed-key offering. This ADR is the trigger document for that decision.
 2. **System-prompt rewrite.** The chat prompt currently mentions web_search as a tool the model should fall back to. Update to "if notes don't cover it, say so" — a one-line edit but worth tracking so the model's behaviour aligns with the new contract.
 3. **Bundle size sanity-check.** Confirm `duckduckgo-search` and any of its transitives leaving the requirements file actually shrink the PyInstaller bundle. Probably modest (~few hundred KB) but worth noting in the build-pipeline diff.

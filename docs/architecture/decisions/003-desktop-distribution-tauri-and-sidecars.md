@@ -4,11 +4,11 @@
 **Date:** 2026-04-27
 **Revised:** 2026-04-28 — tightened spec (model-storage location, signing infra, shell-outbound exception, key custody, process supervision, attribution).
 **Revised:** 2026-04-29 — implementation amendment (see §"Amendment 2026-04-29"): plumbing-model bundling, Ollama bundle shape per OS, Linux deferred to v1.1, env-driven config + port handshake, Tauri-native updater, first-run vault picker, PyInstaller hidden-imports list, background reindex.
-**Related:** [ADR 002](002-pure-local-product-shape.md) · [`docs/SELF-CONTAINED-APP-REVIEW.md`](../../SELF-CONTAINED-APP-REVIEW.md) §4–§5
+**Related:** [ADR 002](002-pure-local-product-shape.md)
 
 ## Context
 
-V1 ships as a self-installing Mac and Windows desktop app. The buyer must not have to touch a terminal, install a system service, accept admin elevation prompts, or wait for separate components to be downloaded one by one. The current codebase is a Nuxt 3 SPA + FastAPI backend, with Ollama as the local-LLM runtime. Lifting that into a packaged desktop app forces three distribution decisions that interact:
+V1 ships as a self-installing Mac and Windows desktop app. The operator must not have to touch a terminal, install a system service, accept admin elevation prompts, or wait for separate components to be downloaded one by one. The current codebase is a Nuxt 3 SPA + FastAPI backend, with Ollama as the local-LLM runtime. Lifting that into a packaged desktop app forces three distribution decisions that interact:
 
 1. **Desktop shell** — what wraps the existing Nuxt UI?
 2. **Backend packaging** — how does the FastAPI + Python stack ship inside the app?
@@ -89,7 +89,7 @@ For true air-gap customers (ITAR seats, classified programs), an offline install
 ### Ollama distribution
 
 - **Auto-install Ollama as a system service via the upstream installer.** What the user originally meant by "Ollama should just install." Requires admin elevation; leaves a system service surviving uninstall; we don't control Ollama's update cadence; first IT review fails. **Rejected.**
-- **Skip Ollama, link `llama.cpp` directly.** Smaller bundle, more control, no second process. Real engineering depth; required eventually for first-class MLX on Apple Silicon. Out of scope for v1. **Deferred** — recorded in [`SELF-CONTAINED-APP-REVIEW.md`](../../SELF-CONTAINED-APP-REVIEW.md) §4 as a future-quality milestone.
+- **Skip Ollama, link `llama.cpp` directly.** Smaller bundle, more control, no second process. Real engineering depth; required eventually for first-class MLX on Apple Silicon. Out of scope for v1. **Deferred** as a future-quality milestone.
 - **Ship without Ollama; require user installs it themselves.** What the current codebase assumes. Fails the "no terminal" promise. **Rejected.**
 
 ## Consequences
@@ -163,10 +163,10 @@ This removes every hardcoded port assumption ([config.py:10](../../../backend/co
 [main.py:105-109](../../../backend/main.py#L105-L109) runs uvicorn with `reload=True`, which is dev-only and incompatible with PyInstaller. **Decision:** add `backend/scripts/run_frozen.py` as the PyInstaller entry script. It calls `uvicorn.run(app, host=..., port=..., reload=False)` after binding `port=0` and printing the ready line. `main.py`'s `__main__` block remains for `python main.py` dev workflows.
 
 ### G. First-run vault location: native folder picker with default
-Tauri's `dialog.open` plugin shows a native folder picker on first launch, defaulting to `~/Jarvis` (mac) / `%USERPROFILE%\Jarvis` (win). The chosen path is written to app-data config and passed to the backend via `JARVIS_WORKSPACE_PATH` on every subsequent launch. Compliance buyers explicitly ask whether the vault path is user-controlled; this is the right shape.
+Tauri's `dialog.open` plugin shows a native folder picker on first launch, defaulting to `~/Jarvis` (mac) / `%USERPROFILE%\Jarvis` (win). The chosen path is written to app-data config and passed to the backend via `JARVIS_WORKSPACE_PATH` on every subsequent launch. Compliance-focused operators explicitly ask whether the vault path is user-controlled; this is the right shape.
 
 ### H. Auto-updater: Tauri-native (`tauri-plugin-updater`)
-ADR 003 listed Sparkle (mac) + Squirrel/MSIX (win) as candidates. The Tauri-native updater plugin uses a single signed JSON feed across all platforms, signs against a build-time-compiled public key (compatible with our manifest-key-custody model from the original ADR), and supports delta updates with rollback. **Decision:** use `tauri-plugin-updater` for v1; revisit only if a buyer-specific requirement forces a platform-native channel.
+ADR 003 listed Sparkle (mac) + Squirrel/MSIX (win) as candidates. The Tauri-native updater plugin uses a single signed JSON feed across all platforms, signs against a build-time-compiled public key (compatible with our manifest-key-custody model from the original ADR), and supports delta updates with rollback. **Decision:** use `tauri-plugin-updater` for v1; revisit only if a deployment-specific requirement forces a platform-native channel.
 
 ### I. Background reindex on startup
 [main.py:43-46](../../../backend/main.py#L43-L46) currently runs `reindex_all()` synchronously inside the FastAPI lifespan, blocking the `/api/health` response. On a 50k-note vault that is many seconds. The Tauri shell waits on `/api/health` to flip the splash screen, so this would manifest as a "slow first launch" bug.
@@ -221,7 +221,7 @@ At Ollama 0.22.0 the macOS distribution is no longer a self-contained CLI binary
 
 `otool -L ollama` shows only system framework dependencies (Metal, Foundation, Accelerate, libSystem); the libggml/libmlx payload is dlopened at runtime based on detected hardware + macOS version. **All Mach-O files in the payload must be re-signed** under our Developer ID with hardened runtime to satisfy notarization — a single unsigned dylib inside the bundled `.app` blocks Apple's notary verdict.
 
-The pin lives in [`desktop/scripts/fetch-ollama.sh`](../../../desktop/scripts/fetch-ollama.sh) as `OLLAMA_VERSION` + `OLLAMA_DARWIN_ZIP_SHA256`; bumps require a deliberate update to both, per [docs/research/deep-dive-deployment-architectures.md](../../research/deep-dive-deployment-architectures.md#cudametal-backend-divergence) ("the mitigation is pinning Ollama versions per-OS in the Jarvis installer rather than tracking upstream").
+The pin lives in [`desktop/scripts/fetch-ollama.sh`](../../../desktop/scripts/fetch-ollama.sh) as `OLLAMA_VERSION` + `OLLAMA_DARWIN_ZIP_SHA256`; bumps require a deliberate update to both — the mitigation for CUDA/Metal backend divergence is pinning Ollama versions per-OS in the Jarvis installer rather than tracking upstream.
 
 ### M. Bundling primitive: `bundle.resources`, not `externalBin`
 Tauri's `externalBin` config is single-binary-per-target: it accepts one path per platform triple, applies a triple suffix, and invokes via `app.shell().sidecar(name)`. It cannot ship a binary + dylibs + nested directories.

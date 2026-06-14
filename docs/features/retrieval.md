@@ -12,7 +12,7 @@ sources:
   - backend/services/chunking.py
 depends_on: [memory, knowledge-graph, preferences-settings]
 last_reviewed: 2026-04-26
-last_updated: 2026-05-17
+last_updated: 2026-06-14
 ---
 
 # Hybrid Retrieval Pipeline
@@ -189,6 +189,6 @@ Defined at module top of `retrieval/pipeline.py`. Changing these rebalances sign
 - **Recency is only a tiebreaker.** Two notes with the same fused score are sorted by `updated_at` descending, but recency has zero influence when scores differ. A months-old note with a high BM25 + cosine match will still outrank yesterday's weakly matching note.
 - **Silent note-read failures.** If a note's path exists in the index but the file is missing on disk, `build_context()` skips it without logging. A partially deleted workspace can silently reduce context quality.
 - **Specialist scoping strips graph-scored notes too.** `_scope_results()` filters by path prefix without distinguishing signal sources. A graph-scored note that lives outside a specialist's declared sources will be dropped even if it's highly relevant.
-- **Import-scoped context bypasses hybrid scoring today.** The folder-import completion flow reads manifest-created notes directly and ranks them with keyword overlap. This keeps buyer-demo answers grounded in the approved batch, but it is not yet the same as running BM25 + cosine + graph fusion inside a batch filter.
+- **Import-scoped context bypasses hybrid scoring today.** The folder-import completion flow reads manifest-created notes directly and ranks them with keyword overlap. This keeps demo answers grounded in the approved batch, but it is not yet the same as running BM25 + cosine + graph fusion inside a batch filter.
 - **500-character truncation is unconditional.** Long notes are always cut at 500 characters regardless of how short the rest of the context is. There is no fill-up logic that uses the remaining token budget.
 - **`workspace_path` threading.** Both functions accept a `workspace_path` argument that is forwarded to all service calls. Passing `None` in both calls is safe — each underlying service falls back to its own default — but passing mismatched values between `retrieve()` and `build_context()` would silently produce results from different workspaces.

@@ -2,7 +2,7 @@
 
 **Status:** Accepted — production wiring landed
 **Date:** 2026-04-27 (initial), amended 2026-04-28 (eval-side `retrieval-substitution-v1` landed; gate verdict justified production wiring), 2026-04-29 (production-side compaction wiring landed; same-day code-review fixes pass), 2026-05-01 (stable system-prompt prefix — retrieval moves to user-message position to restore Ollama KV-cache reuse on warm turns)
-**Related:** [`docs/features/retrieval.md`](../../features/retrieval.md) · [`docs/features/sessions.md`](../../features/sessions.md) · [`docs/features/chat.md`](../../features/chat.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §5
+**Related:** [`docs/features/retrieval.md`](../../features/retrieval.md) · [`docs/features/sessions.md`](../../features/sessions.md) · [`docs/features/chat.md`](../../features/chat.md)
 
 ## Context
 
@@ -18,7 +18,7 @@ What does not exist:
 
 - **Conversation history compaction across turns.** [`session_service.get_messages()`](../../../backend/services/session_service.py) returns the full history every turn. After enough turns, the model's context window is exceeded and the inference call errors out.
 - **Token-aware budget tracking.** All caps are in *characters*. Different models have different tokenizers; character-to-token ratio varies by 20–40% on non-English content (Polish in particular).
-- **Effective-context awareness per model.** [`model-research-1.md`](../../research/models/model-research-1.md) §"Long-context performance" was emphatic: advertised context is roughly 2× the RULER-safe context. The codebase has no concept of "this model's safe budget is 32K, not the advertised 128K."
+- **Effective-context awareness per model.** The long-context-performance finding was emphatic: advertised context is roughly 2× the RULER-safe context. The codebase has no concept of "this model's safe budget is 32K, not the advertised 128K."
 - **Proactive overflow trigger.** Compaction fires reactively only across tool rounds in one turn.
 - **System-prompt-overflow handling.** A retrieval surfacing 50 notes can balloon the system prompt past the model.
 
@@ -32,7 +32,7 @@ This makes a different compaction strategy possible than the standard summarizat
 2. **The canonical Markdown vault is authoritative.** Compaction touches active context, never the stored history. Anything dropped from active context remains queryable.
 3. **Token counting must use the model's actual tokenizer.** Character approximation breaks across languages and models. HuggingFace tokenizers are available for every model in the strict-OSI catalog.
 4. **Effective context, not advertised context, defines the budget.** Default to `min(native, RULER_safe_estimate)` — typically ~32K for the Qwen3 family.
-5. **Recent turns are the place small-model attention is weakest.** [Product-direction §5](../../research/product-direction-v1-v2.md) is explicit. Compaction must protect the recent window aggressively, not strip it.
+5. **Recent turns are the place small-model attention is weakest.** Compaction must protect the recent window aggressively, not strip it.
 6. **Compaction cannot fire mid-stream or mid-tool-loop.** Compaction runs only at turn boundaries — never during a streaming response or inside a tool-call loop.
 
 ## Decision
@@ -51,7 +51,7 @@ When approaching the context budget, the dispatcher applies in order:
 
 `ModelCatalogEntry` ([`ollama_service.py:113`](../../../backend/services/ollama_service.py#L113)) gains:
 
-- `effective_context_tokens` — the operational ceiling, not the advertised number. Default: `min(native_ctx, RULER_safe_estimate)`. Per [`model-research-1.md`](../../research/models/model-research-1.md), this is typically ~32K for Qwen3 dense and ~64K for Qwen3 MoE.
+- `effective_context_tokens` — the operational ceiling, not the advertised number. Default: `min(native_ctx, RULER_safe_estimate)`. This is typically ~32K for Qwen3 dense and ~64K for Qwen3 MoE.
 - `tokenizer_id` — the HuggingFace tokenizer reference for accurate token counting.
 
 The chat router computes `system_prompt_tokens + history_tokens + new_message_tokens` against `effective_context_tokens` before sending. **The cap is in tokens, not characters.**
@@ -72,7 +72,7 @@ The last N user/assistant turn pairs are never compacted. N defaults to 8 (confi
 
 ### Specialist persona / system invariants are re-injected aggressively as the window fills
 
-[Product-direction §5](../../research/product-direction-v1-v2.md) describes a "background-agent re-injection loop" pattern for keeping small models on-instruction. Compaction is the natural place to implement it: as the recent window approaches the threshold, re-inject the active specialist persona and any active workflow invariants more frequently. The chat router gains a re-injection knob: at compaction time, ensure the system prompt's persona block is in the recent window (not just the system message), so attention sees it nearer the current turn.
+A "background-agent re-injection loop" pattern keeps small models on-instruction. Compaction is the natural place to implement it: as the recent window approaches the threshold, re-inject the active specialist persona and any active workflow invariants more frequently. The chat router gains a re-injection knob: at compaction time, ensure the system prompt's persona block is in the recent window (not just the system message), so attention sees it nearer the current turn.
 
 ### Atomicity
 
@@ -94,18 +94,18 @@ Context state is visible, not magic — the user sees what the model "saw" at ea
 
 ### Audit trail
 
-Every compaction event writes to the session row: `{timestamp, turns_dropped, summary_used: bool, recent_window_size, effective_ctx_at_event}`. Compliance buyers can see what the model "saw" at each turn alongside the per-turn `model_id`.
+Every compaction event writes to the session row: `{timestamp, turns_dropped, summary_used: bool, recent_window_size, effective_ctx_at_event}`. Compliance-sensitive deployments can see what the model "saw" at each turn alongside the per-turn `model_id`.
 
 ## Alternatives considered
 
 ### A. Summarization-only compaction (LangChain default)
-Summarize older turns through a model into a single "earlier we discussed: …" message. Industry-standard. Lossy by design — compresses through a model, throws away fidelity. Wrong fit for a product sold on rigor where the canonical vault is sitting right there as a higher-fidelity source. **Rejected as primary.** Used as fallback only.
+Summarize older turns through a model into a single "earlier we discussed: …" message. Industry-standard. Lossy by design — compresses through a model, throws away fidelity. Wrong fit for a product whose value rests on rigor where the canonical vault is sitting right there as a higher-fidelity source. **Rejected as primary.** Used as fallback only.
 
 ### B. Sliding-window only (drop older turns, no recovery mechanism)
 Brutal but predictable. Information loss is real and irreversible mid-conversation. Worse than retrieval-first since the vault is available. **Rejected.**
 
 ### C. Character-based budget approximation (preserve current shape)
-Avoids tokenizer integration. Off by 20–40% on Polish; off by similar amounts on Chinese, Japanese, Arabic. Real EU customers in the target market will see misbehavior. **Rejected** — cost of correctness is small, cost of wrongness is real.
+Avoids tokenizer integration. Off by 20–40% on Polish; off by similar amounts on Chinese, Japanese, Arabic. Real users on non-English content will see misbehavior. **Rejected** — cost of correctness is small, cost of wrongness is real.
 
 ### D. Trust the advertised context window
 Models advertise 128K, 256K, 1M. RULER says safe context is roughly 2× less. A budget against advertised context will see graceful degradation in best case, hallucination in worst case, well before the budget formally fills. **Rejected.**
@@ -123,7 +123,7 @@ Saves the plumbing-model dependency. Disturbs the chat model's attention with su
 - The product's source-of-truth doctrine pays off here: the markdown vault provides a higher-fidelity recovery path than summary compression.
 - Token-correct budget tracking removes a class of language-correlated misbehavior.
 - The audit trail proves what the model saw on each turn — a compliance asset.
-- The recent-window protection plus persona re-injection addresses the small-model attention drift that [product-direction §5](../../research/product-direction-v1-v2.md) flagged as a v1 risk.
+- The recent-window protection plus persona re-injection addresses the small-model attention drift flagged as a v1 risk.
 
 ### Negative
 - Retrieval substitution quality on "find the specific earlier turn that mentioned X" is unmeasured. The existing retrieval pipeline is tuned for note retrieval, not turn retrieval. If quality is poor, the user gets visible "I don't remember discussing X" effects in long conversations. Mitigated by audit trail, by the recent window, and by the manual re-include affordance.
@@ -242,7 +242,7 @@ The build plan filed at the end of the gate-verdict amendment is now landed in f
 
 `ModelCatalogEntry` ([`backend/services/ollama_service.py`](../../../backend/services/ollama_service.py)) gained:
 
-- **`effective_context_tokens`** — RULER-safe ceiling, not the advertised number. Per-entry values were chosen against [research-1 §"Long-context performance"](../../research/models/model-research-1.md): Qwen3 dense at the family floor (32K) regardless of YaRN-extended advertised window; Qwen3 MoE 30B at ~64K; Ministral-3 / Devstral-Small-2 / Gemma-4 SWA conservative at ~64K of advertised 256K-128K windows; Granite 4 hybrid Mamba runs at full native (32K / 128K / 128K) since Mamba degrades less.
+- **`effective_context_tokens`** — RULER-safe ceiling, not the advertised number. Per-entry values were chosen against the long-context-performance findings: Qwen3 dense at the family floor (32K) regardless of YaRN-extended advertised window; Qwen3 MoE 30B at ~64K; Ministral-3 / Devstral-Small-2 / Gemma-4 SWA conservative at ~64K of advertised 256K-128K windows; Granite 4 hybrid Mamba runs at full native (32K / 128K / 128K) since Mamba degrades less.
 - **`tokenizer_id`** — HuggingFace reference for accurate token counting. Set per-entry where the upstream HF id is known (`Qwen/Qwen3-8B`, `ibm-granite/granite-4.0-h-micro`, etc.). Optional — `None` falls back to char/4 estimation.
 
 Token counting lives in [`backend/services/token_counting.py`](../../../backend/services/token_counting.py): a thin wrapper around the `tokenizers` Rust-backed Python package (chosen over `transformers` for size, over `tiktoken` for catalog coverage). Lazy-loads tokenizers, caches them per-process, and treats failed loads as sticky so a transient network hiccup doesn't re-attempt every turn. Honors `HF_HUB_OFFLINE=1` and a `JARVIS_DISABLE_TOKENIZER_DOWNLOAD=1` knob so CI runs deterministically without touching the network. Counts both single strings and Anthropic-style block-list message content (text / tool_use / tool_result) so the chat router can budget against actual provider payload shape.
@@ -273,7 +273,7 @@ When compaction fires, the router records the audit event on the session row and
 
 ### Audit trail (chunk #4)
 
-[`session_service`](../../../backend/services/session_service.py) gained `record_compaction_event` and `get_compaction_events`; the `compaction_events` list is included in the JSON written by `save_session` and restored on `resume_session`. Compliance buyers see what the model "saw" at each turn alongside the per-turn `model_id`. A round-trip test pins this in `tests/test_chat_compaction_wiring.py`.
+[`session_service`](../../../backend/services/session_service.py) gained `record_compaction_event` and `get_compaction_events`; the `compaction_events` list is included in the JSON written by `save_session` and restored on `resume_session`. Compliance-sensitive deployments see what the model "saw" at each turn alongside the per-turn `model_id`. A round-trip test pins this in `tests/test_chat_compaction_wiring.py`.
 
 ### System-prompt budget enforcement (chunk #5)
 
@@ -356,4 +356,4 @@ The full backend suite (1,434 passed / 1 skipped) plus the 11 new prefix-stabili
 2. **Retrieval-substitution quality measurement.** Specifically, "given a question that references a dropped turn, can retrieval surface it?" Add an eval scenario.
 3. **Tokenizer caching.** HuggingFace tokenizer instances are not free to instantiate; cache per active loadout.
 4. **Persona re-injection cadence.** The §5 background-agent pattern is sketched as "more aggressive as the window fills." Specific cadence needs measurement.
-5. **Vault-roundtrip-as-context-strategy** ([product-direction §5](../../research/product-direction-v1-v2.md) "Main thread split into sub-threads") — sub-agent contexts that return distilled results to the main thread. Adjacent to compaction; recorded here as a related future direction, not a v1 commitment.
+5. **Vault-roundtrip-as-context-strategy** ("main thread split into sub-threads") — sub-agent contexts that return distilled results to the main thread. Adjacent to compaction; recorded here as a related future direction, not a v1 commitment.

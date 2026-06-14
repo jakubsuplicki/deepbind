@@ -169,9 +169,8 @@ For audit clarity, the following components are explicitly **not** bundled:
   [ADR 015](architecture/decisions/015-single-target-local-only-stack.md)).
 - No proprietary fonts, icon sets, or stock-photo libraries.
 - No web-search providers (per [ADR 020](architecture/decisions/020-web-search-dropped-v1.md), v1 has no web-search affordance).
-- No GPL- or LGPL-licensed code paths (the audit closed the last GPL exposure,
-  `pl_core_news_sm`, on 2026-05-05; see commercial-licensing-audit.md
-  finding #1).
+- No GPL- or LGPL-licensed code paths (the licensing audit closed the last
+  GPL exposure, `pl_core_news_sm`, on 2026-05-05).
 - No non-permissively licensed model weights (Mistral Research / Gemma TOU
   entries removed 2026-05-05 per audit finding #6).
 
@@ -471,4 +470,3 @@ The file is referenced from:
 - [`backend/.python-local/python/LICENSE.txt`](../backend/.python-local/) — bundled CPython license, supplements this doc for the interpreter
 - [`frontend/public/THIRD-PARTY-NOTICES.md`](../frontend/public/THIRD-PARTY-NOTICES.md) — runtime-fetched copy for the Acknowledgements panel
 - [`desktop/src-tauri/tauri.conf.json`](../desktop/src-tauri/tauri.conf.json) `bundle.resources` — defense-in-depth bundle of this file inside the `.app`
-- [`docs/research/commercial-licensing-audit.md`](research/commercial-licensing-audit.md) — finding #5 was closed by shipping this document

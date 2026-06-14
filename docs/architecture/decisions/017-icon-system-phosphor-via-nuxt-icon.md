@@ -10,7 +10,7 @@ Before this decision, the frontend had **no icon system**. Every component autho
 
 ### Why the status quo had to change
 
-This is a compliance/security product whose value proposition is rigour-as-craft (CLAUDE.md: *"Quality is the product"*). Three concrete problems:
+This is a compliance/security product whose value proposition is rigour-as-craft (the project's engineering principle: *"quality is the product"*). Three concrete problems:
 
 1. **Visual incoherence.** Each inline SVG was drawn to a different stroke width, viewport, and idiomatic Feather/Heroicons pastiche, so rows that should read as one toolbar (e.g. SpecialistCard's edit/delete/expand) looked subtly mismatched. Hand-rolled provider marks in [`providerIcons.ts`](../../../frontend/app/composables/providerIcons.ts) (Anthropic, OpenAI, Google, Ollama) were lifted from Simple Icons but only as ad-hoc paste-ins, with no central catalog or update path.
 2. **Emoji as functional UI is platform-rendered.** `🟢/🔴` next to the active model in [StatusBar.vue](../../../frontend/app/components/StatusBar.vue) renders as Apple Color Emoji on macOS, Segoe UI Emoji on Windows, Noto on Linux — three different visual languages for a single status signal — and none of them respond to theming. Emoji also cannot be re-coloured to match the cyan/green/red palette in [main.css](../../../frontend/app/assets/css/main.css) (`--neon-*` tokens).
@@ -24,7 +24,7 @@ Adopt **Phosphor Icons** (regular weight default, fill weight reserved for activ
 
 ### Why Phosphor (and not Lucide / Heroicons / Tabler / Material Symbols)
 
-- **Character without weirdness.** Phosphor's geometric construction reads as "designed product" rather than "default Tailwind landing page". A compliance product whose buyers will audit the visual language for rigour should not adopt the icon set every starter template ships with — that's a credibility leak.
+- **Character without weirdness.** Phosphor's geometric construction reads as "designed product" rather than "default Tailwind landing page". A compliance-focused product whose auditors will review the visual language for rigour should not adopt the icon set every starter template ships with — that's a credibility leak.
 - **Multiple weights map to UI state without a second set.** `regular` for inactive/default, `fill` for active/selected/success, `bold` reserved for high-emphasis tokens (X-close, check-confirm). Lucide's single weight forces a state vocabulary built from colour alone, which clashes with the existing semantic-colour system in [main.css](../../../frontend/app/assets/css/main.css).
 - **MIT licensed**, ~1500 icons, used in production by Linear, Cal.com, Plausible — not exotic.
 
@@ -75,7 +75,7 @@ icon: {
 - **Design tokens + rules:** add the icon CSS layer to [main.css](../../../frontend/app/assets/css/main.css) — sizes (`xs`/`sm`/`md`/`lg`/`xl`/`2xl`), semantic colours (`success`/`warning`/`danger`/`info`/`accent`/`muted`/`subtle`), brand-mark hover, glow filter, spin/pulse animations.
 - **Migrate all 19 components** with inline SVGs to `<Icon name="ph:...">`. JarvisSelfCard's bespoke orb art and Orb.vue's main HUD orb are explicitly preserved as inline `<svg>` — they are brand illustrations, not icons.
 - **Replace functional emoji** in 14 sites (`✅ ⚠️ ❌ 🔒 ⚡ 🟢 🔴 🔍 ⚙️ 🛡 🖥 ✨ 🎬 📄`) with semantic Phosphor icons + colour classes.
-- **Delete `providerIcons.ts`** entirely. It's been dead since ADR 015 collapsed the per-provider dispatch surface, and the two consumer stubs returning `''` are removed in this chunk. Per CLAUDE.md "no backwards-compat hacks", we do not preserve the file as a re-export shim.
+- **Delete `providerIcons.ts`** entirely. It's been dead since ADR 015 collapsed the per-provider dispatch surface, and the two consumer stubs returning `''` are removed in this chunk. Per the project's "no backwards-compat hacks" principle, we do not preserve the file as a re-export shim.
 - **Convert the chat-bubble model badge** from a hand-rolled `<span v-html="providerIcon(...)" />` (which always rendered nothing) to `<Icon name="ph:hard-drives" />` — making explicit that every model in the local-only stack is local hardware.
 - **Specialist user emoji left untouched.** The icon picker in [SpecialistWizard.vue](../../../frontend/app/components/SpecialistWizard.vue) (`form.icon`, `iconOptions[]`) is end-user content — users choose an emoji to represent each specialist. That's user data, not chrome, and isn't governed by the icon system.
 

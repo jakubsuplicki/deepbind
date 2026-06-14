@@ -11,7 +11,7 @@ ADR 006 fixed the cryptographic primitive (Ed25519-signed offline license file, 
 
 - How a customer **starts using the app** before they have a license. ADR 006 implicitly assumed every customer arrives with a key.
 - Whether the annual renewal is **auto-charging** (subscription model) or **manual** (one-shot purchase).
-- What "past grace" means for a knowledge product where the canonical data store is already Markdown on disk per CLAUDE.md's source-of-truth doctrine.
+- What "past grace" means for a knowledge product where the canonical data store is already Markdown on disk per the project's source-of-truth doctrine.
 - Where the **public key gets embedded** at build time (sidecar only? Tauri + sidecar?).
 - How **trial state survives reinstall** without a server round-trip — the obvious "trial timestamp in app data" pattern lets a customer reset the trial by reinstalling.
 
@@ -25,7 +25,7 @@ A fresh install with no `license.json` present is **automatically in trial mode 
 
 The trial-start timestamp is written to the OS keychain (macOS Keychain / Windows Credential Manager / libsecret via the Tauri `keyring` plugin) under the same blob that ADR 006 §"Clock-tampering defense" already requires for the monotonic-state record. Reinstalling the app does **not** wipe the keychain entry, so reinstall does not reset the trial. A determined user can wipe their keychain to reset the trial, but doing so destroys all their saved passwords across every app they use — a high enough cost that it deters normal users. This matches ADR 006's "anti-tamper realism" doctrine: deter casual reset, accept that determined bypass is possible.
 
-**Trial duration: 30 days, not 14.** A knowledge product needs the customer to ingest their own content and live with it before deciding. Industry comparables for offline desktop tools (JetBrains, BBEdit, Beyond Compare, Sublime) sit at 30 days or longer. For the mid-market engineering buyer (20–200 seats), 14 days expires before legal/procurement review even completes. For the legal solo buyer, 14 days isn't long enough to test it on a real client matter. 30 days is the right default; an extension license can be issued out-of-band for genuine enterprise eval cycles (white-glove move, near-zero cost).
+**Trial duration: 30 days, not 14.** A knowledge product needs the customer to ingest their own content and live with it before deciding. Industry comparables for offline desktop tools (JetBrains, BBEdit, Beyond Compare, Sublime) sit at 30 days or longer. For the mid-market engineering operator (20–200 seats), 14 days expires before legal/procurement review even completes. For the legal solo operator, 14 days isn't long enough to test it on a real client matter. 30 days is the right default; an extension license can be issued out-of-band for genuine enterprise eval cycles (white-glove move, near-zero cost).
 
 **Trial vs paid feature parity.** A trial is *not* a crippled version. It runs the same feature set as a paid license — the only difference is the expiry date. Crippled trials are a SaaS pattern; for an offline desktop product where the customer has to evaluate against their own data, the trial must be the real product or the eval doesn't transfer. This is also the simplest implementation: no `is_trial: bool` flag in `LicenseClaims`, no per-feature gate forking, no surprise behaviour at conversion.
 
@@ -151,7 +151,7 @@ YubiKey 5 with PIV is the cheap migration path; cloud HSM (AWS CloudHSM / GCP Cl
 Higher trial→paid conversion (~60-70% vs ~10-20% for no-card trials), but adds the entire subscription primitive (Stripe subscriptions, recurring webhooks, dunning, payment-method-update flow) and stores card data we don't otherwise need. Rejected as too much architectural cost for the conversion delta. Auto-trial without card matches the offline-desktop-tool norm.
 
 ### B. Crippled trial (limited features, no Jira ingest, max 1 workspace, etc.)
-Common SaaS pattern; wrong fit for an offline knowledge product where the customer has to evaluate against their own data and content. A crippled trial that doesn't show real performance can't convert a buyer who needs to see real performance. Rejected.
+Common SaaS pattern; wrong fit for an offline knowledge product where the customer has to evaluate against their own data and content. A crippled trial that doesn't show real performance can't convert an operator who needs to see real performance. Rejected.
 
 ### C. Auto-renewal with stored card
 Industry default for SaaS-desktop hybrids. Strictly worse compliance posture (stored card, recurring billing relationship) for a customer base that explicitly values privacy and explicit consent. Rejected — the same reasoning that drove ADR 002's no-cloud constraint applies to billing.
@@ -197,7 +197,7 @@ A button that walks the workspace and emits a clean ZIP / JSON / portable format
 
 ## Implementation chunks (sequencing aid)
 
-Per CLAUDE.md, each chunk is architecturally complete on its own — no "passive surface now / active behavior later" splits.
+Per the project's engineering principles, each chunk is architecturally complete on its own — no "passive surface now / active behavior later" splits.
 
 1. **Build-time public-key embedding** — sidecar embeds the public key, dev fallback, build-script injection. Tests cover both paths. (No UI yet — this is the trust root.)
 2. **License load + verify at startup** — Tauri reads platform license path, calls sidecar verify endpoint, exposes entitlement state to frontend. New `services/entitlements.py` owns the state machine. Includes the keychain trial-start mechanism.

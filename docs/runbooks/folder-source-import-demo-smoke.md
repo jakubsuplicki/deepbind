@@ -2,7 +2,7 @@
 title: Folder Source Import Demo Smoke
 type: runbook
 status: active
-last_updated: 2026-05-18
+last_updated: 2026-06-14
 related_features:
   - folder-source-import
   - memory
@@ -11,7 +11,7 @@ related_features:
 
 # Folder Source Import Demo Smoke
 
-This runbook verifies the buyer-facing folder/source import demo flow end to end. It is meant for a packaged desktop build or a local desktop dev run, and it checks the trust contract as much as the happy path:
+This runbook verifies the folder/source import demo flow end to end. It is meant for a packaged desktop build or a local desktop dev run, and it checks the trust contract as much as the happy path:
 
 ```text
 choose source -> metadata scan -> review/exclude -> approve import -> local memory -> scoped question
@@ -28,7 +28,7 @@ The runbook does not prove formal compliance certification. It verifies the loca
 
 ## 1. Bundled Sample Dataset
 
-Goal: prove a first-time buyer can run the product demo without exposing their own files.
+Goal: prove a first-time user can run the product demo without exposing their own files.
 
 1. Open Memory, then open Import.
 2. Select Folder mode.
@@ -81,7 +81,7 @@ Use a folder with at least two issue types, such as an unsupported file and an e
 Pass criteria:
 
 - The review screen shows a needs-attention summary before import.
-- Row labels are buyer-readable, not raw reason codes.
+- Row labels are human-readable, not raw reason codes.
 - Repair hints explain what to do locally.
 - `Copy report` copies grouped reasons, relative affected paths, and hints.
 - The copied report does not include the absolute selected source root.

@@ -8,6 +8,14 @@
 
 **A pure-local AI workspace that remembers what matters.**
 
+> **Open source.** DeepFilesAI is released under the [Apache License 2.0](./LICENSE) and
+> developed in the open. It runs entirely on your machine — there is no hosted
+> service, no account, and no telemetry. Contributions are welcome; see
+> [CONTRIBUTING](./CONTRIBUTING.md), the [Code of Conduct](./CODE_OF_CONDUCT.md),
+> and the [Security Policy](./SECURITY.md). The project is at an early `0.1.0`
+> stage — expect rough edges, and check the [docs](./docs/overview.md) for the
+> current product shape.
+
 DeepFilesAI is a local-first personal knowledge, planning, and memory system. It runs as a desktop app with a local web UI, a local Python sidecar, a bundled Ollama runtime, and a Markdown workspace that stays on the user's machine.
 
 V1 is intentionally **pure local**:
@@ -41,7 +49,7 @@ The current source of truth is:
 - [ADR 015 — Single-target local-only stack](./docs/architecture/decisions/015-single-target-local-only-stack.md)
 - [ADR 020 — Web search dropped from v1](./docs/architecture/decisions/020-web-search-dropped-v1.md)
 
-Older planning docs may still mention Claude, Anthropic, OpenAI, Google, web search, browser-only operation, or cloud/provider switching. Those references are historical pre-pivot material unless an accepted ADR says otherwise.
+Some older docs may still mention Claude, Anthropic, OpenAI, Google, web search, browser-only operation, or cloud/provider switching. Those references are historical pre-pivot material unless an accepted ADR says otherwise.
 
 ---
 
@@ -319,7 +327,7 @@ deepbind/
 ├── desktop/      Tauri shell, sidecar build, release scripts
 ├── bootstrap/    local setup helpers
 ├── scripts/      root Node launchers
-├── docs/         ADRs, feature docs, runbooks, research
+├── docs/         ADRs, feature docs, concepts, runbooks
 └── samples/      developer-only fixtures
 ```
 

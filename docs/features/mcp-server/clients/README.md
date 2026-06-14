@@ -78,5 +78,5 @@ Other quick smoke tests:
 | `jarvis_get_preferences`, `jarvis_list_specialists`, `jarvis_workspace_stats` | 3 | Meta |
 | **Opt-in writes** (off by default) | 3 | Save preference, append note, summarize+save |
 
-See [`../README.md`](../README.md) and `docs/steps/step-24*-mcp-server.spec.md`
+See [`../README.md`](../README.md)
 for protocol details, cost classes, and per-tool budgets.

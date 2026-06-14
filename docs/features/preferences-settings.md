@@ -13,7 +13,7 @@ sources:
   - frontend/app/composables/usePreferences.ts
 depends_on: [workspace-onboarding, local-models, chat-model-probe]
 last_reviewed: 2026-05-04
-last_updated: 2026-05-04
+last_updated: 2026-06-14
 ---
 
 # Preferences & Settings
@@ -126,7 +126,7 @@ The section now defaults open (`:default-open="true"`) since it is the primary c
 
 ### AcknowledgementsSection — third-party attribution (added 2026-05-05)
 
-The Acknowledgements section surfaces the bundled-OSS attribution document at runtime so end users can read it without external network access. Closes [`docs/research/commercial-licensing-audit.md`](../research/commercial-licensing-audit.md) finding #5 (PDFium and other Apache/BSD/MPL-licensed bundled components require attribution to be shipped with binary distributions).
+The Acknowledgements section surfaces the bundled-OSS attribution document at runtime so end users can read it without external network access. PDFium and other Apache/BSD/MPL-licensed bundled components require attribution to be shipped with binary distributions.
 
 - **Source of truth:** [`docs/THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) — developer-readable in-repo file listing every bundled native binary, ML model weight, Python package, frontend npm package, and Rust crate with its license, upstream URL, and required attribution. Includes full reproductions of Apache-2.0, MIT, and BSD-3 license texts.
 - **Runtime fetch path:** [`frontend/public/THIRD-PARTY-NOTICES.md`](../../frontend/public/THIRD-PARTY-NOTICES.md) — a copy of the source-of-truth file shipped as a Nuxt static asset. The Vue panel fetches `/THIRD-PARTY-NOTICES.md` on mount, parses the markdown via `marked`, sanitises via `DOMPurify` (mirroring the existing chat-rendering pattern in `ChatPanel.vue`), and renders inside a scrollable card.

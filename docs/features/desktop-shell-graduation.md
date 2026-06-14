@@ -33,7 +33,7 @@ The spike proved the architecture compiles, signs, notarizes, and supervises chi
 | **G4b1–b5** | First-run orchestrator + wizard + ladder + memory-pressure swap + lightweight mode | ✅ done | 2026-04-30 |
 | **G4b6** | Cold-launch verification on the notarized bundle (fresh `<app_data>`) | ☐ pending (gated on chunk 7 of ADR 015) | — |
 
-Sequencing rationale (per [CLAUDE.md](../../CLAUDE.md) §"Pre-release" — rank by dependencies + ADR completeness, not user perception):
+Sequencing rationale (rank by dependencies + ADR completeness, not user perception):
 1. **G3 first** — pure frontend, validated through dev mode against the live `backend/main.py` without any PyInstaller rebuild. Closes the "frontend half" of ADR 003 §D's runtime-config injection contract.
 2. **G5 next** — backend feature, validated via tests + dev mode. Must land *before* G2 packages anything, otherwise G2 ships a backend whose first launch blocks the UI for ~minutes on a cold vault.
 3. **G2 then** — packages the real backend. Highest schedule risk per ADR 003 §"v1 schedule risk" because of fastembed ONNX + spaCy weights and the hidden-import surface.
@@ -215,7 +215,7 @@ Landed 2026-04-30. Both Apple notary submissions returned `status: Accepted`; bo
      - All FastAPI/uvicorn submodules (already worked out in `hello.spec`).
      - `fastembed`, `onnxruntime`, `tokenizers`.
      - `spacy`, `spacy.lang.en` (and any other model lang packs we use).
-     - `keyring`, `keyring.backends.macOS` (mac), `keyring.backends.Windows` (win), `keyrings.alt.file` (encrypted-file fallback per CLAUDE.md doctrine).
+     - `keyring`, `keyring.backends.macOS` (mac), `keyring.backends.Windows` (win), `keyrings.alt.file` (encrypted-file fallback per the project's secret-storage doctrine).
      - `pydantic_settings`, `httpx`, project routers/services/models packages (PyInstaller usually misses dynamic imports inside FastAPI routers).
    - Datas: bundled fastembed ONNX weights + spaCy model directory (under `backend/_bundled_models/` — checked into git LFS or fetched at build time; see §A of ADR amendment).
    - `upx=False` (confuses macOS hardened-runtime — verified during spike).

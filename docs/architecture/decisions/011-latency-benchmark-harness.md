@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-28
-**Related:** [ADR 010](010-conversation-replay-eval-harness.md) · [ADR 009](009-context-overflow-compaction.md) · [`docs/concepts/latency-baseline.md`](../../concepts/latency-baseline.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §11.3
+**Related:** [ADR 010](010-conversation-replay-eval-harness.md) · [ADR 009](009-context-overflow-compaction.md) · [`docs/concepts/latency-baseline.md`](../../concepts/latency-baseline.md)
 
 ## Context
 
@@ -14,7 +14,7 @@ This ADR commits to a sibling of [ADR 010](010-conversation-replay-eval-harness.
 
 ## Decision drivers
 
-1. **Reproducibility on customer hardware.** Numbers must be machine-anchored. M5 Pro 24 GB measurements are different artifacts from M4 Pro 24 GB or Windows + RTX 4090. Baselines are per-`(machine, model, knob_stack)`, not global.
+1. **Reproducibility on end-user hardware.** Numbers must be machine-anchored. M5 Pro 24 GB measurements are different artifacts from M4 Pro 24 GB or Windows + RTX 4090. Baselines are per-`(machine, model, knob_stack)`, not global.
 2. **Mirrors production exactly.** Ollama HTTP `chat` endpoint with `stream: true`, the canonical chat model loadout, the same `think: false` posture v1 ships with. What benchmark callers see is what shipped users experience.
 3. **Determinism for regression detection.** Temperature 0, fixed seed, fixed input → same scenario + same machine + same knob stack → comparable run.
 4. **Bootstrap CI on diffs, not fixed-percent tolerance.** The conversations harness already established the pattern in [`gate.py`](../../../backend/tests/eval/conversations/gate.py): paired bootstrap CI, verdict is `improvement` / `regression` / `equivalent` / `insufficient_data`. Fixed-percent thresholds are sloppy at small sample sizes; a CI that excludes zero is honest.
@@ -144,7 +144,7 @@ Rejected. Conversations measure answer quality at fixed temperature 0; latency m
 Rejected for the same reason ADR 010 was filed: numbers stop being credible the moment the developer has a stake in their direction. Freeze the baseline, swap one knob behind it, diff.
 
 ### D. CI on cloud GPU
-Rejected. The whole point is measuring on customer hardware tier. Cloud GPU tells us nothing about M-series Macs.
+Rejected. The whole point is measuring on the end-user hardware tier. Cloud GPU tells us nothing about M-series Macs.
 
 ### E. Reuse `OllamaChat` adapter from conversations
 Rejected. That adapter returns the complete response — wrong abstraction for TTFT measurement. The latency harness needs per-token timestamps from the streaming endpoint. Different concern, separate client.
@@ -171,7 +171,7 @@ Rejected. "10% tolerance" is sloppy at small sample sizes. Bootstrap CI is the s
 - New subtree `backend/tests/eval/latency/` (no changes to existing modules).
 - New ADR 011, new concept doc `docs/concepts/latency-baseline.md`.
 - Registry gains a new feature entry `latency-benchmark`; cross-links from `chat.md` and `local-models.md`.
-- No production-path changes. The harness is dev infra; nothing customer-facing imports from it.
+- No production-path changes. The harness is dev infra; nothing user-facing imports from it.
 
 ### What this does NOT change
 - Production chat / retrieval / local-models behavior is unchanged.
@@ -216,7 +216,7 @@ The chat-realistic improvement is 8×; the harness was never the issue, the mode
 
 1. **Canonical model for nightly grid is `qwen3:14b`** until ADR 012's self-test lands. `DEFAULT_MODELS_NIGHTLY` and `DEFAULT_MODELS_PR` updated accordingly.
 2. **`qwen3:30b-a3b` is excluded from the default model list** on this Ollama version. It can still be benchmarked explicitly (`--models qwen3:30b-a3b`) for diagnostic purposes, but its numbers should not be promoted to a canonical baseline.
-3. **Per-machine canonical-model selection moves to [ADR 012](012-chat-model-self-test.md)** — the self-test that runs on the customer's machine, probes correctness + fit + speed, and picks the best model for that environment. The latency harness grows a new role beyond dev infra: its scenario set + harness module become the runtime probe's measurement substrate.
+3. **Per-machine canonical-model selection moves to [ADR 012](012-chat-model-self-test.md)** — the self-test that runs on the user's machine, probes correctness + fit + speed, and picks the best model for that environment. The latency harness grows a new role beyond dev infra: its scenario set + harness module become the runtime probe's measurement substrate.
 
 ### Baseline-0 status
 

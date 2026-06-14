@@ -30,7 +30,7 @@ sources:
   - frontend/app/components/LinkIngestDialog.vue
 depends_on: [database, preferences-settings, ingest-benchmark]
 last_reviewed: 2026-05-18
-last_updated: 2026-05-18
+last_updated: 2026-06-14
 ---
 
 
@@ -110,7 +110,7 @@ Folder import skipped/failed review also comes from the manifest. `GET /api/sour
 
 Folder import limits are enforced before content extraction where possible. `source_import.limits` keeps scan, preview, file-size, approved-batch, archive, and current sequential-concurrency caps named in one place; scan and selection surfaces report visible reasons such as `scan_file_limit`, `file_too_large`, and `batch_size_limit` rather than silently trimming what becomes memory.
 
-Folder import completion summaries and history are also manifest-backed. `GET /api/source-import/imports/{batch_id}/completion` returns imported/skipped/failed/duplicate/warning counts, top imported file types/folders, and deterministic suggested questions without calling a model. The capped question list prioritizes fix-needed, structured-data, and email prompts before lower-specificity document prompts. `GET /api/source-import/imports?limit=...` lists recent source import batches so the dialog can reopen a prior batch's completion, skipped-file review, rescan, and remove controls after the original completion screen has been closed. The Memory page keeps the folder import dialog open for terminal folder batches so the buyer can use that completion surface; scan review summarizes skipped/unsupported files in a needs-attention callout, scan/rescan/skipped-file rows use readable labels plus fix-local hints for archive/encrypted/online-only/unsupported states, warning rows show affected files when the manifest has extractor warnings, "View imported notes" closes the modal and opens the first generated Markdown note in the imported folder, and clicking a suggested question starts chat with `import_batch_id`, so chat reads only Markdown notes recorded in that batch manifest for the first scoped answer.
+Folder import completion summaries and history are also manifest-backed. `GET /api/source-import/imports/{batch_id}/completion` returns imported/skipped/failed/duplicate/warning counts, top imported file types/folders, and deterministic suggested questions without calling a model. The capped question list prioritizes fix-needed, structured-data, and email prompts before lower-specificity document prompts. `GET /api/source-import/imports?limit=...` lists recent source import batches so the dialog can reopen a prior batch's completion, skipped-file review, rescan, and remove controls after the original completion screen has been closed. The Memory page keeps the folder import dialog open for terminal folder batches so the user can use that completion surface; scan review summarizes skipped/unsupported files in a needs-attention callout, scan/rescan/skipped-file rows use readable labels plus fix-local hints for archive/encrypted/online-only/unsupported states, warning rows show affected files when the manifest has extractor warnings, "View imported notes" closes the modal and opens the first generated Markdown note in the imported folder, and clicking a suggested question starts chat with `import_batch_id`, so chat reads only Markdown notes recorded in that batch manifest for the first scoped answer.
 
 The file is received by the router as a multipart upload, written to a temporary file, passed to `fast_ingest`, and the temporary file is always deleted in a `finally` block regardless of outcome.
 

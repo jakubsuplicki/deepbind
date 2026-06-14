@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-27 (initial), amended 2026-04-28 (crypto-layer scaffold + signing CLI landed)
-**Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 003](003-desktop-distribution-tauri-and-sidecars.md) · [`docs/research/deep-dive-licensing-architecture.md`](../../research/deep-dive-licensing-architecture.md) · [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §6, §11.4
+**Related:** [ADR 002](002-pure-local-product-shape.md) · [ADR 003](003-desktop-distribution-tauri-and-sidecars.md)
 
 ## Implementation status (2026-04-28)
 
@@ -29,13 +29,13 @@ The crypto layer is platform-independent: Ed25519 sign/verify works identically 
 
 ## Context
 
-V1 is sold per-seat into two opposite buyer archetypes: mid-market engineering firms (20–200 seats, some air-gapped, ITAR / CMMC-aware) and legal solos / boutiques (1–15 seats, post-Heppner privilege-conscious). The licensing-architecture deep dive ([`deep-dive-licensing-architecture.md`](../../research/deep-dive-licensing-architecture.md)) found these buyers want opposite things on almost every licensing surface — admin portal vs none, PO billing vs credit card, SCCM deployment vs DMG, SAML vs paste-a-key.
+V1 targets two opposite deployment profiles, licensed per-seat: mid-market engineering firms (20–200 seats, some air-gapped, ITAR / CMMC-aware) and legal solos / boutiques (1–15 seats, post-Heppner privilege-conscious). The licensing-architecture analysis found these operators want opposite things on almost every licensing surface — admin portal vs none, PO billing vs credit card, SCCM deployment vs DMG, SAML vs paste-a-key.
 
-The single primitive that serves both, per the research §11.4, is the **Ed25519-signed offline license file**. It is verified locally, requires zero network I/O at runtime, and can be delivered in any wrapper (paste-a-key for solos, admin-uploaded into a self-hostable seat appliance for firms).
+The single primitive that serves both is the **Ed25519-signed offline license file**. It is verified locally, requires zero network I/O at runtime, and can be delivered in any wrapper (paste-a-key for solos, admin-uploaded into a self-hostable seat appliance for firms).
 
 The architecture must also satisfy the no-cloud constraint of [ADR 002](002-pure-local-product-shape.md). A vendor-cloud licensing-as-a-service (Keygen.sh SaaS, LicenseSpring, Cryptolens) places a vendor domain in the customer trust path. That breaks the "your data never leaves your trust boundary" pitch even if no business data passes through it.
 
-This pattern is also what the buyer's existing engineering software already does. The CAD/CAE incumbents that preserved offline workflows — Siemens NX on-prem (FlexNet), MATLAB (File Installation Key + Network Concurrent), Ansys on-prem, PTC Creo on-prem, classic SolidWorks SNL — all license via signed file refreshed annually via controlled media. The vendors that retreated from offline (Autodesk named-user, 3DEXPERIENCE, Creo+) lost DIB and ITAR share and are the licensing deep-dive's cautionary tale. Asking a defense-sub or IP-sensitive engineering firm to license the AI tool the same way they already license their FEA solver is a procurement non-event.
+This pattern is also what the operator's existing engineering software already does. The CAD/CAE incumbents that preserved offline workflows — Siemens NX on-prem (FlexNet), MATLAB (File Installation Key + Network Concurrent), Ansys on-prem, PTC Creo on-prem, classic SolidWorks SNL — all license via signed file refreshed annually via controlled media. The vendors that retreated from offline (Autodesk named-user, 3DEXPERIENCE, Creo+) lost DIB and ITAR share and are the licensing deep-dive's cautionary tale. Asking a defense-sub or IP-sensitive engineering firm to license the AI tool the same way they already license their FEA solver is a procurement non-event.
 
 The licensing posture is a **corollary of [ADR 002](002-pure-local-product-shape.md), not an independent decision.** Once the inference path is committed to zero phone-home (because it touches the highest-sensitivity content in the firm — exactly the content the *Heppner* fact pattern turned on), allowing the licensing path to phone home buys nothing real. Real-time revocation is a comfort blanket against an abuse pattern (bulk over-deployment inside a legitimate customer) that no licensing model actually prevents without runtime check-in, and it costs both the architectural consistency of "zero outbound calls" and a vendor CDN log of "Firm X verified license on date Y" that a *Heppner*-style discovery motion would subpoena. Therefore: licensing verification is purely local too.
 
@@ -43,7 +43,7 @@ The licensing posture is a **corollary of [ADR 002](002-pure-local-product-shape
 
 1. **Zero network I/O at license check.** The product must run for arbitrary periods offline. Periodic phone-home is unacceptable.
 2. **No vendor admin portal.** A cloud admin surface knowing who has seats violates the no-third-party-data-flow promise and creates a subpoena target.
-3. **Cross-buyer common primitive.** Whatever the wrapper, the verification primitive must be identical for engineering and legal buyers.
+3. **Cross-deployment common primitive.** Whatever the wrapper, the verification primitive must be identical for engineering and legal operators.
 4. **Tamper resistance proportional to threat.** Bulk sharing inside a legitimate customer is the realistic leak; cracking is not. The deterrent is the embedded customer name and revocation through expiry, not anti-RE.
 5. **Forward-compatible with a self-hostable seat appliance.** Firms wanting centralized control should be able to add it later without re-cutting existing licenses.
 6. **Forward-compatible with per-vertical SKUs.** The license file must be able to scope which install presets / model bundles the customer is entitled to, even though v1 doesn't use this. The `allowed_profiles` field is preserved in `LicenseClaims` for whatever install-footprint scoping mechanism replaces v1's "single-bundle" default.
@@ -70,24 +70,24 @@ The license is a **signed JSON file**, signed by us with an Ed25519 private key.
 
 ### Activation flow
 
-1. Sales closes a deal. We run the signing service (a private Rails or FastAPI app on our infrastructure — never customer-touched) and produce a signed license file.
+1. When a license is issued, the signing service (a private Rails or FastAPI app on our infrastructure — never customer-touched) produces a signed license file.
 2. The file is delivered out-of-band: email attachment, admin upload to the firm's seat-management appliance, or pre-staged on a managed-deployment image. We never operate a customer-facing activation server.
 3. Customer activates via one of three paths (see *Delivery UX* below): (a) opens the app and pastes the license block into the first-run screen, (b) double-clicks the `.deepfileslic` attachment from the welcome email — the installer registered the file association so the app handles writing to disk, (c) IT pre-deploys the file at `~/Library/Application Support/Jarvis/license.json` (Mac) / `%APPDATA%\Jarvis\license.json` (Windows) via Jamf / Intune / SCCM.
 4. App verifies the signature against the embedded public key. If valid and not expired, all entitled features unlock at the **service layer** — not the UI layer. UI gates are bypassable; service-layer gates survive a debugger console.
 
 ### Delivery UX
 
-The buyer profile is split between firms with no IT (legal solos, boutique engineering under 20 people) and firms with IT (mid-market engineering 20–200 seats). The licensing UX must not assume IT.
+The operator profile is split between firms with no IT (legal solos, boutique engineering under 20 people) and firms with IT (mid-market engineering 20–200 seats). The licensing UX must not assume IT.
 
-**For the no-IT buyer (default):**
+**For the no-IT operator (default):**
 
 1. **Email delivery.** When billing clears, the signing service emails the customer two artifacts: a `.deepfileslic` attachment and a paste-able text block (Sublime-style `BEGIN LICENSE … END LICENSE`).
 2. **File-extension association.** The installer registers `.deepfileslic` as a Jarvis-handled file type (UTI on macOS, registry on Windows). Double-clicking the attachment launches the app and installs the license. The customer never navigates to `~/Library/Application Support/`.
 3. **First-run paste-a-key screen.** On an unlicensed install, the first-run screen accepts the text block via paste. Same effect as the file-association path.
-4. **Self-service resend page.** If the buyer loses the file or installs on a new machine, a static page on our site accepts email + customer name and re-mails the file. This is **not** a customer-facing activation server in the [ADR 002](002-pure-local-product-shape.md) sense — the *app* never talks to it; it is a one-shot lookup against the issuance log. The distinction matters because the no-vendor-admin-portal rule forbids the former, not the latter.
+4. **Self-service resend page.** If the operator loses the file or installs on a new machine, a static page on our site accepts email + customer name and re-mails the file. This is **not** a customer-facing activation server in the [ADR 002](002-pure-local-product-shape.md) sense — the *app* never talks to it; it is a one-shot lookup against the issuance log. The distinction matters because the no-vendor-admin-portal rule forbids the former, not the latter.
 5. **Buy-from-app affordance.** The first-run screen carries a "Buy a license" button that opens a browser to checkout. On payment success the welcome email arrives. This is the Sketch / Sublime entry pattern.
 
-**For the IT-managed buyer (20+ seats):** the same `.deepfileslic` file is delivered to the firm's IT contact, who scripts deployment to the standard path via their existing endpoint-management tool. The cryptographic primitive is identical; only the wrapper differs.
+**For the IT-managed operator (20+ seats):** the same `.deepfileslic` file is delivered to the firm's IT contact, who scripts deployment to the standard path via their existing endpoint-management tool. The cryptographic primitive is identical; only the wrapper differs.
 
 ### Renewal
 
@@ -101,15 +101,15 @@ Billing is annual. The license file is the contract artifact: its expiry is the 
 
 Pure month-to-month billing is not offered. The trilemma — monthly billing, offline-signed file, working revocation — is unsolvable without phone-home. With offline files there is no mechanism to stop a license issued for 13 months when the second monthly payment fails, so month-to-month billing would deliver up to a year of access for one month of payment. This is enforced by the architecture, not by a pricing preference.
 
-For buyers who need monthly cash-flow on the engineering-firm side, multi-year prepay (2-year / 3-year) at standard CAD/CAE-procurement discounts (-10% / -15%) is offered. PO and NET-30 are offered at the engineering-firm tier; credit-card auto-renew is offered at the legal-solo tier. Both produce the same annual signing event and the same annual file.
+For operators who need monthly cash-flow on the engineering-firm side, multi-year prepay (2-year / 3-year) at standard CAD/CAE-procurement discounts (-10% / -15%) is offered. PO and NET-30 are offered at the engineering-firm tier; credit-card auto-renew is offered at the legal-solo tier. Both produce the same annual signing event and the same annual file.
 
 ### Revocation
 
-There is no real-time revocation. "Revoke" means "do not issue the next renewal." A stolen license remains valid until expiry. This is the explicit trade — the cost of zero phone-home is revocation latency. The research record accepts this trade for both buyer profiles.
+There is no real-time revocation. "Revoke" means "do not issue the next renewal." A stolen license remains valid until expiry. This is the explicit trade — the cost of zero phone-home is revocation latency. The research record accepts this trade for both operator profiles.
 
 ### Seat enforcement
 
-Seats are honor-system + customer-name embedding. The license file says "Acme, 20 seats" — the buyer cannot easily re-share that file outside Acme without the recipient's machine displaying "Acme" as the licensed entity. Bulk over-deployment inside the customer is the realistic abuse pattern, and the licensing research notes it is also the dominant abuse pattern across every desktop ISV in this space; no SaaS license server prevents it without active phone-home.
+Seats are honor-system + customer-name embedding. The license file says "Acme, 20 seats" — the operator cannot easily re-share that file outside Acme without the recipient's machine displaying "Acme" as the licensed entity. Bulk over-deployment inside the customer is the realistic abuse pattern, and the licensing research notes it is also the dominant abuse pattern across every desktop ISV in this space; no SaaS license server prevents it without active phone-home.
 
 **The growing-customer case (between v1 and v1.5).** A customer purchases 20 seats in January and grows to 100 deployments by July. The signed file says "Acme, 20 seats" and continues to verify on every machine — there is no runtime check that fails. Three layers handle this gap:
 
@@ -163,10 +163,10 @@ Mature, well-documented, supports offline tokens. Places a vendor domain in the 
 Industry default for SaaS-desktop hybrids (JetBrains, 1Password, Figma). Refreshes every N days; revokes near-real-time. Requires phone-home; incompatible with [ADR 002](002-pure-local-product-shape.md). **Rejected.**
 
 ### C. Hardware dongles (Thales Sentinel HL)
-Bulletproof for true air-gap; lossy for mobile users; cost-per-unit hits margin. Niche fit (specialty CAM / EDA / CFD); over-engineered for this buyer. **Rejected as default.** Could be added as a premium SKU for ITAR-classified work post-revenue.
+Bulletproof for true air-gap; lossy for mobile users; cost-per-unit hits margin. Niche fit (specialty CAM / EDA / CFD); over-engineered for this operator. **Rejected as default.** Could be added as a premium SKU for ITAR-classified work post-revenue.
 
 ### D. Honor-system, no enforcement (Obsidian-style)
-Works for low-piracy buyer bases. Engineering and legal procurement *expect* a license file as a paper trail; no-enforcement leaves enterprise revenue on the table by failing the procurement-paper-trail requirement. **Rejected** — the file is the artifact, even if enforcement is light.
+Works for low-piracy operator bases. Engineering and legal procurement *expect* a license file as a paper trail; no-enforcement leaves enterprise revenue on the table by failing the procurement-paper-trail requirement. **Rejected** — the file is the artifact, even if enforcement is light.
 
 ### E. Smart contracts / blockchain
 **Rejected** without further comment.
@@ -175,7 +175,7 @@ Works for low-piracy buyer bases. Engineering and legal procurement *expect* a l
 
 ### Positive
 - Zero phone-home satisfies CMMC L2 / Heppner / strict ITAR posture out of the box.
-- Cross-buyer-portable: same primitive serves the 5-seat law boutique pasting a key and the 200-seat engineering firm uploading via their self-hostable appliance.
+- Cross-operator-portable: same primitive serves the 5-seat law boutique pasting a key and the 200-seat engineering firm uploading via their self-hostable appliance.
 - Renewal is "we email a new file" — simple, predictable, low-tech.
 - No vendor-side data store of "who has seats" → no subpoena target → no breach surface.
 - Forward-compatible with the v1.5 self-hostable appliance and the per-vertical SKU mechanic without re-cutting the v1 license shape.
@@ -183,7 +183,7 @@ Works for low-piracy buyer bases. Engineering and legal procurement *expect* a l
 ### Negative
 - Revocation latency = grace window (~30 days). Mitigated by the customer relationship, not technology.
 - No usage telemetry of any kind. We don't know which customers are active, which features they use, when they renew. Pricing and product decisions inform from sales conversations, not dashboards.
-- Bulk-sharing inside a customer is undetectable. Mitigated by embedded customer-name visibility and the buyer's own internal procurement controls (which exist in both buyer profiles).
+- Bulk-sharing inside a customer is undetectable. Mitigated by embedded customer-name visibility and the operator's own internal procurement controls (which exist in both operator profiles).
 - The signing service is our infrastructure — small, but real (private VPS, key custody, audit log of issued licenses). One operational thing to own.
 
 ### What this changes about existing code

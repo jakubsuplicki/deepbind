@@ -22,7 +22,7 @@ sources:
   - frontend/app/components/ChatPanel.vue
   - frontend/app/components/TraceList.vue
 depends_on: [retrieval, sessions, specialists, preferences-settings, local-models]
-last_updated: 2026-05-17
+last_updated: 2026-06-14
 last_reviewed: 2026-05-05
 ---
 
@@ -105,7 +105,7 @@ How a turn is compacted:
 3. **System-prompt budget enforcement.** `build_system_prompt_with_stats` now accepts `system_prompt_budget_tokens` and `tokenizer_id`. The chat router computes the budget as `0.30 × effective_context_tokens` of the active model. When the assembled prompt exceeds budget, `_enforce_system_prompt_budget` truncates the retrieved-context block (not the base persona, not the language reminder) until it fits, keeping highest-priority retrieved content first. The `prompt_stats["context_truncated"]` field surfaces whether truncation kicked in.
 4. **Per-turn compaction.** `compact_messages` in `backend/services/compaction_service.py` is called with `effective_context_tokens`, `tokenizer_id`, and the system-prompt token count. It strips `<think>...</think>` scratchpad blocks unconditionally, then checks if the projected token total exceeds the proactive trigger (default 70%). When the trigger fires, it cuts at the `recent_n`-th-to-last *real* user-turn boundary (tool_result-only user messages don't count), reaches into the markdown vault via `find_earlier_turn_context` for the top `top_k` matches against the latest user turn, and prepends a synthesized user-role substitution block.
 5. **Atomicity (ADR 009 §"Atomicity").** Compaction runs **only** at the per-turn boundary in `_handle_message`, never inside the tool-call loop in `_stream_follow_up`. Mid-loop compaction would risk re-assembling between a `tool_use` block and its matching `tool_result`, which the provider rejects. The mid-loop `_compact_stale_tool_results` handles the only safe in-loop compaction (collapsing prior tool_result payloads).
-6. **Audit trail (ADR 009 §"Audit trail").** Every compaction event is recorded on the session row via `session_service.record_compaction_event` and persisted into the saved session JSON. The event captures `{timestamp, turns_dropped, summary_used, recent_window_size, effective_ctx_at_event, tokens_before, tokens_after, threshold_pct, retrieval_paths, reason}`. Compliance buyers can see exactly what the model "saw" at each turn alongside the per-turn `model_id`.
+6. **Audit trail (ADR 009 §"Audit trail").** Every compaction event is recorded on the session row via `session_service.record_compaction_event` and persisted into the saved session JSON. The event captures `{timestamp, turns_dropped, summary_used, recent_window_size, effective_ctx_at_event, tokens_before, tokens_after, threshold_pct, retrieval_paths, reason}`. Compliance auditors can see exactly what the model "saw" at each turn alongside the per-turn `model_id`.
 7. **WS surfacing.** When compaction fires the router emits a `compaction` event over the WebSocket carrying the same numbers as the audit event. The frontend in-active-context indicator and pin-turn affordances (separate ADR 009 §"UI surface" chunk) attach here.
 
 Token counting uses the HuggingFace `tokenizers` package via `services.token_counting`, which lazily loads the per-model tokenizer (`Qwen/Qwen3-8B`, `ibm-granite/granite-4.0-h-micro`, etc.) and caches it for the process. When the tokenizer is unavailable (offline, gated, missing), the wrapper falls back to a `chars / 4` estimator — same approximation the codebase used pre-ADR-009. Token counts are accurate to the active model on Polish/Chinese/Japanese/Arabic content, where the char/4 approximation drifts 20–40%.
@@ -159,7 +159,7 @@ Originally added to confirm the per-turn TTFT regression; kept as ongoing diagno
 
 The eval-pinned canonical chat model is currently `qwen3:14b`. This was changed from `qwen3:30b-a3b` on 2026-04-28 after the latency benchmark surfaced a chain-of-thought leak on Ollama 0.18.0 — the 30B-A3B emits internal monologue despite `think: false`, producing 8× worse perceived latency on realistic chat. See [ADR 010 Issue 4](../architecture/decisions/010-conversation-replay-eval-harness.md#issue-4-2026-04-28-evening--qwen3-30b-a3b-thinkfalse-leak-canonical-chat-model-swap-to-qwen3-14b) for the full reproduction.
 
-The "single hard-coded canonical model" choice is the wrong shape long-term — different customer environments have different `think: false` behavior, hardware tiers, and RAM budgets. [ADR 012](../architecture/decisions/012-chat-model-self-test.md) files the install-time self-test that replaces this static choice with a per-machine probe-driven pick. Implementation: [`backend/services/chat_model_probe.py`](../../backend/services/chat_model_probe.py).
+The "single hard-coded canonical model" choice is the wrong shape long-term — different deployment environments have different `think: false` behavior, hardware tiers, and RAM budgets. [ADR 012](../architecture/decisions/012-chat-model-self-test.md) files the install-time self-test that replaces this static choice with a per-machine probe-driven pick. Implementation: [`backend/services/chat_model_probe.py`](../../backend/services/chat_model_probe.py).
 
 ### Error handling in OllamaDispatcher
 

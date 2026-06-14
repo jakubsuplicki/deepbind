@@ -2,7 +2,7 @@
 title: G4b6 — Cold-launch Verification on the Notarized Bundle
 type: runbook
 status: active
-last_updated: 2026-05-06
+last_updated: 2026-06-14
 related_adrs:
   - 003-desktop-distribution-tauri-and-sidecars
   - 005-profile-driven-model-stacks
@@ -14,7 +14,7 @@ related_features:
 
 # G4b6 — Cold-launch verification on the notarized bundle
 
-End-to-end verification that the notarized DeepFilesAI bundle behaves correctly for a first-time customer install — fresh `<app_data>`, fresh keychain, no prior marker, no dev artifacts. This is the empirical gate at the bottom of [`docs/features/desktop-shell-graduation.md`](../features/desktop-shell-graduation.md#g4b6----cold-launch-verification-on-the-notarized-bundle); pass means desktop shell graduation closes, fail means each finding becomes a follow-up chunk before re-attempt.
+End-to-end verification that the notarized DeepFilesAI bundle behaves correctly for a first-time user install — fresh `<app_data>`, fresh keychain, no prior marker, no dev artifacts. This is the empirical gate at the bottom of [`docs/features/desktop-shell-graduation.md`](../features/desktop-shell-graduation.md#g4b6----cold-launch-verification-on-the-notarized-bundle); pass means desktop shell graduation closes, fail means each finding becomes a follow-up chunk before re-attempt.
 
 The test loop is expected to surface real bugs (sidecar path resolution under Gatekeeper, `.deepfileslic` file-association flow, first-run wizard timing under bundle-mode, missing bundled assets). The build pipeline was split 2026-05-06 ([`build-dmg.sh`](../../desktop/scripts/build-dmg.sh)) so a transient `.dmg`-phase flake during retries doesn't cost the full 25-min .app rebuild.
 
@@ -50,7 +50,7 @@ security delete-generic-password -s "com.deepfilesai.desktop" -a "trial_started_
 security delete-generic-password -s "com.deepfilesai.desktop" -a "monotonic_floor"   2>/dev/null || true
 ```
 
-Then drag the `.app` from the mounted `.dmg` to `/Applications/` exactly like a customer would. **Do not run from `desktop/src-tauri/target/...` — that's the dev path; run from `/Applications/DeepFilesAI.app` to hit the same Gatekeeper code path a customer hits.**
+Then drag the `.app` from the mounted `.dmg` to `/Applications/` exactly like a user would. **Do not run from `desktop/src-tauri/target/...` — that's the dev path; run from `/Applications/DeepFilesAI.app` to hit the same Gatekeeper code path a user hits.**
 
 ---
 
@@ -129,7 +129,7 @@ What's happening behind the scenes:
 The default model per [ADR 005](../architecture/decisions/005-profile-driven-model-stacks.md) is hardware-tiered. On M5 Pro 24 GB you should get qwen3-8b or qwen3-14b. The pull is ~5-9 GB depending on tier, so this step takes 5-15 min on a typical home network.
 
 > **Fail modes:**
-> - **Pull starts then errors.** Open `~/Library/Logs/DeepFilesAI/*.log` and grep for `pull failed`. Usually a network issue — Ollama's pull endpoint hits `registry.ollama.ai` over HTTPS. Customer firewalls may block this.
+> - **Pull starts then errors.** Open `~/Library/Logs/DeepFilesAI/*.log` and grep for `pull failed`. Usually a network issue — Ollama's pull endpoint hits `registry.ollama.ai` over HTTPS. Local firewalls may block this.
 > - **Pull completes but chat doesn't open.** `chatReady` event didn't fire. Check the Tauri shell log for the WebSocket emit; check the frontend devtools console (Cmd+Opt+I — only works if the build was made with devtools enabled; production builds disable this).
 > - **Chat opens but first message hangs.** Ollama generate failed. From a terminal: `curl -X POST http://127.0.0.1:11435/api/generate -d '{"model":"qwen3:8b","prompt":"hi","stream":false}'`. SIGABRT in the runner = the M5/Metal 4 issue (should be impossible since we pin Ollama 0.18.0; if it happens anyway, the bundled binary isn't actually 0.18.0 — `/Applications/DeepFilesAI.app/Contents/Resources/ollama-runtime/ollama --version` will say).
 

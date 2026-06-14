@@ -7,7 +7,7 @@ last_reviewed: 2026-05-01
 
 DeepFilesAI (codename: Jarvis) is a local-first personal memory, planning, and knowledge system shipped as a notarized macOS desktop app. It provides a Tauri-hosted web interface to a local Markdown knowledge base, powered by an Ollama-hosted local LLM that runs in-process on the user's machine. All user data stays on disk as Markdown files — SQLite and graph layers are derived indexes that can be rebuilt from scratch.
 
-Per [ADR 002](architecture/decisions/002-pure-local-product-shape.md) and [ADR 015](architecture/decisions/015-single-target-local-only-stack.md), the v1 product is **pure-local with zero outbound calls by default**: no cloud-provider SDKs in the binary, no LiteLLM, no API-key UI, no cloud-SKU build target. The audit signal is structural — a buyer running `find DeepFilesAI.app -name '*anthropic*' -o -name '*openai*'` gets empty output.
+Per [ADR 002](architecture/decisions/002-pure-local-product-shape.md) and [ADR 015](architecture/decisions/015-single-target-local-only-stack.md), the v1 product is **pure-local with zero outbound calls by default**: no cloud-provider SDKs in the binary, no LiteLLM, no API-key UI, no cloud-SKU build target. The audit signal is structural — an auditor running `find DeepFilesAI.app -name '*anthropic*' -o -name '*openai*'` gets empty output.
 
 ## Architecture
 

@@ -2,7 +2,7 @@
 
 **Status:** open · under evaluation
 **Date:** 2026-04-24
-**Related:** [`docs/research/product-direction-v1-v2.md`](../../research/product-direction-v1-v2.md) §4
+**Related:** [ADR 002](002-pure-local-product-shape.md)
 
 ## Context
 
@@ -14,7 +14,7 @@ The product-direction doc currently records peer-to-peer mesh (Syncthing / Autom
 
 ## The reframe
 
-`CLAUDE.md` commits to:
+The project's source-of-truth doctrine commits to:
 - Markdown files in `DeepFilesAI/memory/` as the canonical store.
 - SQLite is an operational index (rebuildable from Markdown).
 - Graph is derived (rebuildable from Markdown).
@@ -30,7 +30,7 @@ This reframe unlocks options where the sync mechanism is not something DeepFiles
 3. **Offboarding must match existing firm process.** When someone leaves, the firm's existing "revoke access to client files" procedure must also remove their access to the shared knowledge layer.
 4. **Offline-first is non-negotiable.** Every peer must function without network connectivity, including shared-vault queries against a local mirror.
 5. **Engineering budget is small.** A V2 that takes 12–18 months to ship correctly is a V2 that doesn't get shipped. A V2 that takes 2–4 months plus good UX work ships.
-6. **The strictest buyers (ITAR, defence subs, post-*Heppner* absolutists) need a stricter mode.** Whatever the default is, a pure-mesh no-third-party-storage mode must also be reachable.
+6. **The strictest deployments (ITAR, defence subs, post-*Heppner* absolutists) need a stricter mode.** Whatever the default is, a pure-mesh no-third-party-storage mode must also be reachable.
 
 ## Options under evaluation
 
@@ -50,7 +50,7 @@ Shared vault lives in a folder inside the firm's existing shared storage. Their 
 - **Pro:** offboarding is existing process — revoke folder access.
 - **Pro:** sync problem is solved by the storage vendor; no CRDT engineering.
 - **Pro:** works offline — sync clients all cache locally.
-- **Con:** data now touches a third party, so the "never leaves your laptop" pitch weakens to "never leaves your firm's trust boundary." For most Tier-5 targets this is the same sentence. For ITAR / defence / strict post-*Heppner* buyers it is not.
+- **Con:** data now touches a third party, so the "never leaves your laptop" pitch weakens to "never leaves your firm's trust boundary." For most Tier-5 targets this is the same sentence. For ITAR / defence / strict post-*Heppner* deployments it is not.
 - **Con:** concurrent-write semantics are vendor-specific; some conflict-file UX work required.
 - **Con:** derived files (SQLite index, embeddings binaries) should *not* go through the sync — they rebuild locally. This means a `.deepfiles-cache/` pattern outside the synced folder.
 
@@ -101,11 +101,11 @@ Default shape is B or C. If the shared storage is unreachable (Dropbox outage, N
 
 ## Recommendation (tentative — not decided)
 
-Ship **B (cloud-storage piggyback) as the default V2 shape**, with **A (pure mesh) as the strict-mode option** for ITAR / defence / strict-privilege buyers. Skip C, D, E, F for V2 — add them only if specific customers ask.
+Ship **B (cloud-storage piggyback) as the default V2 shape**, with **A (pure mesh) as the strict-mode option** for ITAR / defence / strict-privilege deployments. Skip C, D, E, F for V2 — add them only if specific deployments require it.
 
 Rationale:
-1. B has the lowest engineering cost and the smallest compliance delta for Tier-5 targets, who are the buyers the wedge was chosen for.
-2. A preserves the strongest-possible pitch for the 5–10% of buyers who genuinely need it, without forcing that cost on everyone.
+1. B has the lowest engineering cost and the smallest compliance delta for Tier-5 targets, who are the deployments the wedge was chosen for.
+2. A preserves the strongest-possible guarantee for the 5–10% of deployments that genuinely need it, without forcing that cost on everyone.
 3. The two modes share the same data shape (Markdown vault + rebuildable derived layers), so a customer can migrate from B to A without a re-ingest.
 
 **This is not committed.** The decision is blocked on:
@@ -115,8 +115,8 @@ Rationale:
 
 ## Alternatives rejected outright
 
-- **Central GPU box + Tailscale (the old hybrid).** See §2 of product-direction-v1-v2.md.
-- **Multi-tenant vendor cloud.** See §7 of product-direction-v1-v2.md — US$1M+ compliance trap pre-revenue.
+- **Central GPU box + Tailscale (the old hybrid).** Reintroduces a new machine that needs patching, backups, access control, and an owner — the compliance surface the wedge is built to avoid.
+- **Multi-tenant vendor cloud.** A US$1M+ compliance trap pre-revenue.
 - **Vendor-domain admin portal + seat management.** Breaks the "your data never leaves your trust boundary" pitch.
 
 ## What V1 must not foreclose
@@ -141,5 +141,5 @@ Regardless of which V2 shape wins, V1 must preserve these properties so V2 isn't
 1. Do Tier-5 targets (patent boutiques, expert witnesses, mining shops <20 people) already have shared cloud storage they trust? Evidence-gathering question for customer conversations.
 2. Does Dropbox Business / OneDrive / SharePoint's conflict-file behaviour survive real-world concurrent writes cleanly enough to ship B as a default?
 3. Is there a clean identity story in B mode (who wrote this change?) without reintroducing a vendor-domain admin portal? Likely: read the storage vendor's audit log via their API as an opt-in; fall back to local signing of every write with the author's Ed25519 key.
-4. Does the legal vertical's post-*Heppner* privilege story hold for B mode, or does B effectively force legal buyers onto A mode? This changes whether B or A is the "default."
+4. Does the legal vertical's post-*Heppner* privilege story hold for B mode, or does B effectively force legal deployments onto A mode? This changes whether B or A is the "default."
 5. What's the minimum viable CRDT for V2 strict mode? Files only (Automerge per file, no graph CRDT) vs. files + graph? Can the graph stay derived even in strict mode?

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-27 (initial), amended 2026-04-28 (first-run findings + depth-pressure fixtures + retrieval-substitution-v1 implemented)
-**Related:** [ADR 009](009-context-overflow-compaction.md) · [`docs/concepts/eval-baseline.md`](../../concepts/eval-baseline.md) · [`docs/research/models/model-research-3.md`](../../research/models/model-research-3.md) · [`docs/research/models/model-research-4.md`](../../research/models/model-research-4.md)
+**Related:** [ADR 009](009-context-overflow-compaction.md) · [`docs/concepts/eval-baseline.md`](../../concepts/eval-baseline.md)
 
 ## Context
 
@@ -19,7 +19,7 @@ The trap to avoid: writing the feature, then writing the eval. Numbers stop bein
 3. **Diffable baselines.** Match the existing `step-28c.json` pattern — committed JSON, sorted keys, stable per-fixture record. `git diff` is the regression review.
 4. **Mechanical floor + judged supplementary signal.** Per-turn `expected_facts` checks (string/fuzzy match) are the load-bearing signal. LLM-as-judge is supplementary, used to detect quality regressions mechanical assertions miss (voice, coherence, partial-answer fluency).
 5. **No self-judging.** The chat model is biased toward outputs that look like its own; a cross-model judge (different family or strictly stronger same-family) is the right tool.
-6. **Chat under test runs locally; judge runs wherever is practical.** Customer machines never run this; dev hardware does. ADR 002's no-cloud constraint applies to shipped product, not to dev infra. The chat model under test stays local — it's what we ship and we want to evaluate the actual production stack. The judge model has no shipped-product equivalent: it's a measurement tool. Running it as a hosted API call (Claude / GPT) is acceptable for eval-only use, since fixtures are hand-authored and contain no customer data. The local 235B judge is the upgrade path once Tier C dev hardware exists, not a launch prerequisite.
+6. **Chat under test runs locally; judge runs wherever is practical.** End-user machines never run this; dev hardware does. ADR 002's no-cloud constraint applies to shipped product, not to dev infra. The chat model under test stays local — it's what we ship and we want to evaluate the actual production stack. The judge model has no shipped-product equivalent: it's a measurement tool. Running it as a hosted API call (Claude / GPT) is acceptable for eval-only use, since fixtures are hand-authored and contain no user data. The local 235B judge is the upgrade path once Tier C dev hardware exists, not a launch prerequisite.
 7. **Pluggable strategies.** Same harness must evaluate ADR 009 (compaction) and any future swap (e.g., retrieval-substitution-v2, summary-fallback variants). Strategy is a first-class abstraction.
 
 ## Decision
@@ -90,8 +90,8 @@ Pinned: model, quant, temperature (0.0 for the eval; production runs at higher t
 The judge model is conditional on the eval-side hardware available. Three configurations, ranked by current practicality given the project's actual dev hardware (24 GB Apple Silicon as the primary) and a "judge is supplementary" posture:
 
 **Default (current hardware) — hosted Claude or GPT, eval-only.** A frontier-tier hosted model (e.g., `claude-opus`, `claude-sonnet`, `gpt-4`-class) called from the runner via API on the developer's machine. This is acceptable under ADR 002 because:
-- The eval is dev infra; nothing in this code path runs on customer machines.
-- Fixtures are hand-authored; they contain no customer data, no internal IP, nothing that wouldn't be acceptable to send to a third party.
+- The eval is dev infra; nothing in this code path runs on end-user machines.
+- Fixtures are hand-authored; they contain no user data, no internal IP, nothing that wouldn't be acceptable to send to a third party.
 - The judge is a measurement tool, not a shipped-product component — it has no analogue in production behavior.
 
 The cost is small: ~19 fixtures × 3 strategy pairs × 2 orders × 3 seeds ≈ 340 judgments per full-grid run at the current suite size, at roughly 5K-in / 200-out per judgment — still pennies per run. Scales linearly with fixture count.
@@ -242,7 +242,7 @@ Rejected. Judges drift, anchor on fluency, can't catch confabulation against gro
 Rejected. String/fuzzy match passes when the answer is technically correct but incoherent or off-tone. Both signals together separate "right facts, wrong shape" from "right shape, wrong facts."
 
 ### F. Hosted Claude / GPT as judge (eval-only — not shipped)
-**Accepted as the default for current hardware.** The original draft rejected this; revisited and flipped because the project's actual dev hardware is 24 GB Apple Silicon and neither the local 235B (Tier C) nor the 80B fallback (Tier B) fits. Blocking eval work on hardware that doesn't yet exist costs more than the trade we'd make by adopting a local judge. The hosted judge runs on dev hardware against hand-authored fixtures with no customer data; ADR 002's no-cloud constraint scopes to shipped product. The local 235B judge is recorded as the upgrade path, swappable behind the `JudgeProvider` interface once Tier C dev hardware exists. The "the eval depended on a hosted API that changed" risk is real but small at ~180 judgments per run, with the protocol abstracted enough that switching providers (Anthropic → OpenAI → local) is a config change, not a rewrite.
+**Accepted as the default for current hardware.** The original draft rejected this; revisited and flipped because the project's actual dev hardware is 24 GB Apple Silicon and neither the local 235B (Tier C) nor the 80B fallback (Tier B) fits. Blocking eval work on hardware that doesn't yet exist costs more than the trade we'd make by adopting a local judge. The hosted judge runs on dev hardware against hand-authored fixtures with no user data; ADR 002's no-cloud constraint scopes to shipped product. The local 235B judge is recorded as the upgrade path, swappable behind the `JudgeProvider` interface once Tier C dev hardware exists. The "the eval depended on a hosted API that changed" risk is real but small at ~180 judgments per run, with the protocol abstracted enough that switching providers (Anthropic → OpenAI → local) is a config change, not a rewrite.
 
 ### G. Absolute (1–5) scoring instead of pairwise
 Rejected. Absolute scoring is dramatically less reliable than pairwise across the LLM-judge literature. The implementation cost difference is small.
@@ -432,7 +432,7 @@ The second run is the one that actually answers ADR 009's question. The first ru
 ## Open follow-ups (non-blocking)
 
 1. **Fixture-schema versioning.** Add `schema_version` to fixture JSON and to baselines. Re-recording protocol when tool surface or expected-facts schema changes.
-2. **Local-judge upgrade trigger.** Define the criteria for swapping the default hosted judge to a local model: (a) Tier C dev hardware in place; (b) hosted-judge cost or rate-limit becoming material at the harness's run cadence; (c) a customer-facing reason to claim "the eval is fully local" (none expected, but worth recording). Until at least one of those is true, hosted-default is correct.
+2. **Local-judge upgrade trigger.** Define the criteria for swapping the default hosted judge to a local model: (a) Tier C dev hardware in place; (b) hosted-judge cost or rate-limit becoming material at the harness's run cadence; (c) an external-facing reason to claim "the eval is fully local" (none expected, but worth recording). Until at least one of those is true, hosted-default is correct.
 3. **Per-vertical fixture shards.** Legal / engineering / medical workloads have different conversation patterns. Once vertical-specific behavior diverges, fixtures fork by vertical. Out of scope for v1 launch; the original ten are cross-vertical, and the depth-pressure additions tag a vertical (`legal`, `engineering`, `generic`) but are still cross-vertical in spirit.
 4. **CI integration for the floor test.** Currently opt-in via env var. Once the reference workspace and judge model are reliably available on a dedicated eval runner, promote to required-on-merge for retrieval/compaction-affecting paths.
 5. **Token-cost regression budget.** The floor test gates latency; an analogous gate on tokens-into-judge per run would catch eval-cost runaway. Add once we have a few full-grid runs to set a budget.

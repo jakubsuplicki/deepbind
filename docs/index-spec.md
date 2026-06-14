@@ -6,7 +6,7 @@
 
 ## References
 
-- [JARVIS-PLAN.md](JARVIS-PLAN.md) — Full project plan
+- [overview.md](overview.md) — Project overview, architecture, and feature map
 - [CODING-GUIDELINES.md](CODING-GUIDELINES.md) — Coding rules (Python + Nuxt)
 
 ---
@@ -24,39 +24,41 @@ Every step is considered **done** only when ALL of the following are true:
 
 ---
 
+> Each phase below landed as a feature documented under [docs/features/](features/); see [overview.md](overview.md) for the full feature map.
+
 ## Phase 1 — System Skeleton
 
-- [x] [Step 01 — Backend Init (FastAPI)](steps/step-01-backend-init.md)
-- [x] [Step 02 — Frontend Init (Nuxt 3)](steps/step-02-frontend-init.md)
-- [x] [Step 03 — Onboarding + Workspace Creation](steps/step-03-onboarding-workspace.md)
+- [x] Step 01 — Backend Init (FastAPI)
+- [x] Step 02 — Frontend Init (Nuxt 3)
+- [x] Step 03 — Onboarding + Workspace Creation
 
 ## Phase 2 — Local Memory
 
-- [x] [Step 04 — Memory Service + SQLite Index](steps/step-04-memory-service.md)
+- [x] Step 04 — Memory Service + SQLite Index
 
 ## Phase 3 — Claude API
 
-- [x] [Step 05 — Claude API + Streaming + Tools](steps/step-05-claude-integration.md)
+- [x] Step 05 — Claude API + Streaming + Tools
 
 ## Phase 4 — Voice
 
-- [x] [Step 06 — Voice Input/Output + States](steps/step-06-voice.md)
+- [x] Step 06 — Voice Input/Output + States
 
 ## Phase 5 — Planning & Operational Memory
 
-- [x] [Step 07 — Planning Tools + Session Persistence](steps/step-07-planning-ops.md)
+- [x] Step 07 — Planning Tools + Session Persistence
 
 ## Phase 6 — Knowledge Graph
 
-- [x] [Step 08 — Knowledge Graph + Retrieval](steps/step-08-knowledge-graph.md)
+- [x] Step 08 — Knowledge Graph + Retrieval
 
 ## Phase 7 — Specialists
 
-- [x] [Step 09 — Specialist System + UI Wizard](steps/step-09-specialists.md)
+- [x] Step 09 — Specialist System + UI Wizard
 
 ## Phase 8 — Polish
 
-- [x] [Step 10 — Polish, Obsidian, Caching, Ingest](steps/step-10-polish.md)
+- [x] Step 10 — Polish, Obsidian, Caching, Ingest
 
 ---
 

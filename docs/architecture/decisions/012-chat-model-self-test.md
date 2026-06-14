@@ -14,16 +14,16 @@ Three distinct per-environment failure modes have been demonstrated:
 2. **Hardware fit varies.** A 30B-class model fits comfortably on M3 Max 64 GB, marginally on M5 Pro 24 GB (1 GB headroom — catastrophic), and not at all on a 16 GB MacBook Air.
 3. **Speed thresholds vary.** What's "fast enough to displace shadow ChatGPT" depends on hardware. A model that hits 5 TPS on a 16 GB integrated-GPU laptop is unusable; the same model at 25 TPS on an M4 Max is great.
 
-The current static "the canonical chat model is X" approach is the same trap [ADR 010 Issue 1](010-conversation-replay-eval-harness.md) was filed to escape — picking a global answer for a per-environment question. The fix is to **measure on the customer's machine, then pick**.
+The current static "the canonical chat model is X" approach is the same trap [ADR 010 Issue 1](010-conversation-replay-eval-harness.md) was filed to escape — picking a global answer for a per-environment question. The fix is to **measure on the user's machine, then pick**.
 
 ## Decision drivers
 
-1. **Per-environment correctness is non-negotiable.** A buyer who installs the product and sees the model "thinking out loud" before answering will not give us a second chance. The probe must catch this before the user sees the chat path.
-2. **No phone-home for measurement.** [ADR 002](002-pure-local-product-shape.md) commits to zero outbound calls by default. The probe runs entirely on the customer's machine; no telemetry, no aggregate-uploaded benchmarks, no vendor-side database of "what works where."
-3. **Reuse the existing measurement substrate.** [ADR 011](011-latency-benchmark-harness.md)'s `scenarios.py` + `harness.py` already produce the right numbers. The probe is the *runtime* invocation of the same code; building a separate measurement stack would create drift between dev numbers and customer numbers.
+1. **Per-environment correctness is non-negotiable.** A user who installs the product and sees the model "thinking out loud" before answering will not give us a second chance. The probe must catch this before the user sees the chat path.
+2. **No phone-home for measurement.** [ADR 002](002-pure-local-product-shape.md) commits to zero outbound calls by default. The probe runs entirely on the user's machine; no telemetry, no aggregate-uploaded benchmarks, no vendor-side database of "what works where."
+3. **Reuse the existing measurement substrate.** [ADR 011](011-latency-benchmark-harness.md)'s `scenarios.py` + `harness.py` already produce the right numbers. The probe is the *runtime* invocation of the same code; building a separate measurement stack would create drift between dev numbers and end-user numbers.
 4. **Bounded wall-clock cost.** The probe runs at install / on demand, not on every chat turn. Acceptable budget: ~30–60 seconds end-to-end for a "first-launch model selection" UX. That's enough for one warm-up + a small speed sample per candidate model, against a candidate set bounded by hardware-fit pre-filtering.
 5. **Deterministic, falsifiable.** Same machine + same Ollama version + same models → same recommendation. The probe must produce a stable output the user can verify and override.
-6. **Customer-overridable.** Some users will want to force a specific model regardless of probe verdict (research use, preference for capability over speed, hardware that fluctuates). The probe recommends; the user decides.
+6. **User-overridable.** Some users will want to force a specific model regardless of probe verdict (research use, preference for capability over speed, hardware that fluctuates). The probe recommends; the user decides.
 
 ## Decision
 
@@ -138,9 +138,9 @@ Rejected. The full grid takes 45–90 minutes — unacceptable for an install-ti
 ### Positive
 - The "broken chat on this Ollama+OS combo" failure mode is caught before the user encounters it.
 - The hardware-fit decision moves from "trust the user picked correctly" to "verified at install."
-- Customer-machine numbers and dev-machine numbers come from the same code (`scenarios.py` + `harness.py`), so dev work translates directly to customer experience.
+- End-user-machine numbers and dev-machine numbers come from the same code (`scenarios.py` + `harness.py`), so dev work translates directly to the end-user experience.
 - Per-machine recommendation makes the "30B works for some users / 14B for others / 8B for others" reality first-class, instead of being a static guess for one of the three.
-- The probe verdict is auditable JSON in `app/config.json` — a buyer can see *why* a particular model was picked.
+- The probe verdict is auditable JSON in `app/config.json` — an operator can see *why* a particular model was picked.
 
 ### Negative
 - Adds 30–60 seconds to first launch UX. Mitigated by running it as part of the existing onboarding flow (the user is already waiting on something) and surfacing progress.

@@ -37,7 +37,7 @@ between two requests — is reflected without a Tauri-side push).
 | ``licensed_invalid``           | License present but signature/format bad | no (wall)     |
 
 Read-only past-grace per ADR 019 — read paths stay open, write/inference
-paths are gated. The data is already Markdown on disk per CLAUDE.md
+paths are gated. The data is already Markdown on disk per the project's
 source-of-truth doctrine, so the customer is never trapped.
 
 ## Why the backend caches + re-computes rather than storing the state

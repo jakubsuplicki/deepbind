@@ -7,7 +7,7 @@
 
 ## Navigation
 
-- [JARVIS-PLAN.md](JARVIS-PLAN.md) — Full project plan
+- [overview.md](overview.md) — Project overview, architecture, and feature map
 - [index-spec.md](index-spec.md) — Master implementation tracking
 
 ---
@@ -408,13 +408,11 @@ These rules apply everywhere in this project:
 
 ---
 
-## 6. Spec File Convention
+## 6. Spec Convention
 
-Every step file in `docs/steps/` must:
+Each implementation milestone tracked in [index-spec.md](index-spec.md) must:
 
-1. Link to this guidelines file and [index-spec.md](index-spec.md) at the top
-2. Link to previous/next step
-3. List exact files to create or modify
-4. Include **## Tests** section with specific test files + test cases
-5. Include **## Definition of Done** checklist (code, tests pass, committed, index updated)
-6. Not exceed one logical milestone per file
+1. List exact files to create or modify
+2. Include a **Tests** section with specific test files + test cases
+3. Include a **Definition of Done** checklist (code, tests pass, committed, index updated)
+4. Not exceed one logical milestone

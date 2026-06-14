@@ -9,8 +9,8 @@ sources:
   - backend/tests/eval/latency/gate.py
   - backend/tests/eval/latency/run_bench.py
   - backend/tests/eval/latency/test_latency_floor.py
-last_updated: 2026-04-28
-last_reviewed: 2026-04-28
+last_updated: 2026-06-14
+last_reviewed: 2026-06-14
 ---
 
 # Latency baseline
@@ -23,7 +23,7 @@ Filed as [ADR 011](../architecture/decisions/011-latency-benchmark-harness.md). 
 
 ## Why this exists
 
-The product wedge claims "fast enough to displace shadow ChatGPT." The competitor analysis ([deep-dive-competitor-landscape.md](../research/deep-dive-competitor-landscape.md) §"Shadow-competitor reality check") names the empirical incumbent — Cmd-Tab to ChatGPT at 50–78% of professional-services staff — and the wedge requires beating it on perceived latency or losing the speed-to-value comparison.
+The design goal is "fast enough to displace shadow ChatGPT" — the empirical incumbent is Cmd-Tab to ChatGPT, and meeting that goal requires competitive perceived latency.
 
 Without a measurement substrate every claim about speed is a guess; every optimization knob is tuned by intuition; "did this change improve responsiveness?" has no defensible answer. The harness flips this: each knob gets a CI-significant yes/no against a frozen baseline.
 
@@ -164,7 +164,7 @@ Knob-stack changes are *not* invalidating — that's the whole point; they're ho
 - **System counters** (powermetrics on macOS, GPU utilization, memory bandwidth saturation). High diagnostic value, but adds complexity. Open follow-up.
 - **Cross-machine matrix.** Single machine first (M5 Pro 24 GB). Windows + RTX, additional Macs, MLX-direct are each their own chunks against the schema established here.
 - **Continuous benchmarking infrastructure.** No automated runs on every commit; the harness runs locally. Promotion to required-on-merge in CI is gated on dedicated eval hardware.
-- **Production-path changes.** This is dev infra; nothing customer-facing imports from `tests/eval/latency/`.
+- **Production-path changes.** This is dev infra; nothing in the shipped app imports from `tests/eval/latency/`.
 
 ## Canonical baseline-0 (2026-04-28)
 
@@ -206,6 +206,5 @@ Each knob = enable, re-run, `gate.compare_runs()` against baseline-0 (or the lat
 - **[`docs/concepts/eval-baseline.md`](eval-baseline.md)** — sibling concept doc for the retrieval-quality baseline. Same discipline.
 - **[`backend/tests/eval/conversations/`](../../backend/tests/eval/conversations/)** — sibling harness for answer-quality measurement. Different metric, same shape.
 - **[ADR 011](../architecture/decisions/011-latency-benchmark-harness.md)** — the architectural decision; this concept doc is the practical companion.
-- **[`docs/research/product-direction-v1-v2.md`](../research/product-direction-v1-v2.md) §11.3** — competitor analysis that motivates the latency budget.
 - **[`docs/features/local-models.md`](../features/local-models.md)** — the surface the harness measures.
 - **[`docs/features/chat.md`](../features/chat.md)** — the chat router whose performance is gated.

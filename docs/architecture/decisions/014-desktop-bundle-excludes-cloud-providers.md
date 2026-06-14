@@ -12,7 +12,7 @@ The Jarvis backend currently ships a multi-provider LLM abstraction via [`backen
 
 Privacy-mode runtime gating already exists in [`backend/services/privacy.py`](../../../backend/services/privacy.py): the workspace pref `privacy_cloud_providers_enabled` (default `True`) controls whether the chat router will accept cloud-provider requests; `is_cloud_provider_blocked()` is checked at request time. This is **behavioural** — turning the toggle off prevents calls but the code path, the `litellm` import, and the API-key UI remain present.
 
-The desktop product positions on privacy + compliance. A buyer's procurement review asks: *"Can this app send my data to OpenAI?"* The architecturally honest answer is structural, not behavioural:
+The desktop product positions on privacy + compliance. An operator's procurement review asks: *"Can this app send my data to OpenAI?"* The architecturally honest answer is structural, not behavioural:
 
 - **Behavioural answer (status quo):** "It can, but a runtime flag suppresses outbound calls. Trust us."
 - **Structural answer (this ADR):** "It cannot. The desktop build does not contain LiteLLM, does not contain the Anthropic SDK, and the routes that would handle API keys return 404. You can verify this by unpacking the .app and grepping for `litellm` or `anthropic`."
@@ -53,7 +53,7 @@ Default is `1` — the desktop build excludes by default. Setting `JARVIS_DESKTO
 
 > **Amendment (2026-04-30) — narrowed exclude list.** The ADR's original draft also listed `litellm`, `services.llm_service`, and `services.claude` for exclusion. Discovered during implementation: LiteLLM is the dispatcher used for the *Ollama* code path too (`provider="ollama"` in `_make_llm` constructs an `LLMService` against LiteLLM's `ollama_chat/` provider, which talks to `localhost:11434` via httpx — fully local, no cloud reach). `services.claude` defines `StreamEvent` and `build_system_prompt_with_stats`, both used unconditionally on every chat path. `services.llm_service` is the multi-provider dispatcher consumed by the Ollama path.
 >
-> Excluding any of these breaks the local-only path. The narrowed list excludes the **cloud-provider SDKs proper** (`anthropic`, `openai`, `google.generativeai`) plus `services._anthropic_client`. LiteLLM remains in the bundle but its cloud-provider sub-paths fail at import time when the SDKs are absent — that **is** the audit signal we want: a buyer probing the bundle finds no Anthropic/OpenAI/Google SDK directories, and any cloud-provider request fails with a deterministic ImportError-derived 503. The runtime behaviour matches the ADR's original contract; only the file-level exclusion list is narrower.
+> Excluding any of these breaks the local-only path. The narrowed list excludes the **cloud-provider SDKs proper** (`anthropic`, `openai`, `google.generativeai`) plus `services._anthropic_client`. LiteLLM remains in the bundle but its cloud-provider sub-paths fail at import time when the SDKs are absent — that **is** the audit signal we want: an auditor probing the bundle finds no Anthropic/OpenAI/Google SDK directories, and any cloud-provider request fails with a deterministic ImportError-derived 503. The runtime behaviour matches the ADR's original contract; only the file-level exclusion list is narrower.
 >
 > A future refactor could split `StreamEvent` and the system-prompt builders out of `services.claude` into a neutral module so `services.claude` becomes Anthropic-only and excludable. Tracked as a follow-up; not load-bearing for the procurement-review story (the SDK-level exclusion answers *"can the bundle reach OpenAI?"* with a structural no).
 
@@ -94,7 +94,7 @@ What does *not* change (no code edits required):
 
 ## Audit verification
 
-A compliance buyer can verify the structural exclusion in three ways:
+A compliance-focused operator can verify the structural exclusion in three ways:
 
 1. **Inspect the unpacked installer.**
    ```bash
@@ -135,7 +135,7 @@ Each verification path is independent — a malicious build that lied in one wou
 ## Consequences
 
 ### Positive
-- The procurement-review answer is structural: *"the bundle does not contain LiteLLM, the bundle does not contain the Anthropic SDK, the route returns 404."* Verifiable. Compliance buyers can confirm in 30 seconds.
+- The procurement-review answer is structural: *"the bundle does not contain LiteLLM, the bundle does not contain the Anthropic SDK, the route returns 404."* Verifiable. Compliance-focused operators can confirm in 30 seconds.
 - The desktop bundle's PyInstaller archive shrinks (LiteLLM + Anthropic + OpenAI + Google GenAI SDKs together are non-trivial Python weight, plus their transitive deps).
 - The privacy positioning is no longer "trust us" — it's a structural property of the build. ADR 003 driver #3 is satisfied for the cloud-provider surface specifically.
 - Restoration is a single build flag — no code edits, no schema changes, no migration.
@@ -143,7 +143,7 @@ Each verification path is independent — a malicious build that lied in one wou
 ### Negative
 - The cloud-provider code path runs only in the `JARVIS_DESKTOP_BUNDLE=0` test surface and dev mode. CI must include both build targets to keep the path correct enough to ship; if we drop `JARVIS_DESKTOP_BUNDLE=0` from CI, code rot becomes invisible.
 - A user who previously entered cloud API keys in dev mode and then runs the desktop bundle will see those keys silently ignored (the routes don't exist). Mitigation: the existing privacy banner ("This is a local-only build — cloud providers are unavailable") is repurposed to explain the build-target behavior, with a link to this ADR.
-- The Info.plist `JarvisBundleCapabilities` array is a custom convention, not an Apple-defined key. It's load-bearing only for our own audit verification path; a malicious build could lie. Mitigation: the FS-level absence of LiteLLM is the primary verification; the Info.plist is a convenience for buyers who don't want to unpack the installer.
+- The Info.plist `JarvisBundleCapabilities` array is a custom convention, not an Apple-defined key. It's load-bearing only for our own audit verification path; a malicious build could lie. Mitigation: the FS-level absence of LiteLLM is the primary verification; the Info.plist is a convenience for auditors who don't want to unpack the installer.
 
 ### What this changes about existing code
 - [`backend/main.py`](../../../backend/main.py) — startup reads `JARVIS_DESKTOP_BUNDLE`; conditionally skips registering the `api_keys` router (and any future cloud-provider-only routers).
@@ -172,4 +172,4 @@ Notarization is a single round at the end of step 4, alongside any G4 work that 
 
 1. **Hybrid / managed-cloud SKU planning** — when a customer or strategic decision motivates resurrecting cloud providers, the restoration path is the build flag. Anything beyond that (e.g., a managed-cloud SKU that *defaults* to cloud rather than local) is its own ADR.
 2. **Local-only providers that aren't Ollama** — if v1.1 adds a second local provider (e.g., direct llama.cpp integration per ADR 003 follow-up #6), it's a *local* capability and ships unconditionally in the desktop bundle. Not in scope here.
-3. **Anthropic / OpenAI for plumbing tasks (classification, extraction)** — currently those use Ollama or rule-based fallbacks. If a future quality requirement argues for cloud-provider plumbing tasks specifically (and the user accepts the privacy trade-off via the existing `privacy_cloud_providers_enabled` toggle), we'd need the cloud-provider code present in the bundle. Trigger to revisit: a real buyer requirement, not a developer convenience.
+3. **Anthropic / OpenAI for plumbing tasks (classification, extraction)** — currently those use Ollama or rule-based fallbacks. If a future quality requirement argues for cloud-provider plumbing tasks specifically (and the user accepts the privacy trade-off via the existing `privacy_cloud_providers_enabled` toggle), we'd need the cloud-provider code present in the bundle. Trigger to revisit: a real operator requirement, not a developer convenience.
