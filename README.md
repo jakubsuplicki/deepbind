@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/jakubsuplicki/deepbind/actions/workflows/ci.yml/badge.svg)](https://github.com/jakubsuplicki/deepbind/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml/badge.svg)](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml)
-[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-lightgrey.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-<sub>Codename: Jarvis · Proprietary software owned by Zen Zero Pty Ltd</sub>
+<sub>Codename: Jarvis · Open-source, Apache-2.0 licensed · originally developed by Zen Zero Pty Ltd</sub>
 
 **A pure-local AI workspace that remembers what matters.**
 
@@ -168,9 +168,14 @@ Specialists are reusable local roles with their own instructions and knowledge b
 
 DeepFilesAI includes a local stdio MCP server so external AI tools can use the same memory backend. See [MCP Server Tools](./docs/features/mcp-server/tools.md).
 
-### Offline Licensing
+### Offline Licensing (reference implementation)
 
-Commercial activation uses signed `.deepfileslic` files verified locally. No vendor admin portal is required for v1.
+The repo includes a self-contained offline-licensing subsystem: signed
+`.deepfileslic` entitlement files verified locally against an embedded public
+key, with no vendor admin portal required. It ships as a reference
+implementation of local, server-free license verification — it is not wired to
+any live license server, and the Apache 2.0 license above governs the source itself.
+See [ADR 019](./docs/architecture/decisions/019-licensing-operational-model.md).
 
 ---
 
@@ -322,6 +327,6 @@ deepbind/
 
 ## License
 
-DeepFilesAI is proprietary commercial software owned by Zen Zero Pty Ltd. See [LICENSE](./LICENSE).
+DeepFilesAI is open-source software released under the [Apache License 2.0](./LICENSE). It was originally developed by Zen Zero Pty Ltd.
 
 Bundled third-party components retain their own licenses. See [Third-Party Notices](./docs/THIRD-PARTY-NOTICES.md).

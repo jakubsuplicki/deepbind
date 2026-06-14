@@ -2,14 +2,15 @@
 #
 # Build the desktop spike with full Developer ID signing + Apple notarization.
 #
-# Public values (signing identity, team ID) are baked into this script —
-# they appear in any signed binary anyway. Apple notary credentials come from
-# one of two places, in this order of preference:
+# Supply your own Apple Developer signing identity and Team ID via the
+# APPLE_SIGNING_IDENTITY / APPLE_TEAM_ID env vars (placeholders are baked in
+# as defaults). Apple notary credentials come from one of two places, in this
+# order of preference:
 #
 #   1. Keychain profile `notarytool-profile` (recommended — set up once via
 #      `xcrun notarytool store-credentials notarytool-profile`). Persists
-#      The profile name is overridable via `NOTARY_PROFILE=<name>` env var.
 #      across shells and requires no environment juggling at build time.
+#      The profile name is overridable via `NOTARY_PROFILE=<name>` env var.
 #
 #   2. Falls back to APPLE_ID + APPLE_PASSWORD env vars if the keychain
 #      profile is missing (CI, fresh box, or first-time-not-yet-stored):
@@ -49,9 +50,13 @@ set -euo pipefail
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 DESKTOP_DIR="$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )"
 
-# --- public, safe to commit -------------------------------------------------
-export APPLE_SIGNING_IDENTITY="Developer ID Application: EXAMPLE (TEAMID)"
-export APPLE_TEAM_ID="TEAMID"
+# --- signing identity: supply your own Apple Developer credentials ----------
+# Override these with your own "Developer ID Application" identity and Team ID,
+# e.g. via the environment or a local (gitignored) env file:
+#   export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+#   export APPLE_TEAM_ID="TEAMID"
+export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-Developer ID Application: EXAMPLE (TEAMID)}"
+export APPLE_TEAM_ID="${APPLE_TEAM_ID:-TEAMID}"
 
 # --- credential source: keychain profile preferred, env fallback ------------
 # notarytool supports a `--keychain-profile <name>` form that reads creds

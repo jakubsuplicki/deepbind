@@ -26,8 +26,8 @@ set -euo pipefail
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 DESKTOP_DIR="$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )"
 
-# --- public, safe to commit -------------------------------------------------
-export APPLE_TEAM_ID="TEAMID"
+# --- signing: supply your own Apple Team ID via APPLE_TEAM_ID --------------
+export APPLE_TEAM_ID="${APPLE_TEAM_ID:-TEAMID}"
 
 # --- credential source: keychain profile preferred, env fallback ------------
 NOTARY_PROFILE="${NOTARY_PROFILE:-notarytool-profile}"
