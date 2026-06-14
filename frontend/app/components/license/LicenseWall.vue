@@ -34,7 +34,7 @@
       >
         <p class="license-wall__data-path">
           Open your OS date/time settings → enable "Set automatically".
-          Then re-launch DeepFilesAI.
+          Then re-launch DeepBind.
         </p>
       </div>
 
@@ -75,14 +75,14 @@
       </form>
 
       <p class="license-wall__hint">
-        Don't have a license yet?
+        This build includes a reference offline-licensing subsystem. See the
         <a
-          href="https://deepfilesai.com/buy"
+          href="https://github.com/jakubsuplicki/deepbind/blob/main/docs/architecture/decisions/019-licensing-operational-model.md"
           target="_blank"
           rel="noopener"
           class="license-wall__link"
-        >Buy a license</a>
-        — annual, one-shot, no auto-renewal.
+        >licensing docs</a>
+        for how to generate and install a license file.
       </p>
     </div>
   </div>
@@ -127,12 +127,12 @@ const subtitle = computed(() => {
     return (
       license.state.value?.reason ??
       'Your system clock appears to be set incorrectly. Open your OS date/time settings, ' +
-        'enable automatic time, then re-launch DeepFilesAI.'
+        'enable automatic time, then re-launch DeepBind.'
     )
   }
   if (s === 'licensed_past_grace') {
     return (
-      'Your data is still on your disk and remains accessible — DeepFilesAI ' +
+      'Your data is still on your disk and remains accessible — DeepBind ' +
       'never holds your knowledge hostage. To resume writing notes, ingesting, ' +
       'or chatting, paste a renewed license below.'
     )
@@ -143,7 +143,7 @@ const subtitle = computed(() => {
       'Re-paste it below, or install a freshly-issued one.'
     )
   }
-  return 'Activate a license below to keep using DeepFilesAI.'
+  return 'Activate a license below to keep using DeepBind.'
 })
 
 const pasteFieldLabel = computed(() => {

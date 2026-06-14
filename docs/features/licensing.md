@@ -166,14 +166,14 @@ The layout (`layouts/default.vue`) listens for `license:file_opened` Tauri event
 ```json
 "fileAssociations": [{
   "ext": ["deepfileslic"],
-  "name": "DeepFilesAI License",
-  "description": "DeepFilesAI license file (Ed25519-signed, ADR 006)",
+  "name": "DeepBind License",
+  "description": "DeepBind license file (Ed25519-signed, ADR 006)",
   "role": "Editor",
-  "mimeType": "application/x-deepfilesai-license"
+  "mimeType": "application/x-deepbind-license"
 }]
 ```
 
-Tauri's bundler turns this into the platform-native registration: `CFBundleDocumentTypes` + `UTExportedTypeDeclarations` in macOS `Info.plist`, registry entries in the Windows MSI/MSIX. Double-clicking a `.deepfileslic` attachment in Mail / Outlook / Finder routes the file to the running (or freshly-launched) DeepFilesAI app.
+Tauri's bundler turns this into the platform-native registration: `CFBundleDocumentTypes` + `UTExportedTypeDeclarations` in macOS `Info.plist`, registry entries in the Windows MSI/MSIX. Double-clicking a `.deepfileslic` attachment in Mail / Outlook / Finder routes the file to the running (or freshly-launched) DeepBind app.
 
 The `RunEvent::Opened { urls }` handler in `src/lib.rs` reads the file content synchronously and emits a `license:file_opened` event with the raw text; the layout listens, calls `license.installFromText(text)`, and the existing wall/banner reactions take it from there. No new endpoint, no new validation surface — same flow as the paste-a-key form.
 
@@ -183,7 +183,7 @@ Two layers protect against "set the clock backward to extend an expired license"
 
 **1. Build epoch.** `desktop/scripts/build-sidecar.sh` writes `services/_build_epoch_baked.py` containing `BUILD_EPOCH_ISO = "<utc-now-at-build>"` before invoking PyInstaller and removes it post-build via the EXIT trap. `services/build_epoch.py` exposes `BUILD_EPOCH: datetime` as the constant the entitlement state machine reads. Dev builds fall back to `2020-01-01T00:00:00Z` (a no-op floor) and emit a warning at import.
 
-**2. Monotonic state.** The OS keychain stores a `monotonic_floor` ISO timestamp (separate keyring key from `trial_started_at`, same service `com.deepfilesai.desktop`). The Tauri shell reads it on every refresh, posts it alongside the license + trial inputs, and writes back the response's `effective_now` if it advances. Survives app reinstall — same protection as the trial-start mechanism.
+**2. Monotonic state.** The OS keychain stores a `monotonic_floor` ISO timestamp (separate keyring key from `trial_started_at`, same service `com.deepbind.desktop`). The Tauri shell reads it on every refresh, posts it alongside the license + trial inputs, and writes back the response's `effective_now` if it advances. Survives app reinstall — same protection as the trial-start mechanism.
 
 `entitlements.effective_now(*, monotonic_floor, system_now)` returns `max(system_now, BUILD_EPOCH, monotonic_floor)` — used as the clock by every entitlement computation.
 
@@ -231,7 +231,7 @@ The backend never reads the license file from disk and never reads the OS keycha
 `desktop/src-tauri/src/license.rs` owns the two storage surfaces the sidecar deliberately doesn't:
 
 - **License file** at Tauri's `app_data_dir()/license.json` — read on launch + on every refresh, written when the user pastes a key (atomic write via tmp-file + rename).
-- **Trial-start timestamp** in the OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service) under service `com.deepfilesai.desktop`, key `trial_started_at`. Survives app reinstall — the whole reason for using the keychain over a plain file (ADR 019 §"Trial state must persist across reinstalls").
+- **Trial-start timestamp** in the OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service) under service `com.deepbind.desktop`, key `trial_started_at`. Survives app reinstall — the whole reason for using the keychain over a plain file (ADR 019 §"Trial state must persist across reinstalls").
 
 Four frontend-callable Tauri commands:
 

@@ -46,8 +46,8 @@ The FastAPI + Python stack packages with PyInstaller into a single platform bina
 The `ollama` binary ships inside the app bundle (Mac `.app/Contents/Resources/`, Windows install dir under `bin/`). The Tauri shell spawns it as a child process on a non-default loopback port at app launch and terminates it on quit. **The system never sees a LaunchDaemon, a Windows service, or a system-installed `/usr/local/bin/ollama`.** Uninstall removes everything except the user's vault and license file.
 
 **Model storage is overridden, not defaulted.** Ollama's default `~/.ollama/models` would (a) co-mingle blobs with any system-installed Ollama on a developer's machine, and (b) survive uninstall — both violate driver #2. The shell launches the bundled binary with `OLLAMA_MODELS` set to an app-scoped path:
-- macOS: `~/Library/Application Support/DeepFilesAI/ollama-models/`
-- Windows: `%LOCALAPPDATA%\DeepFilesAI\ollama-models\`
+- macOS: `~/Library/Application Support/DeepBind/ollama-models/`
+- Windows: `%LOCALAPPDATA%\DeepBind\ollama-models\`
 
 Uninstall removes that directory.
 

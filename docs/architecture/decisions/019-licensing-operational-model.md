@@ -62,8 +62,8 @@ When a paid license expires AND the 30-day grace window also elapses with no ren
 
 - Inference path is gated (no chat, no specialists, no retrieval, no ingest).
 - Memory write path is gated (no new notes, no new memories, no memory mutations).
-- **Read paths remain open.** The customer can browse existing chats, view existing notes, search via Spotlight on `~/DeepFilesAI/memory/` (the data is already on disk as Markdown per the source-of-truth doctrine). No "export" button is needed because nothing was ever trapped in our format — the canonical store is plaintext Markdown the customer can read with any text editor.
-- An [Open in Finder / Explorer] affordance is surfaced prominently on the past-grace wall, pointing at `~/DeepFilesAI/memory/`.
+- **Read paths remain open.** The customer can browse existing chats, view existing notes, search via Spotlight on `~/DeepBind/memory/` (the data is already on disk as Markdown per the source-of-truth doctrine). No "export" button is needed because nothing was ever trapped in our format — the canonical store is plaintext Markdown the customer can read with any text editor.
+- An [Open in Finder / Explorer] affordance is surfaced prominently on the past-grace wall, pointing at `~/DeepBind/memory/`.
 
 This is the kindest answer compatible with the architecture. The data sovereignty pitch becomes provable: *"At no point can our license expiry hold your data hostage. Your knowledge is plaintext Markdown on your disk; quit at any time."* A separate "structured export" feature can be added later if migration-to-another-tool requests appear, but it's not load-bearing for past-grace UX — the data is already exportable by virtue of being on disk.
 

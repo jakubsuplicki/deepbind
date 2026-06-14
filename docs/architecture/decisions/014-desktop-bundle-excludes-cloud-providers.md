@@ -98,7 +98,7 @@ A compliance-focused operator can verify the structural exclusion in three ways:
 
 1. **Inspect the unpacked installer.**
    ```bash
-   # Mount the .dmg, enter DeepFilesAI.app/Contents/Resources/_MEIPASS/
+   # Mount the .dmg, enter DeepBind.app/Contents/Resources/_MEIPASS/
    find . -name "*litellm*" -o -name "*anthropic*" -o -name "*openai*" 2>/dev/null
    # Expected output: nothing
    ```

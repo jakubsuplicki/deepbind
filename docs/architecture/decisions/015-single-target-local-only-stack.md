@@ -82,7 +82,7 @@ The duel feature was viable when there were two cloud providers with genuinely d
 ### F. Audit signal — restated
 The desktop bundle's "no cloud calls" claim is now defensible four ways:
 1. **Source repo** — `grep -r anthropic backend/ frontend/` returns nothing in v1 src files. The capability is structurally absent at the code level, not just at the bundle level.
-2. **Bundle contents** — `find DeepFilesAI.app -name "*anthropic*" -o -name "*openai*"` returns nothing.
+2. **Bundle contents** — `find DeepBind.app -name "*anthropic*" -o -name "*openai*"` returns nothing.
 3. **Routes** — `curl /api/settings/api-key` returns 404 (route does not exist).
 4. **Runtime egress** — `tcpdump host api.anthropic.com or host api.openai.com` shows zero traffic during normal use.
 
@@ -102,10 +102,10 @@ Same shape as ADR 014's audit-verifiability section, with the literal signals up
 | Question an auditor asks | How to verify | Answer in v1 |
 |---|---|---|
 | Does the bundle phone Anthropic / OpenAI? | `tcpdump -i any host api.anthropic.com or host api.openai.com` for an hour of normal use | Zero traffic |
-| Is cloud SDK code in the binary? | `find DeepFilesAI.app -name "*anthropic*" -o -name "*openai*" -o -name "*litellm*"` | Returns nothing |
+| Is cloud SDK code in the binary? | `find DeepBind.app -name "*anthropic*" -o -name "*openai*" -o -name "*litellm*"` | Returns nothing |
 | Is cloud SDK code even in the *source repo*? | `grep -r 'import anthropic\|import openai\|import litellm' backend/ frontend/` | Returns nothing in v1 src files |
 | Can a user enter an API key? | Settings UI; `curl /api/settings/api-key` | No UI; route returns 404 |
-| Does the manifest declare cloud capability? | `defaults read DeepFilesAI.app/Contents/Info.plist JarvisBundleCapabilities` | `["local-llm", "vault-markdown", "knowledge-graph", "semantic-search"]` |
+| Does the manifest declare cloud capability? | `defaults read DeepBind.app/Contents/Info.plist JarvisBundleCapabilities` | `["local-llm", "vault-markdown", "knowledge-graph", "semantic-search"]` |
 
 ## Alternatives considered
 
@@ -226,7 +226,7 @@ The work is sequenced so the test suite passes after each chunk and the bundle i
 - `bash desktop/scripts/build-notarized.sh`.
 - Sidecar smoke-test now boots cleanly (no LiteLLM, no `import openai` chain).
 - Notarize + staple `.app` and `.dmg`.
-- Run `find DeepFilesAI.app -name "*anthropic*" -o -name "*openai*" -o -name "*litellm*"` — expected: empty output.
+- Run `find DeepBind.app -name "*anthropic*" -o -name "*openai*" -o -name "*litellm*"` — expected: empty output.
 - Run `tcpdump host api.anthropic.com or host api.openai.com` while exercising the app — expected: zero traffic.
 
 ### Chunk 8 — Documentation
@@ -239,7 +239,7 @@ The work is sequenced so the test suite passes after each chunk and the bundle i
 
 ## Amendment 2026-05-05 — bundle leakage hardening
 
-The commercial-licensing audit (finding 2) discovered that even after this ADR landed, `desktop/sidecar/jarvis-sidecar.spec` still listed `litellm`, `litellm.llms`, `tiktoken_ext`, `tiktoken_ext.openai_public` in `hidden` and `litellm`, `tiktoken`, `tiktoken_ext` in the `datas` `collect_data_files` loop. The dev venv at the time of audit also had `litellm-1.83.7` installed as leftover from the pre-ADR-015 era, so a build executed against that venv would silently re-bundle the cloud SDKs that this ADR's chunk 7 verification step (`find DeepFilesAI.app -name "*anthropic*" …`) was supposed to keep out.
+The commercial-licensing audit (finding 2) discovered that even after this ADR landed, `desktop/sidecar/jarvis-sidecar.spec` still listed `litellm`, `litellm.llms`, `tiktoken_ext`, `tiktoken_ext.openai_public` in `hidden` and `litellm`, `tiktoken`, `tiktoken_ext` in the `datas` `collect_data_files` loop. The dev venv at the time of audit also had `litellm-1.83.7` installed as leftover from the pre-ADR-015 era, so a build executed against that venv would silently re-bundle the cloud SDKs that this ADR's chunk 7 verification step (`find DeepBind.app -name "*anthropic*" …`) was supposed to keep out.
 
 Fix:
 - **Spec hidden_imports + datas:** stale `litellm` / `tiktoken` / `tiktoken_ext` entries removed. Inline comments now explain *why* they're deliberately absent so a future PR doesn't re-add them by reflex.

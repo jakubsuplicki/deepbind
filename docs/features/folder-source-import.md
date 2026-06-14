@@ -56,7 +56,7 @@ last_updated: 2026-06-14
 
 ## Summary
 
-Folder Source Import is the user-facing import flow for local and synced business folders. It lets a non-developer choose a folder, review a metadata-only inventory, approve exactly what DeepFilesAI may read, and then turn approved files into local Markdown memory with progress, evidence, and recovery controls.
+Folder Source Import is the user-facing import flow for local and synced business folders. It lets a non-developer choose a folder, review a metadata-only inventory, approve exactly what DeepBind may read, and then turn approved files into local Markdown memory with progress, evidence, and recovery controls.
 
 This feature complements the existing single-file upload path documented in [memory.md](memory.md). The durable product rule is still the same: Markdown under `memory/` is the source of truth, while SQLite, embeddings, chunks, graph edges, suggestions, and import manifests are derived or operational layers. The implementation is review-ready; packaged desktop validation should follow the [Folder Source Import Demo Smoke](../runbooks/folder-source-import-demo-smoke.md) runbook.
 
@@ -128,7 +128,7 @@ The backend should not accept arbitrary raw paths from the web UI for production
 Before any content read, the UI states the contract plainly:
 
 ```text
-DeepFilesAI will first scan file names, types, sizes, and folders.
+DeepBind will first scan file names, types, sizes, and folders.
 File contents are imported only after you approve.
 ```
 
@@ -301,7 +301,7 @@ When a limit is hit, the file or batch should show a visible skipped/limited rea
 
 The current memory ingest path supports `.md`, `.txt`, `.pdf`, `.csv`, `.xml`, `.json`, `.docx`, `.xlsx`, `.pptx`, `.html`, `.htm`, `.rtf`, `.eml`, and `.zip`.
 
-The first 29c extractor work deliberately avoids adding Office parser dependencies. DOCX, XLSX, and PPTX are ZIP/XML formats, so DeepFilesAI reads their safe text/table/slide parts with the Python standard library plus `defusedxml`. Malformed Office XML is reported as a safe importer error, optional malformed XLSX shared strings become warnings when the sheet can still be read, and encrypted ZIP/Office members are rejected before extraction. HTML/HTM uses the existing `trafilatura` plus `markdownify` stack and falls back to sanitized body conversion with a user-readable warning when main-content extraction is unavailable. RTF uses a best-effort control-word stripper. EML uses Python's standard `email` package and records attachments as metadata only. Single-file ZIP upload still imports as a safe archive inventory note, while folder/source import now expands ZIP children into the review and approval flow before extracting approved children.
+The first 29c extractor work deliberately avoids adding Office parser dependencies. DOCX, XLSX, and PPTX are ZIP/XML formats, so DeepBind reads their safe text/table/slide parts with the Python standard library plus `defusedxml`. Malformed Office XML is reported as a safe importer error, optional malformed XLSX shared strings become warnings when the sheet can still be read, and encrypted ZIP/Office members are rejected before extraction. HTML/HTM uses the existing `trafilatura` plus `markdownify` stack and falls back to sanitized body conversion with a user-readable warning when main-content extraction is unavailable. RTF uses a best-effort control-word stripper. EML uses Python's standard `email` package and records attachments as metadata only. Single-file ZIP upload still imports as a safe archive inventory note, while folder/source import now expands ZIP children into the review and approval flow before extracting approved children.
 
 Extractor quality should be honest. These formats are best-effort conversions, not a guarantee that every vendor-specific document layout converts perfectly. Completion states should distinguish imported successfully, imported with warnings, skipped before extraction, and failed during extraction.
 

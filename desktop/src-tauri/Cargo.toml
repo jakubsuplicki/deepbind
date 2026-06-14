@@ -1,8 +1,8 @@
 [package]
-name = "deepfilesai-desktop"
+name = "deepbind-desktop"
 version = "0.1.0"
-description = "DeepFilesAI desktop shell — Tauri 2 + Python sidecar (ADR 003)."
-authors = ["DeepFilesAI"]
+description = "DeepBind desktop shell — Tauri 2 + Python sidecar (ADR 003)."
+authors = ["DeepBind"]
 # Proprietary — see ../../LICENSE. SPDX `LicenseRef-` form per
 # https://spdx.dev/learn/handling-license-info/ for non-standard licenses.
 # Cargo accepts arbitrary strings here; the value is informational only

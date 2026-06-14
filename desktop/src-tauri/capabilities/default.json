@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for the DeepFilesAI desktop shell. ADR 003 'capability allowlist': loopback HTTP to the sidecar only; no other outbound surface.",
+  "description": "Default capabilities for the DeepBind desktop shell. ADR 003 'capability allowlist': loopback HTTP to the sidecar only; no other outbound surface.",
   "windows": ["main"],
   "permissions": [
     "core:default",

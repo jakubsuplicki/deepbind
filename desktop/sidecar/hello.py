@@ -66,7 +66,7 @@ def _watch_shell_and_exit() -> None:
 
 
 def _build_app() -> FastAPI:
-    app = FastAPI(title="DeepFilesAI Sidecar (spike)", version=APP_VERSION)
+    app = FastAPI(title="DeepBind Sidecar (spike)", version=APP_VERSION)
 
     @app.get("/api/health")
     async def health() -> dict:

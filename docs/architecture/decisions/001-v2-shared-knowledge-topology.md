@@ -15,18 +15,18 @@ The product-direction doc currently records peer-to-peer mesh (Syncthing / Autom
 ## The reframe
 
 The project's source-of-truth doctrine commits to:
-- Markdown files in `DeepFilesAI/memory/` as the canonical store.
+- Markdown files in `DeepBind/memory/` as the canonical store.
 - SQLite is an operational index (rebuildable from Markdown).
 - Graph is derived (rebuildable from Markdown).
 
 Given that doctrine, V2 sync is **not a database-replication problem**. It is a **folder-of-Markdown-files sync problem**. Derived layers (SQLite index, graph JSON, embeddings) regenerate on each peer from the canonical Markdown.
 
-This reframe unlocks options where the sync mechanism is not something DeepFilesAI builds but something the firm already pays for and trusts.
+This reframe unlocks options where the sync mechanism is not something DeepBind builds but something the firm already pays for and trusts.
 
 ## Decision drivers
 
 1. **No IT, no new machine, no new vendor review.** The V1 install story must survive into V2: one installer, no admin portal, no extra box in the office.
-2. **Inherit trust decisions the firm already made.** A small firm has already audited whatever it uses for client file storage; a DeepFilesAI folder inside that storage is not a new compliance surface.
+2. **Inherit trust decisions the firm already made.** A small firm has already audited whatever it uses for client file storage; a DeepBind folder inside that storage is not a new compliance surface.
 3. **Offboarding must match existing firm process.** When someone leaves, the firm's existing "revoke access to client files" procedure must also remove their access to the shared knowledge layer.
 4. **Offline-first is non-negotiable.** Every peer must function without network connectivity, including shared-vault queries against a local mirror.
 5. **Engineering budget is small.** A V2 that takes 12–18 months to ship correctly is a V2 that doesn't get shipped. A V2 that takes 2–4 months plus good UX work ships.
@@ -44,7 +44,7 @@ Every laptop is a full peer. Discovery via mDNS on LAN + Tailscale or similar ov
 - **Con:** permissions are crypto-gated, not server-enforced — harder to reason about.
 
 ### B. Piggyback on the firm's existing cloud storage (Dropbox / OneDrive / SharePoint / Box / iCloud Drive / Google Drive)
-Shared vault lives in a folder inside the firm's existing shared storage. Their sync client handles replication; each laptop has a synced local mirror. DeepFilesAI reads/writes Markdown files and treats conflict files (`filename (Sarah's conflicted copy).md`) as first-class state to resolve in UI.
+Shared vault lives in a folder inside the firm's existing shared storage. Their sync client handles replication; each laptop has a synced local mirror. DeepBind reads/writes Markdown files and treats conflict files (`filename (Sarah's conflicted copy).md`) as first-class state to resolve in UI.
 
 - **Pro:** zero new infrastructure. The firm already signed a DPA and already trusts the vendor.
 - **Pro:** offboarding is existing process — revoke folder access.
@@ -64,7 +64,7 @@ Same shape as B but the shared vault lives on `\\fileserver\firm-vault\` — a S
 - **Con:** laptop-local SQLite-over-SMB is notoriously unreliable — canonical store must be Markdown (file-based), not a database on the share.
 
 ### D. Git repo as vault transport
-Shared vault is a git repo. Hosted on self-hosted Gitea / Forgejo / private GitHub / a peer's machine over SSH. DeepFilesAI commits changes, pulls/pushes opportunistically, surfaces merges as conflict UX.
+Shared vault is a git repo. Hosted on self-hosted Gitea / Forgejo / private GitHub / a peer's machine over SSH. DeepBind commits changes, pulls/pushes opportunistically, surfaces merges as conflict UX.
 
 - **Pro:** distributed VCS is literally designed for this — every peer has full history, merges are well-defined, offline-first is native.
 - **Pro:** firms that already use GitHub/Gitea for code can reuse the host.
@@ -132,7 +132,7 @@ Regardless of which V2 shape wins, V1 must preserve these properties so V2 isn't
 
 ## Migration path
 
-- **V1 → V2 (B mode):** customer installs the V2 build, points it at a folder inside their existing Dropbox/OneDrive, copies their existing V1 `DeepFilesAI/memory/` contents into it. Peers point at the same folder. Derived layers rebuild on each peer. Zero data migration.
+- **V1 → V2 (B mode):** customer installs the V2 build, points it at a folder inside their existing Dropbox/OneDrive, copies their existing V1 `DeepBind/memory/` contents into it. Peers point at the same folder. Derived layers rebuild on each peer. Zero data migration.
 - **V2 (B mode) → V2 (A mode):** customer enables strict mode. The app stops reading/writing the piggyback folder and starts peer-sync instead. The most recent mirror on any peer becomes the new authoritative source. Re-key workspace.
 - **V1 → V2 (A mode) directly:** mesh onboarding; one peer acts as seeder for the others.
 

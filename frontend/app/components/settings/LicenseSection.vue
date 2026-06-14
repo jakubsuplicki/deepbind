@@ -100,14 +100,14 @@
     </form>
 
     <p class="license-section__hint">
-      DeepFilesAI verifies licenses entirely on your machine — no network
+      DeepBind verifies licenses entirely on your machine — no network
       call. Your data never leaves your trust boundary.
       <a
-        href="https://deepfilesai.com/buy"
+        href="https://github.com/jakubsuplicki/deepbind/blob/main/docs/architecture/decisions/019-licensing-operational-model.md"
         target="_blank"
         rel="noopener"
         class="license-section__link"
-      >Buy or renew →</a>
+      >Licensing docs →</a>
     </p>
   </SettingsSection>
 </template>

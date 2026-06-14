@@ -57,7 +57,7 @@ EOF
 fi
 
 # --- resolve .dmg path ------------------------------------------------------
-DEFAULT_DMG="$DESKTOP_DIR/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepFilesAI_0.1.0_aarch64.dmg"
+DEFAULT_DMG="$DESKTOP_DIR/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepBind_0.1.0_aarch64.dmg"
 DMG="${1:-$DEFAULT_DMG}"
 
 if [[ ! -f "$DMG" ]]; then

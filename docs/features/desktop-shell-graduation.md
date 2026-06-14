@@ -192,8 +192,8 @@ Landed 2026-04-30. Both Apple notary submissions returned `status: Accepted`; bo
 
 | Artifact | Notarytool ID | Status | Path |
 |---|---|---|---|
-| .app | `932b532f-4f24-4d81-9bbc-2a5f47afec42` | Accepted, stapled | `desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app` |
-| .dmg | `f1a46024-57dc-47b2-85b3-de8f14496fcd` | Accepted, stapled | `desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepFilesAI_0.1.0_aarch64.dmg` (355 MB) |
+| .app | `932b532f-4f24-4d81-9bbc-2a5f47afec42` | Accepted, stapled | `desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app` |
+| .dmg | `f1a46024-57dc-47b2-85b3-de8f14496fcd` | Accepted, stapled | `desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepBind_0.1.0_aarch64.dmg` (355 MB) |
 
 **Credential flow:** [`build-notarized.sh`](../../desktop/scripts/build-notarized.sh) was rewired to prefer a stored notarytool keychain profile (`notarytool-profile`, set up via `xcrun notarytool store-credentials notarytool-profile --apple-id you@example.com --team-id TEAMID` once per box) and falls back to `APPLE_ID` / `APPLE_PASSWORD` env vars on CI. The profile name is overridable via `NOTARY_PROFILE=<name>` env var. When the keychain profile is in use, env vars are *unset* before invoking `tauri build` so Tauri's bundler skips its built-in auto-notarize step (which only speaks env-var auth and would otherwise prompt). The script then explicitly notarizes both .app (zipped via `ditto`) and .dmg using the keychain profile. One-time setup, no per-shell exports thereafter.
 
@@ -271,7 +271,7 @@ Landed 2026-04-30 (local verification — re-notarization tracked separately). B
 - Launch → bundled ollama binds `127.0.0.1:11435`, `curl http://127.0.0.1:11435/` returns `Ollama is running`.
 - Sidecar `/api/health` → `{"status":"ok","version":"0.15.0"}`.
 - Sidecar `/api/local/runtime` reports `base_url: http://127.0.0.1:11435`, `version: 0.22.0`, `reachable: true` — confirming the env-var handshake routes the backend at our bundled instance, not the host's separately-installed Ollama (which was simultaneously alive on `:11434`, version 0.18.0 — coexistence verified per ADR 003 §"Coexistence").
-- Cmd+Q (`osascript -e 'tell application "DeepFilesAI" to quit'`) kills both children cleanly; no orphans.
+- Cmd+Q (`osascript -e 'tell application "DeepBind" to quit'`) kills both children cleanly; no orphans.
 
 **Findings during G4a build:**
 
@@ -303,8 +303,8 @@ Backend orchestrator and frontend wizard landed per ADR 005 §B and §C. Impleme
 - [ ] Background fallback pull and chat-model probe complete without blocking the chat UI.
 - [ ] Marker file `<app_data>/.first_run_complete` is written.
 - [ ] Second launch skips the wizard entirely (marker-present early return).
-- [ ] `find DeepFilesAI.app -name "*anthropic*" -o -name "*openai*" -o -name "*litellm*"` → empty (ADR 015 §F audit signal 2).
-- [ ] `defaults read DeepFilesAI.app/Contents/Info.plist JarvisBundleCapabilities` → `["local-llm", "vault-markdown", "knowledge-graph", "semantic-search"]`.
+- [ ] `find DeepBind.app -name "*anthropic*" -o -name "*openai*" -o -name "*litellm*"` → empty (ADR 015 §F audit signal 2).
+- [ ] `defaults read DeepBind.app/Contents/Info.plist JarvisBundleCapabilities` → `["local-llm", "vault-markdown", "knowledge-graph", "semantic-search"]`.
 
 Gated on the notarized build artifact from ADR 015 chunk 7.
 

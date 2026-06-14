@@ -6,7 +6,7 @@
 //!    + on every refresh, written when the user pastes a key.
 //! 2. **Trial-start timestamp** in the OS keychain (macOS Keychain /
 //!    Windows Credential Manager / Linux Secret Service) under service
-//!    `com.deepfilesai.desktop`, key `trial_started_at`. Survives app
+//!    `com.deepbind.desktop`, key `trial_started_at`. Survives app
 //!    reinstall — that's the whole reason for using the keychain over a
 //!    plain file (ADR 019 §"Trial state must persist across reinstalls").
 //!
@@ -38,7 +38,7 @@ use crate::{BackendUrlHandle, HttpClient};
 /// across reinstalls — that's the contract. Don't change without a
 /// migration plan or every existing trial resets to "just started" on
 /// the next launch (which is the opposite of the protection we want).
-const KEYRING_SERVICE: &str = "com.deepfilesai.desktop";
+const KEYRING_SERVICE: &str = "com.deepbind.desktop";
 const KEYRING_TRIAL_START_KEY: &str = "trial_started_at";
 
 /// Keychain key for the clock-rollback monotonic-state record (ADR 019

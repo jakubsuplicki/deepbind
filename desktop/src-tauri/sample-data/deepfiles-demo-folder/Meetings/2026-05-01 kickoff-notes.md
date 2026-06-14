@@ -1,7 +1,7 @@
 # Kickoff Notes - Northstar Pilot
 
 Date: 2026-05-01
-Attendees: Priya Shah, Martin Cole, Elena Ruiz, DeepFilesAI team
+Attendees: Priya Shah, Martin Cole, Elena Ruiz, DeepBind team
 
 ## Goals
 

@@ -97,14 +97,14 @@ describe('components/ImportDialog.vue', () => {
       source_token: 'sample-source-token',
       source_kind: 'local_folder',
       display_name: 'deepfiles-demo-folder',
-      root_path: '/Applications/DeepFilesAI.app/Contents/Resources/sample-data/deepfiles-demo-folder',
+      root_path: '/Applications/DeepBind.app/Contents/Resources/sample-data/deepfiles-demo-folder',
       expires_at: '2026-05-16T00:00:00Z',
     })
     sourceImportMocks.scanSource.mockResolvedValue({
       scan_id: 'scan_sample',
       source_kind: 'local_folder',
       source_display_name: 'deepfiles-demo-folder',
-      source_root_path: '/Applications/DeepFilesAI.app/Contents/Resources/sample-data/deepfiles-demo-folder',
+      source_root_path: '/Applications/DeepBind.app/Contents/Resources/sample-data/deepfiles-demo-folder',
       proposed_destination_root: 'memory/imports/deepfiles-demo-folder/',
       total_files_seen: 7,
       total_size_seen: 1024,
@@ -454,7 +454,7 @@ describe('components/ImportDialog.vue', () => {
 
     expect(writeText).toHaveBeenCalledTimes(1)
     const report = writeText.mock.calls[0]?.[0] as string
-    expect(report).toContain('DeepFilesAI source scan issue report')
+    expect(report).toContain('DeepBind source scan issue report')
     expect(report).toContain('Source: Shared Drive')
     expect(report).toContain('Scan mode: metadata-only; file contents were not read.')
     expect(report).toContain('File too large: 1 - Split or reduce the file before importing.')

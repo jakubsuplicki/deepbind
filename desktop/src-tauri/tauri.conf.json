@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "DeepFilesAI",
+  "productName": "DeepBind",
   "version": "0.1.0",
-  "identifier": "app.deepfilesai.desktop",
+  "identifier": "app.deepbind.desktop",
   "build": {
     "devUrl": "http://localhost:3000",
     "frontendDist": "../../frontend/.output/public"
@@ -32,10 +32,10 @@
     "fileAssociations": [
       {
         "ext": ["deepfileslic"],
-        "name": "DeepFilesAI License",
-        "description": "DeepFilesAI license file (Ed25519-signed, ADR 006)",
+        "name": "DeepBind License",
+        "description": "DeepBind license file (Ed25519-signed, ADR 006)",
         "role": "Editor",
-        "mimeType": "application/x-deepfilesai-license"
+        "mimeType": "application/x-deepbind-license"
       }
     ],
     "macOS": {
@@ -45,6 +45,6 @@
     },
     "category": "Productivity",
     "shortDescription": "AI workspace that remembers what matters.",
-    "longDescription": "DeepFilesAI desktop shell — Tauri 2 + Python sidecar + bundled Ollama. ADR 003 graduation build."
+    "longDescription": "DeepBind desktop shell — Tauri 2 + Python sidecar + bundled Ollama. ADR 003 graduation build."
   }
 }

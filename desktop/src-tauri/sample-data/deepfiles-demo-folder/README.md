@@ -1,4 +1,4 @@
-# DeepFilesAI Sample Business Folder
+# DeepBind Sample Business Folder
 
 This folder is fictional demo data for the source import flow. It is safe to
 ship with the desktop app and contains no customer or third-party confidential

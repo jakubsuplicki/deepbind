@@ -1,14 +1,14 @@
-# DeepFilesAI
+# DeepBind
 
 [![CI](https://github.com/jakubsuplicki/deepbind/actions/workflows/ci.yml/badge.svg)](https://github.com/jakubsuplicki/deepbind/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml/badge.svg)](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-<sub>Codename: Jarvis · Open-source, Apache-2.0 licensed · originally developed by Zen Zero Pty Ltd</sub>
+<sub>Open-source, Apache-2.0 licensed · builds on the original Jarvis by Łukasz Jakubowski · originally developed by Zen Zero Pty Ltd</sub>
 
 **A pure-local AI workspace that remembers what matters.**
 
-> **Open source.** DeepFilesAI is released under the [Apache License 2.0](./LICENSE) and
+> **Open source.** DeepBind is released under the [Apache License 2.0](./LICENSE) and
 > developed in the open. It runs entirely on your machine — there is no hosted
 > service, no account, and no telemetry. Contributions are welcome; see
 > [CONTRIBUTING](./CONTRIBUTING.md), the [Code of Conduct](./CODE_OF_CONDUCT.md),
@@ -16,7 +16,7 @@
 > stage — expect rough edges, and check the [docs](./docs/overview.md) for the
 > current product shape.
 
-DeepFilesAI is a local-first personal knowledge, planning, and memory system. It runs as a desktop app with a local web UI, a local Python sidecar, a bundled Ollama runtime, and a Markdown workspace that stays on the user's machine.
+DeepBind is a local-first personal knowledge, planning, and memory system. It runs as a desktop app with a local web UI, a local Python sidecar, a bundled Ollama runtime, and a Markdown workspace that stays on the user's machine.
 
 V1 is intentionally **pure local**:
 
@@ -29,13 +29,13 @@ V1 is intentionally **pure local**:
 
 Model downloads can still contact the Ollama registry when the user pulls a local model. Inference, retrieval, memory, graph building, session history, and write-back all run locally.
 
-![DeepFilesAI hero](./docs/assets/hero.png)
+![DeepBind hero](./docs/assets/hero.png)
 
 ---
 
 ## In One Sentence
 
-DeepFilesAI retrieves from your local notes and documents, reasons with a local model, and writes useful outputs back into durable Markdown memory.
+DeepBind retrieves from your local notes and documents, reasons with a local model, and writes useful outputs back into durable Markdown memory.
 
 ---
 
@@ -55,7 +55,7 @@ Some older docs may still mention Claude, Anthropic, OpenAI, Google, web search,
 
 ## What It Does
 
-DeepFilesAI helps you:
+DeepBind helps you:
 
 - import notes, files, PDFs, URLs, YouTube transcripts, and Jira exports into local memory
 - search memory with BM25 keyword search, embeddings, reranking, and graph expansion
@@ -72,7 +72,7 @@ The product is not trying to be a generic chatbot. It is a local knowledge syste
 ## Architecture
 
 ```text
-DeepFilesAI.app
+DeepBind.app
 ├─ Tauri shell (Rust)
 │  ├─ starts the Nuxt webview immediately
 │  ├─ spawns bundled Ollama on a private localhost port
@@ -111,7 +111,7 @@ The source-of-truth rule is equally important: Markdown is canonical. SQLite, em
 
 ## Retrieval Before Reasoning
 
-DeepFilesAI does not throw the whole workspace into the model. It searches locally first, compresses the result, then sends a smaller context to the local model.
+DeepBind does not throw the whole workspace into the model. It searches locally first, compresses the result, then sends a smaller context to the local model.
 
 ```mermaid
 flowchart LR
@@ -136,7 +136,7 @@ This design keeps the model focused, reduces context bloat, and makes answers in
 
 ## Local Models
 
-DeepFilesAI uses Ollama for chat models. The desktop app bundles the Ollama runtime and runs it on a private localhost port so it does not depend on a user-installed Ollama service.
+DeepBind uses Ollama for chat models. The desktop app bundles the Ollama runtime and runs it on a private localhost port so it does not depend on a user-installed Ollama service.
 
 The catalog is hardware-aware. Smaller machines start with lighter Qwen3 models; stronger machines can pull larger Qwen3 / Granite / gpt-oss entries where supported.
 
@@ -174,7 +174,7 @@ Specialists are reusable local roles with their own instructions and knowledge b
 
 ### MCP Server
 
-DeepFilesAI includes a local stdio MCP server so external AI tools can use the same memory backend. See [MCP Server Tools](./docs/features/mcp-server/tools.md).
+DeepBind includes a local stdio MCP server so external AI tools can use the same memory backend. See [MCP Server Tools](./docs/features/mcp-server/tools.md).
 
 ### Offline Licensing (reference implementation)
 
@@ -267,7 +267,7 @@ npm run reset:cache
 
 ## Desktop Release Build
 
-The macOS release path produces a signed, notarized, stapled `DeepFilesAI.app` and `.dmg` for Apple Silicon.
+The macOS release path produces a signed, notarized, stapled `DeepBind.app` and `.dmg` for Apple Silicon.
 
 Start here:
 
@@ -333,8 +333,16 @@ deepbind/
 
 ---
 
+## Credits
+
+DeepBind builds on the original **Jarvis** by **Łukasz Jakubowski**, whose
+project is the foundation this work extends. DeepBind is an independent,
+local-first evolution of that idea, released as open source with full credit to
+the original. "Jarvis" remains the internal codename in parts of the codebase
+and workspace layout in recognition of that lineage.
+
 ## License
 
-DeepFilesAI is open-source software released under the [Apache License 2.0](./LICENSE). It was originally developed by Zen Zero Pty Ltd.
+DeepBind is open-source software released under the [Apache License 2.0](./LICENSE). It was originally developed by Zen Zero Pty Ltd.
 
 Bundled third-party components retain their own licenses. See [Third-Party Notices](./docs/THIRD-PARTY-NOTICES.md).

@@ -8,7 +8,7 @@
     :default-open="false"
   >
     <p class="settings-page__hint">
-      DeepFilesAI bundles open-source software. The full attribution and
+      DeepBind bundles open-source software. The full attribution and
       license text for every bundled component is reproduced below.
     </p>
 

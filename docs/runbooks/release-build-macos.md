@@ -12,7 +12,7 @@ related_features:
 
 # Release Build — macOS (Apple Silicon)
 
-End-to-end procedure to produce a Developer ID-signed, notarized, stapled `DeepFilesAI.app` and `.dmg` for `aarch64-apple-darwin`. Per [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md) this is the **only** desktop target — there is no cloud-SKU build, no `JARVIS_DESKTOP_BUNDLE` flag, no LiteLLM. The single command [`desktop/scripts/build-notarized.sh`](../../desktop/scripts/build-notarized.sh) drives the entire pipeline.
+End-to-end procedure to produce a Developer ID-signed, notarized, stapled `DeepBind.app` and `.dmg` for `aarch64-apple-darwin`. Per [ADR 015](../architecture/decisions/015-single-target-local-only-stack.md) this is the **only** desktop target — there is no cloud-SKU build, no `JARVIS_DESKTOP_BUNDLE` flag, no LiteLLM. The single command [`desktop/scripts/build-notarized.sh`](../../desktop/scripts/build-notarized.sh) drives the entire pipeline.
 
 This runbook documents what the script does, how to set up the prerequisites, how to recover from the most common failures, and how to verify the artifact end-to-end against the four ADR 015 audit signals.
 
@@ -128,8 +128,8 @@ The script is **idempotent** at the cache level: re-running with no source chang
 ### Outputs
 
 ```
-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app
-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepFilesAI_0.1.0_aarch64.dmg
+desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app
+desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepBind_0.1.0_aarch64.dmg
 ```
 
 ---
@@ -139,17 +139,17 @@ desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepFilesAI_0.1
 To install the built `.app` into `/Applications` (for local smoke or audit-signal verification), copy with **`ditto`**, not `cp -R`:
 
 ```sh
-rm -rf /Applications/DeepFilesAI.app
-ditto desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app /Applications/DeepFilesAI.app
+rm -rf /Applications/DeepBind.app
+ditto desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app /Applications/DeepBind.app
 ```
 
-The Apple-notarized staple ticket is stored in extended attributes on the bundle. `cp -R` does **not** preserve xattrs by default and silently drops the ticket — `xcrun stapler validate` will then report *"does not have a ticket stapled to it"* even though the original artifact is correctly stapled. `ditto` preserves xattrs, ACLs, and resource forks. Same caveat applies if you mount the `.dmg` and `cp -R` from `/Volumes/DeepFilesAI/` — round-trip through the DMG mount also strips xattrs unless you `ditto`. (Drag-installing from Finder uses the equivalent of `ditto` and is also fine.)
+The Apple-notarized staple ticket is stored in extended attributes on the bundle. `cp -R` does **not** preserve xattrs by default and silently drops the ticket — `xcrun stapler validate` will then report *"does not have a ticket stapled to it"* even though the original artifact is correctly stapled. `ditto` preserves xattrs, ACLs, and resource forks. Same caveat applies if you mount the `.dmg` and `cp -R` from `/Volumes/DeepBind/` — round-trip through the DMG mount also strips xattrs unless you `ditto`. (Drag-installing from Finder uses the equivalent of `ditto` and is also fine.)
 
 Verify the install carried the ticket and capabilities through:
 
 ```sh
-xcrun stapler validate /Applications/DeepFilesAI.app
-/usr/libexec/PlistBuddy -c "Print :JarvisBundleCapabilities" /Applications/DeepFilesAI.app/Contents/Info.plist
+xcrun stapler validate /Applications/DeepBind.app
+/usr/libexec/PlistBuddy -c "Print :JarvisBundleCapabilities" /Applications/DeepBind.app/Contents/Info.plist
 ```
 
 Before promoting a build for demos, also run the source-import smoke in [Folder Source Import Demo Smoke](folder-source-import-demo-smoke.md). That pass verifies the bundled sample dataset, local mixed-folder import, synced-folder offline behavior, remove/re-import safety, and import-scoped question trace from the packaged app.
@@ -173,7 +173,7 @@ grep -r --include='*.py' --include='*.ts' --include='*.vue' \
 ### 2. Bundle contents
 
 ```sh
-find desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app \
+find desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app \
     -name '*anthropic*' -o -name '*openai*' -o -name '*litellm*' -o -name '*google.generativeai*'
 ```
 
@@ -193,7 +193,7 @@ curl -i http://127.0.0.1:<jarvis_port>/api/settings/api-key
 
 ```sh
 defaults read \
-    desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app/Contents/Info.plist \
+    desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app/Contents/Info.plist \
     JarvisBundleCapabilities
 ```
 
@@ -258,7 +258,7 @@ Run with `-vvv` for the verbose verdict. Common causes:
 **Symptoms** in the build log:
 
 ```
-Bundling DeepFilesAI_0.1.0_aarch64.dmg (...bundle/dmg/DeepFilesAI_0.1.0_aarch64.dmg)
+Bundling DeepBind_0.1.0_aarch64.dmg (...bundle/dmg/DeepBind_0.1.0_aarch64.dmg)
  Running bundle_dmg.sh
 failed to bundle project error running bundle_dmg.sh: …
 ```
@@ -268,7 +268,7 @@ failed to bundle project error running bundle_dmg.sh: …
 **Recovery path** (resume from the surviving `.app`):
 
 ```sh
-APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app"
+APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app"
 SIGN="Developer ID Application: EXAMPLE (TEAMID)"
 INFO_PLIST="$APP/Contents/Info.plist"
 

@@ -38,7 +38,7 @@
           Embeddings + FTS are generated automatically.
         </template>
         <template v-else-if="mode === 'folder'">
-          DeepFilesAI will first scan file names, types, sizes, and folders.
+          DeepBind will first scan file names, types, sizes, and folders.
           File contents are imported only after you approve.
         </template>
         <template v-else>

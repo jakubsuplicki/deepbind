@@ -41,9 +41,9 @@
 #
 # After a successful run, verify with:
 #   spctl --assess -vvv \
-#     desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app
+#     desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app
 #   xcrun stapler validate \
-#     desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app
+#     desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app
 
 set -euo pipefail
 
@@ -131,8 +131,8 @@ echo "    team id:   $APPLE_TEAM_ID"
 echo
 npx tauri build --target aarch64-apple-darwin
 
-APP="$DESKTOP_DIR/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app"
-DMG="$DESKTOP_DIR/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepFilesAI_0.1.0_aarch64.dmg"
+APP="$DESKTOP_DIR/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app"
+DMG="$DESKTOP_DIR/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepBind_0.1.0_aarch64.dmg"
 
 if [[ ! -d "$APP" ]]; then
     echo "error: tauri build did not produce $APP" >&2

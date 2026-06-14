@@ -17,8 +17,8 @@ This is **not** the real backend or the real frontend. It exists to prove the ar
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ DeepFilesAI.app  (Tauri shell, Rust)                │
-│   ├─ MacOS/deepfilesai-desktop  ← shell binary      │
+│ DeepBind.app  (Tauri shell, Rust)                │
+│   ├─ MacOS/deepbind-desktop  ← shell binary      │
 │   └─ MacOS/jarvis-sidecar       ← PyInstaller       │
 │        (FastAPI + uvicorn, single-file binary)      │
 └─────────────────────────────────────────────────────┘
@@ -59,14 +59,14 @@ APPLE_SIGNING_IDENTITY="-" \
 ```
 
 Outputs:
-- `src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app`
-- `src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepFilesAI_0.1.0_aarch64.dmg`
+- `src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app`
+- `src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DeepBind_0.1.0_aarch64.dmg`
 
 Ad-hoc-signed (`APPLE_SIGNING_IDENTITY="-"`) — local launch + Gatekeeper-override only. **Not notarized.**
 
 To launch and observe:
 ```bash
-open src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepFilesAI.app
+open src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DeepBind.app
 ```
 
 The window shows a probe card: backend URL (ephemeral port), `/api/health` status, sidecar version, raw JSON.

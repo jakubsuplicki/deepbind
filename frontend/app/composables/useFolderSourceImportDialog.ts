@@ -227,7 +227,7 @@ function issueFileReason(file: SourceScanFileItem): string {
 export function buildSourceImportScanIssueReport(scan: SourceScanReport): string {
   const attentionCount = scan.unsupported_file_count + scan.skipped_file_count
   const lines = [
-    'DeepFilesAI source scan issue report',
+    'DeepBind source scan issue report',
     `Source: ${scan.source_display_name}`,
     `Source type: ${sourceKindLabel(scan)}`,
     `Scan ID: ${scan.scan_id}`,

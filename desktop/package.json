@@ -1,8 +1,8 @@
 {
-  "name": "deepfilesai-desktop",
+  "name": "deepbind-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Tauri shell + Python sidecar packaging for DeepFilesAI desktop distribution (ADR 003).",
+  "description": "Tauri shell + Python sidecar packaging for DeepBind desktop distribution (ADR 003).",
   "scripts": {
     "tauri": "tauri",
     "build-sidecar": "bash scripts/build-sidecar.sh",

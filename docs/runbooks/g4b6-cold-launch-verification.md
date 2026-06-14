@@ -14,7 +14,7 @@ related_features:
 
 # G4b6 — Cold-launch verification on the notarized bundle
 
-End-to-end verification that the notarized DeepFilesAI bundle behaves correctly for a first-time user install — fresh `<app_data>`, fresh keychain, no prior marker, no dev artifacts. This is the empirical gate at the bottom of [`docs/features/desktop-shell-graduation.md`](../features/desktop-shell-graduation.md#g4b6----cold-launch-verification-on-the-notarized-bundle); pass means desktop shell graduation closes, fail means each finding becomes a follow-up chunk before re-attempt.
+End-to-end verification that the notarized DeepBind bundle behaves correctly for a first-time user install — fresh `<app_data>`, fresh keychain, no prior marker, no dev artifacts. This is the empirical gate at the bottom of [`docs/features/desktop-shell-graduation.md`](../features/desktop-shell-graduation.md#g4b6----cold-launch-verification-on-the-notarized-bundle); pass means desktop shell graduation closes, fail means each finding becomes a follow-up chunk before re-attempt.
 
 The test loop is expected to surface real bugs (sidecar path resolution under Gatekeeper, `.deepfileslic` file-association flow, first-run wizard timing under bundle-mode, missing bundled assets). The build pipeline was split 2026-05-06 ([`build-dmg.sh`](../../desktop/scripts/build-dmg.sh)) so a transient `.dmg`-phase flake during retries doesn't cost the full 25-min .app rebuild.
 
@@ -28,29 +28,29 @@ The test loop is expected to surface real bugs (sidecar path resolution under Ga
 ## Two ways to simulate a cold launch
 
 ### Option A — Different Mac (most realistic)
-Move the `.dmg` to a stock macOS arm64 box that has never seen DeepFilesAI. This is the canonical test — it catches issues a dev box masks (cached signing tickets, lingering keychain entries, residual `~/Jarvis/`).
+Move the `.dmg` to a stock macOS arm64 box that has never seen DeepBind. This is the canonical test — it catches issues a dev box masks (cached signing tickets, lingering keychain entries, residual `~/Jarvis/`).
 
 ### Option B — Reset state on this Mac
 Faster but less thorough. Removes the four persistence locations the app touches:
 
 ```sh
 # 1. Tauri shell app-data dir (ollama-models cache lives here)
-rm -rf "$HOME/Library/Application Support/app.deepfilesai.desktop"
+rm -rf "$HOME/Library/Application Support/app.deepbind.desktop"
 
 # 2. Workspace dir (notes, vault, jarvis.db, .first_run_complete marker)
 #    DEFAULT path; if you've changed Settings → Workspace, adjust.
 rm -rf "$HOME/Jarvis"
 
 # 3. Logs dir (so this run's diagnostics are uncontaminated)
-rm -rf "$HOME/Library/Logs/DeepFilesAI"
+rm -rf "$HOME/Library/Logs/DeepBind"
 
 # 4. Keychain entries (trial_started_at + monotonic_floor — service
-#    'com.deepfilesai.desktop'). Idempotent — silently no-ops if absent.
-security delete-generic-password -s "com.deepfilesai.desktop" -a "trial_started_at" 2>/dev/null || true
-security delete-generic-password -s "com.deepfilesai.desktop" -a "monotonic_floor"   2>/dev/null || true
+#    'com.deepbind.desktop'). Idempotent — silently no-ops if absent.
+security delete-generic-password -s "com.deepbind.desktop" -a "trial_started_at" 2>/dev/null || true
+security delete-generic-password -s "com.deepbind.desktop" -a "monotonic_floor"   2>/dev/null || true
 ```
 
-Then drag the `.app` from the mounted `.dmg` to `/Applications/` exactly like a user would. **Do not run from `desktop/src-tauri/target/...` — that's the dev path; run from `/Applications/DeepFilesAI.app` to hit the same Gatekeeper code path a user hits.**
+Then drag the `.app` from the mounted `.dmg` to `/Applications/` exactly like a user would. **Do not run from `desktop/src-tauri/target/...` — that's the dev path; run from `/Applications/DeepBind.app` to hit the same Gatekeeper code path a user hits.**
 
 ---
 
@@ -63,7 +63,7 @@ Run them in order. Items 7 and 8 are static (inspect the `.app` without launchin
 > **Pass:** `find` output is empty.
 
 ```sh
-find /Applications/DeepFilesAI.app \
+find /Applications/DeepBind.app \
     -name "*anthropic*" -o -name "*openai*" -o -name "*litellm*" \
     -o -name "*tiktoken*" -o -name "*google.generativeai*"
 ```
@@ -77,7 +77,7 @@ Per [ADR 015 §F audit signal 2](../architecture/decisions/015-single-target-loc
 > **Pass:** array contains exactly the four expected capabilities, no more, no less.
 
 ```sh
-defaults read /Applications/DeepFilesAI.app/Contents/Info.plist JarvisBundleCapabilities
+defaults read /Applications/DeepBind.app/Contents/Info.plist JarvisBundleCapabilities
 ```
 
 Expected output:
@@ -97,9 +97,9 @@ Expected output:
 > **Pass:** double-click `.dmg` → drag-to-/Applications view → drag → no Gatekeeper warning, no quarantine prompt, app appears in `/Applications/`. `spctl --assess` returns `accepted, source=Notarized Developer ID`.
 
 ```sh
-spctl --assess -vvv --type install /Volumes/DeepFilesAI/DeepFilesAI.app  # while .dmg is mounted
-spctl --assess -vvv --type exec    /Applications/DeepFilesAI.app           # after copy
-xcrun stapler validate /Applications/DeepFilesAI.app                       # ticket present
+spctl --assess -vvv --type install /Volumes/DeepBind/DeepBind.app  # while .dmg is mounted
+spctl --assess -vvv --type exec    /Applications/DeepBind.app           # after copy
+xcrun stapler validate /Applications/DeepBind.app                       # ticket present
 ```
 
 > **Fail modes:**
@@ -109,7 +109,7 @@ xcrun stapler validate /Applications/DeepFilesAI.app                       # tic
 
 ### ✅ Check 2 — First launch shows OnboardingLocalFlow + auto-kicks orchestrator
 
-> **Pass:** double-click `/Applications/DeepFilesAI.app`. Within ~5-10 seconds the window opens directly into the OnboardingLocalFlow modal (not the chat UI). The orchestrator starts pulling the recommended model — progress visible in the wizard.
+> **Pass:** double-click `/Applications/DeepBind.app`. Within ~5-10 seconds the window opens directly into the OnboardingLocalFlow modal (not the chat UI). The orchestrator starts pulling the recommended model — progress visible in the wizard.
 
 What's happening behind the scenes:
 1. Tauri shell spawns the bundled Ollama (`OLLAMA_HOST=127.0.0.1:11435`).
@@ -118,7 +118,7 @@ What's happening behind the scenes:
 4. The orchestrator is auto-kicked via `POST /api/local/first-run/start` — see [`backend/services/first_run_orchestrator.py`](../../backend/services/first_run_orchestrator.py).
 
 > **Fail modes:**
-> - **Window opens but blank / spinner forever.** Sidecar didn't start. Check `~/Library/Logs/DeepFilesAI/*.log` for Python tracebacks. Most likely cause: bundled tokenizer cache (`_bundled_tokenizers/`) or fastembed weights missing — the sidecar spec aborts the *build* if these are missing, but if it built and these are at the wrong runtime path, look at `_MEIPASS` resolution in [`services/token_counting.py:_bundled_tokenizers_root`](../../backend/services/token_counting.py).
+> - **Window opens but blank / spinner forever.** Sidecar didn't start. Check `~/Library/Logs/DeepBind/*.log` for Python tracebacks. Most likely cause: bundled tokenizer cache (`_bundled_tokenizers/`) or fastembed weights missing — the sidecar spec aborts the *build* if these are missing, but if it built and these are at the wrong runtime path, look at `_MEIPASS` resolution in [`services/token_counting.py:_bundled_tokenizers_root`](../../backend/services/token_counting.py).
 > - **Window opens to chat UI, not wizard.** Marker file from a prior run survived. Re-run the cold-launch reset (Option B above), or check `ls ~/Jarvis/app/.first_run_complete`.
 > - **OnboardingLocalFlow shows but progress bar stuck at 0%.** Ollama isn't reachable. From a terminal: `curl http://127.0.0.1:11435/` should return `Ollama is running`. If it doesn't, the sidecar's bundled Ollama didn't spawn — `ps aux | grep ollama` and check the Tauri shell's log output for spawn errors. Most common cause: the `binaries/ollama-runtime/ollama` binary isn't quarantine-stripped or isn't signed → won't run under Gatekeeper-enforced hardened runtime.
 
@@ -129,9 +129,9 @@ What's happening behind the scenes:
 The default model per [ADR 005](../architecture/decisions/005-profile-driven-model-stacks.md) is hardware-tiered. On M5 Pro 24 GB you should get qwen3-8b or qwen3-14b. The pull is ~5-9 GB depending on tier, so this step takes 5-15 min on a typical home network.
 
 > **Fail modes:**
-> - **Pull starts then errors.** Open `~/Library/Logs/DeepFilesAI/*.log` and grep for `pull failed`. Usually a network issue — Ollama's pull endpoint hits `registry.ollama.ai` over HTTPS. Local firewalls may block this.
+> - **Pull starts then errors.** Open `~/Library/Logs/DeepBind/*.log` and grep for `pull failed`. Usually a network issue — Ollama's pull endpoint hits `registry.ollama.ai` over HTTPS. Local firewalls may block this.
 > - **Pull completes but chat doesn't open.** `chatReady` event didn't fire. Check the Tauri shell log for the WebSocket emit; check the frontend devtools console (Cmd+Opt+I — only works if the build was made with devtools enabled; production builds disable this).
-> - **Chat opens but first message hangs.** Ollama generate failed. From a terminal: `curl -X POST http://127.0.0.1:11435/api/generate -d '{"model":"qwen3:8b","prompt":"hi","stream":false}'`. SIGABRT in the runner = the M5/Metal 4 issue (should be impossible since we pin Ollama 0.18.0; if it happens anyway, the bundled binary isn't actually 0.18.0 — `/Applications/DeepFilesAI.app/Contents/Resources/ollama-runtime/ollama --version` will say).
+> - **Chat opens but first message hangs.** Ollama generate failed. From a terminal: `curl -X POST http://127.0.0.1:11435/api/generate -d '{"model":"qwen3:8b","prompt":"hi","stream":false}'`. SIGABRT in the runner = the M5/Metal 4 issue (should be impossible since we pin Ollama 0.18.0; if it happens anyway, the bundled binary isn't actually 0.18.0 — `/Applications/DeepBind.app/Contents/Resources/ollama-runtime/ollama --version` will say).
 
 ### ✅ Check 4 — Background fallback pull + chat-model probe complete without blocking
 
@@ -154,7 +154,7 @@ cat ~/Jarvis/app/.first_run_complete     # JSON with timestamp + completed-step 
 
 ### ✅ Check 6 — Second launch skips the wizard
 
-> **Pass:** quit the app (Cmd+Q). Re-launch (`open /Applications/DeepFilesAI.app`). Window opens directly into the chat UI. No wizard, no orchestrator kick, no model re-pull.
+> **Pass:** quit the app (Cmd+Q). Re-launch (`open /Applications/DeepBind.app`). Window opens directly into the chat UI. No wizard, no orchestrator kick, no model re-pull.
 
 The early-return path is `is_first_run_complete()` → True → `<OnboardingLocalFlow>` doesn't render → frontend goes straight to the chat layout.
 
@@ -180,14 +180,14 @@ Common fix → re-test costs (using the 2026-05-06 split build pipeline):
 
 | Symptom | Command |
 |---|---|
-| App won't launch / Gatekeeper rejects | `spctl --assess -vvv --type exec /Applications/DeepFilesAI.app` |
-| Verify notarization stapled | `xcrun stapler validate /Applications/DeepFilesAI.app` |
-| Inspect signature + entitlements | `codesign -dvvv --entitlements - /Applications/DeepFilesAI.app` |
-| Check Info.plist values | `defaults read /Applications/DeepFilesAI.app/Contents/Info.plist <key>` |
-| Sidecar / orchestrator logs | `tail -f ~/Library/Logs/DeepFilesAI/*.log` |
-| Bundled Ollama version | `/Applications/DeepFilesAI.app/Contents/Resources/ollama-runtime/ollama --version` |
+| App won't launch / Gatekeeper rejects | `spctl --assess -vvv --type exec /Applications/DeepBind.app` |
+| Verify notarization stapled | `xcrun stapler validate /Applications/DeepBind.app` |
+| Inspect signature + entitlements | `codesign -dvvv --entitlements - /Applications/DeepBind.app` |
+| Check Info.plist values | `defaults read /Applications/DeepBind.app/Contents/Info.plist <key>` |
+| Sidecar / orchestrator logs | `tail -f ~/Library/Logs/DeepBind/*.log` |
+| Bundled Ollama version | `/Applications/DeepBind.app/Contents/Resources/ollama-runtime/ollama --version` |
 | Test sidecar HTTP directly | `curl http://127.0.0.1:<sidecar-port>/api/health` (port logged on startup) |
 | Test bundled Ollama directly | `curl http://127.0.0.1:11435/` |
-| List keychain entries we own | `security dump-keychain \| grep com.deepfilesai.desktop` |
-| Watch process tree | `ps -ef \| grep -E 'DeepFilesAI\|ollama\|jarvis-sidecar'` |
+| List keychain entries we own | `security dump-keychain \| grep com.deepbind.desktop` |
+| Watch process tree | `ps -ef \| grep -E 'DeepBind\|ollama\|jarvis-sidecar'` |
 | Force-clear all state | see Option B above |

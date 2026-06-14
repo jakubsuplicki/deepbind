@@ -1,15 +1,15 @@
 # Third-Party Notices
 
-DeepFilesAI bundles open-source software components in the desktop application.
+DeepBind bundles open-source software components in the desktop application.
 This document lists each bundled component with its license type, the upstream
 copyright holder, and any required attribution. The full text of each license
 referenced below is reproduced at the end of this document under "License
 Texts."
 
-DeepFilesAI itself is released under the **Apache License 2.0**; see
+DeepBind itself is released under the **Apache License 2.0**; see
 [`LICENSE`](../LICENSE) at the project root. The licenses listed below cover
 the **bundled third-party components only** — they govern those components and
-do not modify or supersede the MIT license that applies to DeepFilesAI itself.
+do not modify or supersede the Apache 2.0 license that applies to DeepBind itself.
 
 This document is shipped inside the application bundle as
 `Contents/Resources/THIRD-PARTY-NOTICES.md` and is also surfaced in
@@ -51,7 +51,7 @@ These model weights are bundled inside the desktop installer's
 GGUF chat-model weights (Qwen3 family, Granite 4 family, gpt-oss) are NOT
 bundled in the installer — the user pulls them post-install via `ollama pull`.
 Each chat model's license terms apply at the time of download from the user's
-chosen Ollama registry. The DeepFilesAI catalog only lists Apache-2.0 / MIT
+chosen Ollama registry. The DeepBind catalog only lists Apache-2.0 / MIT
 chat-model entries (per [ADR 005](architecture/decisions/005-hardware-tiered-model-stack-and-first-run-policy.md) §A's catalog-discipline rule);
 non-permissive entries were removed in the 2026-05-05 catalog cleanup (audit
 finding #6).
@@ -150,7 +150,7 @@ alongside this document during release builds.
 
 ## Fonts and Icons
 
-DeepFilesAI ships **no bundled font files**. The renderer uses the operating
+DeepBind ships **no bundled font files**. The renderer uses the operating
 system's installed font stack (system-ui / SF Pro on macOS, Segoe UI on
 Windows, Inter or system default on Linux). No font-license attribution
 applies.

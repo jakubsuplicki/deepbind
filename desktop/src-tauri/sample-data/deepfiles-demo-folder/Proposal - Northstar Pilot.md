@@ -14,7 +14,7 @@ supplier material to a cloud AI service.
 
 ## Proposed Pilot
 
-- Import a controlled folder of project documents into DeepFilesAI.
+- Import a controlled folder of project documents into DeepBind.
 - Keep the source documents local to the workstation.
 - Create local memory notes with safe source-relative provenance.
 - Ask scoped questions about the imported folder after approval.

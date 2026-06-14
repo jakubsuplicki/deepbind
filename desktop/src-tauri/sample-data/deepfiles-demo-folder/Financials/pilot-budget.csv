@@ -1,6 +1,6 @@
 Category,Description,Owner,Estimate AUD,Status
-Software,DeepFilesAI pilot license,Operations,1200,Proposed
-Support,Remote setup and training,DeepFilesAI,600,Proposed
+Software,DeepBind pilot license,Operations,1200,Proposed
+Support,Remote setup and training,DeepBind,600,Proposed
 Internal time,Folder preparation and review,Operations,450,Planned
 Risk buffer,Unexpected file cleanup,Operations,250,Planned
 Total,,Operations,2500,Planning

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  macOS hardened-runtime entitlements for the DeepFilesAI Tauri shell.
+  macOS hardened-runtime entitlements for the DeepBind Tauri shell.
 
   Per ADR 003 §"v1 schedule risk" and §B (amendment 2026-04-29):
 

@@ -12,7 +12,7 @@ The commercial-licensing audit (2026-05-04, finding #4) flagged this as a credib
 
 The other Approach A variants do not survive scrutiny in the v1 product shape:
 
-- **Vendor-paid managed key.** DeepFilesAI would hold the Tavily key and proxy queries through a thin authenticated relay. Contradicts ADR 002's "no DeepFilesAI servers" stance and ADR 006's offline-signed-license shape. Adds a server-side credential management surface where today there is none. Also turns every user's web-search query into a per-query cost on our side — perverse incentive against a feature whose value is sporadic fallback.
+- **Vendor-paid managed key.** DeepBind would hold the Tavily key and proxy queries through a thin authenticated relay. Contradicts ADR 002's "no DeepBind servers" stance and ADR 006's offline-signed-license shape. Adds a server-side credential management surface where today there is none. Also turns every user's web-search query into a per-query cost on our side — perverse incentive against a feature whose value is sporadic fallback.
 - **Hardcoded free-tier key shipped in the bundle.** Trivial to extract, trivially abused, gets the key revoked, breaks the feature for everyone the moment a script kiddie finds it. Not viable.
 
 This leaves three real options: ship BYOK with Tavily, ship a paid-tier entitlement (Approach B in the research doc), or **drop web search from v1 entirely** (Approach D). This ADR locks in the third option.
@@ -54,7 +54,7 @@ The research doc's pick. Honest commercial contract, ZDR options, SOC 2 attestat
 
 ### B. Ship a vendor-paid managed-key tier as a license entitlement
 
-Solves the user-facing onboarding question by having DeepFilesAI hold the API key and meter usage via a `web_search_managed` license entitlement. **Rejected** because it requires server-side infrastructure (key holder, relay, billing) that the product architecture explicitly avoids per ADR 002 and ADR 006. The math also doesn't work — a per-query cost on our side, against a feature most users will rarely invoke, is the wrong shape of subsidy.
+Solves the user-facing onboarding question by having DeepBind hold the API key and meter usage via a `web_search_managed` license entitlement. **Rejected** because it requires server-side infrastructure (key holder, relay, billing) that the product architecture explicitly avoids per ADR 002 and ADR 006. The math also doesn't work — a per-query cost on our side, against a feature most users will rarely invoke, is the wrong shape of subsidy.
 
 ### C. Ship `duckduckgo-search` as-is
 

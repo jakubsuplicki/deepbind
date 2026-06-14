@@ -1,4 +1,4 @@
-//! DeepFilesAI desktop shell — ADR 003 graduation (G4a: bundled Ollama).
+//! DeepBind desktop shell — ADR 003 graduation (G4a: bundled Ollama).
 //!
 //! Boot sequence (production / bundled):
 //!   1. Resolve the bundled Ollama runtime payload under
@@ -583,7 +583,7 @@ pub fn run() {
             // is non-content, no gated surface paints until license state is
             // known.
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("DeepFilesAI")
+                .title("DeepBind")
                 .inner_size(960.0, 720.0)
                 .resizable(true)
                 .build()

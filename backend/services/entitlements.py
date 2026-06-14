@@ -387,7 +387,7 @@ def _licensed_state(license_text: str, current: datetime) -> EntitlementState:
             reason=(
                 "License expired and 30-day grace period has elapsed. "
                 "Read-only mode — your data is at "
-                "~/DeepFilesAI/memory/ and remains accessible."
+                "~/DeepBind/memory/ and remains accessible."
             ),
         )
 

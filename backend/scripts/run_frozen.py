@@ -88,13 +88,13 @@ def _setup_logging() -> Path:
     safely on hot reload.
     """
     if sys.platform == "darwin":
-        log_dir = Path.home() / "Library" / "Logs" / "DeepFilesAI"
+        log_dir = Path.home() / "Library" / "Logs" / "DeepBind"
     elif sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA")
-        log_dir = (Path(local) if local else Path.home() / "AppData" / "Local") / "DeepFilesAI" / "Logs"
+        log_dir = (Path(local) if local else Path.home() / "AppData" / "Local") / "DeepBind" / "Logs"
     else:
         xdg = os.environ.get("XDG_STATE_HOME")
-        log_dir = (Path(xdg) if xdg else Path.home() / ".local" / "state") / "DeepFilesAI" / "logs"
+        log_dir = (Path(xdg) if xdg else Path.home() / ".local" / "state") / "DeepBind" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "sidecar.log"
 
