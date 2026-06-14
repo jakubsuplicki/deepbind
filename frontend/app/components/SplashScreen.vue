@@ -85,7 +85,7 @@
       <footer class="splash__footer">
         <span class="splash__footer-version">v{{ version }}</span>
         <span class="splash__footer-sep">·</span>
-        <span class="splash__footer-build">© Zen Zero Pty Ltd</span>
+        <span class="splash__footer-build">© The DeepBind Project</span>
       </footer>
     </div>
   </div>

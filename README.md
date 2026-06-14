@@ -4,7 +4,7 @@
 [![CodeQL](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml/badge.svg)](https://github.com/jakubsuplicki/deepbind/actions/workflows/codeql.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-<sub>Open-source, Apache-2.0 licensed · builds on the original Jarvis by Łukasz Jakubowski · originally developed by Zen Zero Pty Ltd</sub>
+<sub>Open-source, Apache-2.0 licensed · builds on the original Jarvis by Łukasz Jakubowski</sub>
 
 **A pure-local AI workspace that remembers what matters.**
 
@@ -329,6 +329,6 @@ and workspace layout in recognition of that lineage.
 
 ## License
 
-DeepBind is open-source software released under the [Apache License 2.0](./LICENSE). It was originally developed by Zen Zero Pty Ltd.
+DeepBind is open-source software released under the [Apache License 2.0](./LICENSE).
 
 Bundled third-party components retain their own licenses. See [Third-Party Notices](./docs/THIRD-PARTY-NOTICES.md).
