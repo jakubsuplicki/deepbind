@@ -39,20 +39,6 @@ DeepBind retrieves from your local notes and documents, reasons with a local mod
 
 ---
 
-## Current Product Shape
-
-The current source of truth is:
-
-- [Project overview](./docs/overview.md)
-- [ADR 002 — Pure local product shape](./docs/architecture/decisions/002-pure-local-product-shape.md)
-- [ADR 003 — Tauri shell + sidecars](./docs/architecture/decisions/003-desktop-distribution-tauri-and-sidecars.md)
-- [ADR 015 — Single-target local-only stack](./docs/architecture/decisions/015-single-target-local-only-stack.md)
-- [ADR 020 — Web search dropped from v1](./docs/architecture/decisions/020-web-search-dropped-v1.md)
-
-Some older docs may still mention Claude, Anthropic, OpenAI, Google, web search, browser-only operation, or cloud/provider switching. Those references are historical pre-pivot material unless an accepted ADR says otherwise.
-
----
-
 ## What It Does
 
 DeepBind helps you:

@@ -242,7 +242,7 @@ Per-model TTFT, decode throughput, and end-to-end wall clock are measured by the
 
 ### Canonical chat-model selection (the per-machine problem)
 
-The "v1 canonical chat model" used to be hard-coded — initially Qwen3-30B-A3B per [ADR 010](../architecture/decisions/010-conversation-replay-eval-harness.md), now Qwen3-14B per ADR 010 §"Issue 4" — but the right shape for a self-installing desktop product is per-machine selection. Different users have different Ollama versions, OS major versions, hardware tiers, and memory budgets, and behavior like `think: false` honoring is environment-specific (the 30B-A3B leaks chain-of-thought on Ollama 0.18.0 + macOS 26 + M5 Pro, and works correctly on other combinations).
+The right shape for a self-installing desktop product is per-machine model selection rather than a single hard-coded canonical chat model. Different users have different Ollama versions, OS major versions, hardware tiers, and memory budgets, and behavior like `think: false` honoring is environment-specific (Qwen3-30B-A3B leaks chain-of-thought on Ollama 0.18.0 + macOS 26 + M5 Pro, and works correctly on other combinations).
 
 [ADR 012](../architecture/decisions/012-chat-model-self-test.md) files the architectural answer: at install or on demand, run a three-probe self-test against each candidate model in the user-pickable catalog —
 
