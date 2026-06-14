@@ -14,7 +14,7 @@ If you discover a security vulnerability, please report it responsibly.
 
 Instead, use [GitHub Security Advisories](https://github.com/jakubsuplicki/deepbind/security/advisories/new) to report it privately.
 
-You should receive a response within 48 hours. We will work with you to understand the issue and coordinate a fix before any public disclosure.
+We will work with you to understand the issue and coordinate a fix before any public disclosure.
 
 ## Scope
 
