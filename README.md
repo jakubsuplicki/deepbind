@@ -321,11 +321,12 @@ deepbind/
 
 ## Credits
 
-DeepBind builds on the original **Jarvis** by **Łukasz Jakubowski**, whose
-project is the foundation this work extends. DeepBind is an independent,
-local-first evolution of that idea, released as open source with full credit to
-the original. "Jarvis" remains the internal codename in parts of the codebase
-and workspace layout in recognition of that lineage.
+DeepBind builds on the original **[Jarvis](https://github.com/Szesnasty/Jarvis)**
+by **[Łukasz Jakubowski](https://github.com/Szesnasty)**, whose project is the
+foundation this work extends. DeepBind is an independent, local-first evolution
+of that idea, released as open source with full credit to the original.
+"Jarvis" remains the internal codename in parts of the codebase and workspace
+layout in recognition of that lineage.
 
 ## License
 
