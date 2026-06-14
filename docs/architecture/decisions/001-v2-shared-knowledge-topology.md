@@ -116,7 +116,7 @@ Rationale:
 ## Alternatives rejected outright
 
 - **Central GPU box + Tailscale (the old hybrid).** Reintroduces a new machine that needs patching, backups, access control, and an owner — the compliance surface the wedge is built to avoid.
-- **Multi-tenant vendor cloud.** A US$1M+ compliance trap pre-revenue.
+- **Multi-tenant vendor cloud.** A large compliance and operational burden that contradicts the local-first design.
 - **Vendor-domain admin portal + seat management.** Breaks the "your data never leaves your trust boundary" pitch.
 
 ## What V1 must not foreclose

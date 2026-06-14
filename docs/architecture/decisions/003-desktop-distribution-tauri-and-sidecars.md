@@ -53,7 +53,7 @@ Uninstall removes that directory.
 
 **Coexistence with a system-installed Ollama.** Developer laptops often already run Ollama on `:11434`. The bundled sidecar binds a non-default loopback port (e.g. `:11435`) so port collision is impossible. We do not attempt to reuse the system instance — version drift, model-storage co-mingling, and lifecycle ownership all argue against it. The runtime UI surfaces a one-line note when a system Ollama is detected on `:11434`, so the user understands why GPU/VRAM may show contention.
 
-**Attribution.** Ollama is MIT-licensed; redistribution inside a commercial product is explicitly permitted, but MIT requires attribution in distributed binary form. The Ollama LICENSE plus all transitive third-party notices ship in `Resources/LICENSES/` (macOS) / `licenses\` next to the install root (Windows), and are linked from a Help → Open-Source Notices menu item.
+**Attribution.** Ollama is MIT-licensed; redistribution inside a bundled application is explicitly permitted, but MIT requires attribution in distributed binary form. The Ollama LICENSE plus all transitive third-party notices ship in `Resources/LICENSES/` (macOS) / `licenses\` next to the install root (Windows), and are linked from a Help → Open-Source Notices menu item.
 
 ### First-launch model fetch (the one outbound call we accept at install time)
 

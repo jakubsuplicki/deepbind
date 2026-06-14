@@ -58,7 +58,7 @@ Solves the user-facing onboarding question by having DeepBind hold the API key a
 
 ### C. Ship `duckduckgo-search` as-is
 
-Status quo. **Rejected** — finding #4 is a real commercial-feasibility blocker, not a metadata flag. DDG's ToS forbid commercial scraping; the package's own README disclaims commercial fitness. Untenable for a paid commercial product whose pitch is rigor.
+Status quo. **Rejected** — finding #4 is a real feasibility blocker, not a metadata flag. DDG's ToS forbid commercial scraping; the package's own README disclaims commercial fitness. Untenable for a product whose value proposition is rigor.
 
 ### D. Drop web search from v1 entirely (this ADR)
 
@@ -91,6 +91,6 @@ The decision. Net effect: -45 LoC of service code, -22 LoC of tool spec, -7 LoC 
 
 ## Open follow-ups (non-blocking)
 
-1. **v1.5+ web-search reactivation criteria.** Document what evidence would justify re-introducing the feature: a user signal that web fallback is actually requested; a clean BYOK UX pattern that doesn't violate the first-session contract; a paid tier with margin to absorb a managed-key offering. This ADR is the trigger document for that decision.
+1. **v1.5+ web-search reactivation criteria.** Document what evidence would justify re-introducing the feature: a user signal that web fallback is actually requested, and a clean BYOK UX pattern that doesn't violate the first-session contract. This ADR is the trigger document for that decision.
 2. **System-prompt rewrite.** The chat prompt currently mentions web_search as a tool the model should fall back to. Update to "if notes don't cover it, say so" — a one-line edit but worth tracking so the model's behaviour aligns with the new contract.
 3. **Bundle size sanity-check.** Confirm `duckduckgo-search` and any of its transitives leaving the requirements file actually shrink the PyInstaller bundle. Probably modest (~few hundred KB) but worth noting in the build-pipeline diff.

@@ -48,7 +48,7 @@
     </p>
 
     <!-- Paste-a-key form — same flow as the wall, but can be used at any
-         time during the trial to convert to paid without waiting for
+         time during the trial to activate a license without waiting for
          expiry. -->
     <form class="license-section__form" @submit.prevent="onSubmit">
       <label class="license-section__label" for="license-section-input">

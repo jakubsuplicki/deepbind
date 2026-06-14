@@ -77,7 +77,7 @@ Even a non-inference admin portal (seat management, telemetry dashboards) breaks
 ### Positive
 - Single, defensible product narrative for the operator's compliance officer / general counsel.
 - "Apache 2.0 / MIT, no AUP flow-down, no third-party data flow" closes a class of procurement review questions before they're asked.
-- Hardware floor is honest and visible — customers can self-qualify before purchase.
+- Hardware floor is honest and visible — users can self-qualify before installing.
 - The strict-OSI license filter aligns with this decision (no licensing-tax procurement reviews).
 
 ### Negative
