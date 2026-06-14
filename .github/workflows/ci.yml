@@ -75,10 +75,6 @@ jobs:
         run: pytest --tb=short -q
 
   # ─────────────────────────────────────────────
-  # Release — gates on both matrix entries below.
-  # ─────────────────────────────────────────────
-
-  # ─────────────────────────────────────────────
   # Frontend — build & test
   # ─────────────────────────────────────────────
   frontend:
@@ -117,25 +113,4 @@ jobs:
 
       - name: Run tests (vitest)
         run: npm test
-
-  # ─────────────────────────────────────────────
-  # Release Please — Google-style versioning
-  # Runs only on push to main, after CI passes
-  # ─────────────────────────────────────────────
-  release:
-    name: Release Please
-    runs-on: ubuntu-latest
-    needs: [backend, frontend]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    permissions:
-      contents: write
-      pull-requests: write
-
-    steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        with:
-          config-file: .release-please-config.json
-          manifest-file: .release-please-manifest.json
 
