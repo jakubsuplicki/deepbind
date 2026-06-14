@@ -4,7 +4,7 @@ A scenario is a single (system_prompt, user_message, max_output_tokens) triple
 plus a stable name. The harness runs each scenario × model × N timed runs and
 records TTFT / decode-tps / total wall clock.
 
-Three categories:
+Two categories:
 
 - **synthetic** — fixed-shape isolation scenarios (warm-short, prefill at
   approximate token sizes 1k / 4k / 16k, decode-throughput). These exist to
@@ -12,9 +12,10 @@ Three categories:
 - **fixture** — derived from the existing conversation eval fixtures so the
   numbers reflect realistic conversation shapes, not synthetic ones. v1 includes
   one fixture-derived scenario (long-conv-shallow); follow-on chunks add more.
-- **reference** — a comparison shot against Anthropic's hosted API. Lets the
-  baseline answer "are we faster than the cloud option people currently
-  Cmd-Tab to?" with a number, not a slogan.
+
+This is a local-only build (ADR 015 removed all cloud LLM SDKs), so there is
+no hosted-API "reference" comparison category — every scenario runs against
+the local Ollama stack.
 
 Token-size approximation: ~4 chars per English token is the standard ballpark.
 Exact token counts vary by tokenizer, but the scenarios are about *shape*
@@ -38,7 +39,6 @@ intentionally use plain English so the size category is honest across runs."""
 class ScenarioCategory(str, Enum):
     SYNTHETIC = "synthetic"
     FIXTURE = "fixture"
-    REFERENCE = "reference"
 
 
 @dataclass(frozen=True)
@@ -181,45 +181,21 @@ def chat_realistic() -> Scenario:
     )
 
 
-def reference_anthropic() -> Scenario:
-    """Reference scenario — same prompt as warm-short, runs against Anthropic.
-
-    Provides the explicit competitive benchmark the wedge claims to beat:
-    "we are X× faster than Cmd-Tab-to-Sonnet on M5 Pro 24 GB." Uses
-    Anthropic's hosted API; lazy-imports the client and skips silently if
-    no API key is present.
-    """
-    return Scenario(
-        name="reference-anthropic-warm-short",
-        category=ScenarioCategory.REFERENCE,
-        system_prompt=_BASE_SYSTEM_PROMPT,
-        user_message="Say hi in one word.",
-        max_output_tokens=8,
-        description=(
-            "Same prompt as warm-short, run against Anthropic's hosted API "
-            "as the explicit competitor reference. Skipped if no API key."
-        ),
-    )
-
-
-def default_scenarios(include_reference: bool = True) -> list[Scenario]:
+def default_scenarios() -> list[Scenario]:
     """The v1 default scenario set.
 
-    Five scenarios cover the four phases that matter for user-perceived
-    latency (TTFT-floor, prefill stress at 4K and 16K, sustained decode,
-    realistic conversation shape) plus one reference shot.
+    Five scenarios cover the four phases that matter for perceived latency
+    (TTFT-floor, prefill stress at 4K and 16K, sustained decode, realistic
+    conversation shape), all run against the local Ollama stack.
 
     Cold-start is *not* included at v1 — it requires Ollama process control
     that's better handled in a follow-on chunk. Decode at 1K prefill is
     omitted as a duplicate of warm-short for our purposes.
     """
-    scenarios = [
+    return [
         warm_short(),
         prefill_scenario(4_000),
         prefill_scenario(16_000),
         decode_throughput(),
         chat_realistic(),
     ]
-    if include_reference:
-        scenarios.append(reference_anthropic())
-    return scenarios

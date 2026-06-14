@@ -9,7 +9,6 @@ from tests.eval.latency.scenarios import (
     decode_throughput,
     default_scenarios,
     prefill_scenario,
-    reference_anthropic,
     warm_short,
 )
 
@@ -46,13 +45,11 @@ def test_default_scenarios_covers_phases():
     assert "chat-realistic-shallow" in names
 
 
-def test_default_scenarios_includes_reference_when_requested():
-    with_ref = default_scenarios(include_reference=True)
-    without_ref = default_scenarios(include_reference=False)
-    ref_names = {s.name for s in with_ref}
-    no_ref_names = {s.name for s in without_ref}
-    assert "reference-anthropic-warm-short" in ref_names
-    assert "reference-anthropic-warm-short" not in no_ref_names
+def test_default_scenarios_has_no_hosted_reference_scenario():
+    """Local-only build (ADR 015): no hosted-API reference scenario exists."""
+    names = {s.name for s in default_scenarios()}
+    assert not any("reference" in n for n in names)
+    assert not any("anthropic" in n for n in names)
 
 
 def test_decode_throughput_is_long_output():
@@ -64,11 +61,6 @@ def test_decode_throughput_is_long_output():
 def test_chat_realistic_is_fixture_category():
     s = chat_realistic()
     assert s.category is ScenarioCategory.FIXTURE
-
-
-def test_reference_is_reference_category():
-    s = reference_anthropic()
-    assert s.category is ScenarioCategory.REFERENCE
 
 
 def test_approx_input_tokens_is_proportional_to_size():

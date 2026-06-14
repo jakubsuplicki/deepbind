@@ -14,7 +14,6 @@ import httpx
 import pytest
 
 from tests.eval.latency.harness import (
-    AnthropicTimedClient,
     OllamaTimedClient,
     _strip_thinking,
 )
@@ -109,22 +108,6 @@ async def test_ollama_streaming_handles_http_error(monkeypatch):
 
     assert result.error is not None
     assert "HTTP 500" in result.error
-
-
-@pytest.mark.asyncio
-async def test_anthropic_skips_silently_without_api_key(monkeypatch):
-    """No API key → returns an error TimedResponse rather than raising."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    client = AnthropicTimedClient(api_key=None)
-    result = await client.call(
-        system_prompt="sys",
-        user_message="hi",
-        max_output_tokens=8,
-        scenario_name="reference",
-    )
-    assert result.error is not None
-    assert "ANTHROPIC_API_KEY" in result.error
-    assert result.ttft_ms == 0.0
 
 
 def test_strip_thinking_drops_chain_of_thought():

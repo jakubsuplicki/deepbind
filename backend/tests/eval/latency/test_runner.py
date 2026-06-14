@@ -112,24 +112,6 @@ class _StubOllama:
         )
 
 
-@dataclass
-class _StubAnthropic:
-    model: str = "claude-sonnet-4-5"
-
-    async def call(self, **_kwargs):  # noqa: ANN003
-        return TimedResponse(
-            scenario_name="reference",
-            model_id=f"anthropic:{self.model}",
-            ttft_ms=0.0,
-            decode_tps=0.0,
-            total_ms=0.0,
-            output_tokens=0,
-            prompt_tokens=0,
-            response_text="",
-            error="ANTHROPIC_API_KEY not set; reference scenario skipped",
-        )
-
-
 def test_run_grid_sync_completes_with_stub():
     result = run_grid_sync(
         scenarios=[warm_short()],
@@ -137,7 +119,6 @@ def test_run_grid_sync_completes_with_stub():
         seeds=(1, 2, 3),
         n_warmup_runs=1,
         ollama_client=_StubOllama(),
-        anthropic_client=_StubAnthropic(),
         pulled_models={"qwen3:8b"},
     )
     assert len(result.stats) == 1
@@ -145,26 +126,6 @@ def test_run_grid_sync_completes_with_stub():
     assert s.n_timed_runs == 3
     assert s.n_errors == 0
     assert s.ttft_ms_p50 > 0
-
-
-def test_run_grid_sync_skips_reference_to_anthropic_cleanly():
-    """Reference scenarios should produce a result with the expected error,
-    not crash the run."""
-    from tests.eval.latency.scenarios import reference_anthropic
-
-    result = run_grid_sync(
-        scenarios=[reference_anthropic()],
-        models=["qwen3:8b"],
-        seeds=(1,),
-        n_warmup_runs=0,
-        ollama_client=_StubOllama(),
-        anthropic_client=_StubAnthropic(),
-        pulled_models={"qwen3:8b"},  # pretend it's pulled so the loop reaches the reference path
-    )
-    s = result.stats[0]
-    # Anthropic stub returns errored TimedResponses → n_errors == 1
-    assert s.n_errors == 1
-    assert s.n_timed_runs == 0
 
 
 def test_run_grid_skips_models_not_pulled_in_ollama():
@@ -177,7 +138,6 @@ def test_run_grid_skips_models_not_pulled_in_ollama():
         seeds=(1, 2),
         n_warmup_runs=0,
         ollama_client=_StubOllama(),
-        anthropic_client=_StubAnthropic(),
         pulled_models={"qwen3:14b"},  # 8b is missing
     )
     by_model = {s.model_id: s for s in result.stats}
@@ -191,28 +151,6 @@ def test_run_grid_skips_models_not_pulled_in_ollama():
     fourteen_b = by_model["ollama:qwen3:14b"]
     assert fourteen_b.skip_reason is None
     assert fourteen_b.n_timed_runs == 2
-
-
-def test_run_grid_runs_reference_scenarios_only_once_per_grid():
-    """Reference scenarios are provider-independent and must not duplicate per Ollama model."""
-    from tests.eval.latency.scenarios import reference_anthropic, warm_short
-
-    result = run_grid_sync(
-        scenarios=[warm_short(), reference_anthropic()],
-        models=["qwen3:8b", "qwen3:14b"],
-        seeds=(1,),
-        n_warmup_runs=0,
-        ollama_client=_StubOllama(),
-        anthropic_client=_StubAnthropic(),
-        pulled_models={"qwen3:8b", "qwen3:14b"},
-    )
-    # Two ollama models × one warm-short = 2 cells
-    # PLUS one reference cell (NOT two — that was the bug)
-    reference_cells = [s for s in result.stats if "reference" in s.scenario_name]
-    assert len(reference_cells) == 1, (
-        f"reference scenario should run once per grid, got "
-        f"{len(reference_cells)} cells: {[s.model_id for s in reference_cells]}"
-    )
 
 
 def test_aggregate_captures_sample_response_text():

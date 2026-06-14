@@ -1,26 +1,23 @@
 """Tests for the chat adapters (ADR 010).
 
-All HTTP / SDK calls are mocked — these tests must NOT require Ollama
-running, an Anthropic API key, or network access. Real end-to-end runs
-are the responsibility of the (separate) baseline-capture script.
+All HTTP calls are mocked — these tests must NOT require Ollama running
+or network access. Real end-to-end runs are the responsibility of the
+(separate) baseline-capture script.
 """
 
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
 
 from tests.eval.conversations.chat_adapters import (
-    AnthropicChat,
-    DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_OLLAMA_MODEL,
     OllamaChat,
     _flatten_block_content,
-    _split_system_for_anthropic,
     _strip_thinking,
     _translate_messages_for_ollama,
     make_chat,
@@ -34,10 +31,6 @@ from tests.eval.conversations.runner import ChatCallable
 
 def test_ollama_chat_satisfies_chat_callable_protocol():
     assert isinstance(OllamaChat(), ChatCallable)
-
-
-def test_anthropic_chat_satisfies_chat_callable_protocol():
-    assert isinstance(AnthropicChat(), ChatCallable)
 
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
@@ -72,14 +65,16 @@ def test_make_chat_defaults_to_ollama():
     assert isinstance(chat, OllamaChat)
 
 
-def test_make_chat_anthropic_is_opt_in():
-    chat = make_chat("anthropic", api_key="sk-test")
-    assert isinstance(chat, AnthropicChat)
-
-
 def test_make_chat_unknown_provider_raises():
     with pytest.raises(ValueError, match="Unknown chat provider"):
         make_chat("nonsense")
+
+
+def test_make_chat_anthropic_provider_now_rejected():
+    """Local-only build (ADR 015): the hosted-API provider no longer exists.
+    Requesting it must raise rather than silently doing something."""
+    with pytest.raises(ValueError, match="Unknown chat provider"):
+        make_chat("anthropic", api_key="sk-test")
 
 
 # ── model_id stable identifiers ──────────────────────────────────────────────
@@ -89,11 +84,6 @@ def test_ollama_model_id_includes_model_and_seed():
     chat = OllamaChat(model="qwen3:14b", seed=99)
     assert "qwen3:14b" in chat.model_id
     assert "seed=99" in chat.model_id
-
-
-def test_anthropic_model_id_includes_model():
-    chat = AnthropicChat(model="claude-opus-4-7")
-    assert "claude-opus-4-7" in chat.model_id
 
 
 # ── Message-format translation: text-only ────────────────────────────────────
@@ -239,35 +229,12 @@ def test_translate_full_tool_round_trip():
     assert tool_messages[1]["name"] == "read_note"
 
 
-# ── Anthropic system-prompt extraction ───────────────────────────────────────
-
-
-def test_split_system_for_anthropic_extracts_system_messages():
-    msgs = [
-        {"role": "system", "content": "You are X."},
-        {"role": "user", "content": "Hi"},
-        {"role": "system", "content": "Also Y."},
-    ]
-    sys_str, rest = _split_system_for_anthropic(msgs)
-    assert "You are X." in sys_str
-    assert "Also Y." in sys_str
-    assert all(m["role"] != "system" for m in rest)
-    assert len(rest) == 1
-
-
-def test_split_system_for_anthropic_returns_empty_when_no_system():
-    msgs = [{"role": "user", "content": "Hi"}]
-    sys_str, rest = _split_system_for_anthropic(msgs)
-    assert sys_str == ""
-    assert rest == msgs
-
-
 # ── Thinking-content stripping ───────────────────────────────────────────────
 
 
 def test_strip_thinking_noop_when_no_close_tag():
-    """Anthropic responses and post-stripped Ollama responses must pass through
-    unchanged."""
+    """Post-stripped Ollama responses (and any non-thinking output) must pass
+    through unchanged."""
     assert _strip_thinking("just an answer.") == "just an answer."
     assert _strip_thinking("") == ""
 
@@ -495,87 +462,6 @@ async def test_ollama_chat_default_num_ctx_is_set_for_real_fixture_sizes():
     assert chat.num_ctx >= 8192
 
 
-# ── AnthropicChat behavior (mocked) ──────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_anthropic_chat_calls_messages_create_with_temperature_zero(monkeypatch):
-    """The adapter must call messages.create with temperature 0 and pass the
-    system prompt through Anthropic's top-level system parameter."""
-    captured: dict = {}
-
-    class _FakeBlock:
-        def __init__(self, text):
-            self.text = text
-
-    class _FakeResponse:
-        content = [_FakeBlock("hello from claude")]
-
-    class _FakeMessages:
-        async def create(self, **kwargs):
-            captured.update(kwargs)
-            return _FakeResponse()
-
-    class _FakeClient:
-        def __init__(self, *args, **kwargs):
-            self.messages = _FakeMessages()
-
-        async def close(self):
-            pass
-
-    monkeypatch.setattr(
-        "anthropic.AsyncAnthropic", lambda *args, **kwargs: _FakeClient()
-    )
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-
-    chat = AnthropicChat(model="claude-opus-4-7")
-    text = await chat([{"role": "user", "content": "ping"}], "system X")
-
-    assert text == "hello from claude"
-    assert captured["temperature"] == 0
-    assert captured["model"] == "claude-opus-4-7"
-    assert "system X" in captured["system"]
-    # User message preserved
-    assert captured["messages"] == [{"role": "user", "content": "ping"}]
-
-
-@pytest.mark.asyncio
-async def test_anthropic_chat_requires_api_key(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    chat = AnthropicChat()
-    with pytest.raises(RuntimeError, match="api_key"):
-        await chat([{"role": "user", "content": "x"}], "")
-
-
-@pytest.mark.asyncio
-async def test_anthropic_chat_concatenates_multi_block_responses(monkeypatch):
-    class _FakeBlock:
-        def __init__(self, text):
-            self.text = text
-
-    class _FakeResponse:
-        content = [_FakeBlock("part one. "), _FakeBlock("part two.")]
-
-    class _FakeMessages:
-        async def create(self, **kwargs):
-            return _FakeResponse()
-
-    class _FakeClient:
-        def __init__(self, *args, **kwargs):
-            self.messages = _FakeMessages()
-
-        async def close(self):
-            pass
-
-    monkeypatch.setattr(
-        "anthropic.AsyncAnthropic", lambda *args, **kwargs: _FakeClient()
-    )
-
-    chat = AnthropicChat(api_key="sk-test")
-    text = await chat([{"role": "user", "content": "x"}], "sys")
-    assert text == "part one. part two."
-
-
 # ── End-to-end: adapter → runner → scorer with mocked HTTP ───────────────────
 
 
@@ -639,18 +525,6 @@ def test_make_chat_factory_produces_seed_specific_adapters():
     assert chat_a.seed == 1
     assert chat_b.seed == 2
     # Different model_ids so baseline filenames differ
-    assert chat_a.model_id != chat_b.model_id
-
-
-def test_make_chat_factory_for_anthropic_records_seed_in_model_id():
-    """Anthropic doesn't use the seed at the API level, but the factory
-    must still embed it in model_id so multi-seed runs produce
-    distinguishable per-seed records."""
-    factory = make_chat_factory("anthropic", api_key="sk-test")
-    chat_a = factory(seed=10)
-    chat_b = factory(seed=20)
-    assert chat_a.seed == 10
-    assert chat_b.seed == 20
     assert chat_a.model_id != chat_b.model_id
 
 

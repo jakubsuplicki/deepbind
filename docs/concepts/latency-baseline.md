@@ -31,32 +31,31 @@ Without a measurement substrate every claim about speed is a guess; every optimi
 
 ```
 backend/tests/eval/latency/
-  scenarios.py             # data: 5 default + 1 reference scenario
-  harness.py               # streaming Ollama HTTP + Anthropic streaming
+  scenarios.py             # data: 5 default scenarios (Ollama-only)
+  harness.py               # streaming Ollama HTTP client
   runner.py                # orchestrate, aggregate, capture machine info
   gate.py                  # bootstrap CI on numeric metric diffs
   run_bench.py             # CLI
-  test_*.py                # unit tests (28 at v1)
+  test_*.py                # unit tests (31 at v1)
   test_latency_floor.py    # opt-in JARVIS_LATENCY_BENCH=1 regression gate
   baselines/               # committed JSONs per (machine, knob_stack)
 ```
 
 ### Scenarios
 
-A scenario is a stable `(name, system_prompt, user_message, max_output_tokens)` tuple. Three categories:
+A scenario is a stable `(name, system_prompt, user_message, max_output_tokens)` tuple. Two categories:
 
 - **synthetic** — fixed-shape isolation scenarios. Padding text is deterministic (numbered lines) so the same scenario produces byte-identical input across runs.
   - `warm-short` — TTFT floor on a warm model.
   - `prefill-4k` / `prefill-16k` — prefill stress at approximate input-token sizes.
   - `decode-throughput` — short input, long output; sustained tokens/sec.
 - **fixture** — derived from realistic conversation shapes. v1 includes one (`chat-realistic-shallow`); follow-on chunks add more.
-- **reference** — Anthropic Claude Sonnet 4.x; the explicit competitor benchmark. Skipped silently when `ANTHROPIC_API_KEY` is absent.
+
+This is a local-only build (ADR 015 removed all cloud LLM SDKs), so there is no hosted-API "reference" comparison category — every scenario runs against the local Ollama stack.
 
 ### Harness
 
-`OllamaTimedClient` streams `/api/chat` with `stream: true`, captures the time-to-first-token from the first non-empty content delta, and reads `eval_count` / `eval_duration` from the `done` event for sustained decode throughput (the model's self-reported counter, more honest than wall-clock counting because it excludes HTTP + JSON overhead). Mirrors production by setting `temperature: 0`, the configured `seed`, `num_ctx: 32768`, and `think: false` (v1 canonical posture).
-
-`AnthropicTimedClient` is the reference-scenario sibling. Lazy-imports the SDK; returns an error result when no API key is present so the runner can continue cleanly.
+`OllamaTimedClient` streams `/api/chat` with `stream: true`, captures the time-to-first-token from the first non-empty content delta, and reads `eval_count` / `eval_duration` from the `done` event for sustained decode throughput (the model's self-reported counter, more honest than wall-clock counting because it excludes HTTP + JSON overhead). Mirrors production by setting `temperature: 0`, the configured `seed`, `num_ctx: 32768`, and `think: false` (v1 canonical posture). It is the only client — there is no hosted-API sibling.
 
 ### Runner
 
@@ -104,14 +103,6 @@ Wall-clock estimates on M5 Pro 24 GB:
 ```
 
 The `knob_stack` is recorded in `machine_info` — diffs across baselines surface which knob produced which effect.
-
-### Skip the reference scenario
-
-```bash
-.venv/bin/python -m tests.eval.latency.run_bench --no-reference
-```
-
-Useful for offline runs or when no Anthropic key is configured.
 
 ### Run the floor gate locally
 
@@ -178,7 +169,7 @@ The reference point for every subsequent optimization knob diff. Captured agains
 | `chat-realistic-shallow` | 154 ms | 14.0 | 1809 ms | `"You mentioned earlier that you were work…"` (correct topic recall) |
 | `decode-throughput` | 157 ms | 13.5 | 21643 ms | `"The periodic table is a systematic arran…"` (real content) |
 
-The `qwen3:8b` cells are skipped (model not pulled at capture time); they fill in on the next run after `ollama pull qwen3:8b`. The `reference-anthropic-warm-short` scenario was skipped via `--no-reference` (no API key set); informational, not gate-load-bearing.
+The `qwen3:8b` cells are skipped (model not pulled at capture time); they fill in on the next run after `ollama pull qwen3:8b`.
 
 **What baseline-0 says about the product on M5 Pro 24 GB:**
 

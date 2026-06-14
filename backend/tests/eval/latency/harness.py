@@ -1,34 +1,29 @@
-"""Streaming HTTP clients with per-token timing (ADR 011).
+"""Streaming HTTP client with per-token timing (ADR 011).
 
-Two clients:
+One client:
 
 - :class:`OllamaTimedClient` — talks to a locally-running Ollama instance via
   the streaming chat endpoint. Captures TTFT (time from request send to first
   non-empty content delta), per-token timestamps for decode-tps, and the
   ``done`` event's reported ``eval_count`` / ``prompt_eval_count`` /
-  ``eval_duration`` for cross-checking.
+  ``eval_duration`` for cross-checking. This is a local-only build (ADR 015
+  removed all cloud LLM SDKs); there is no hosted-API comparison client.
 
-- :class:`AnthropicTimedClient` — talks to Anthropic's hosted streaming API.
-  Same metrics. Used for the reference scenario only; lazy-imports the SDK
-  and skips silently when no API key is configured.
-
-Both produce a :class:`TimedResponse` with the same shape, so the runner
-treats them uniformly.
+It produces a :class:`TimedResponse`.
 
 This module deliberately does NOT reuse ``conversations/chat_adapters.py``:
 that adapter returns the complete response after non-streaming round-trip,
 which is the wrong abstraction for TTFT measurement. Different concern,
 separate client.
 
-Determinism: both clients pin temperature 0 and (where supported) a fixed
+Determinism: the client pins temperature 0 and (where supported) a fixed
 seed. The harness adds no randomness of its own. The Ollama client honors
-``options.seed``; Anthropic's API does not accept a seed parameter.
+``options.seed``.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -42,9 +37,6 @@ import httpx
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_TIMEOUT_S = 600.0  # 10 min ceiling per call (cold-start guard)
 DEFAULT_OLLAMA_NUM_CTX = 32_768   # accommodates the 16K-prefill scenario + headroom
-
-DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5"  # realistic shadow-IT comparison
-DEFAULT_ANTHROPIC_MAX_TOKENS = 1024
 
 
 # ── Result type ──────────────────────────────────────────────────────────────
@@ -244,120 +236,3 @@ def _strip_thinking(text: str) -> str:
     if "</think>" not in text:
         return text
     return text.rsplit("</think>", 1)[-1].lstrip()
-
-
-# ── Anthropic streaming client (reference scenario only) ────────────────────
-
-
-@dataclass
-class AnthropicTimedClient:
-    """Streaming Anthropic client for the reference scenario.
-
-    Lazy-imports the SDK so callers without an API key don't need it
-    installed. Returns a TimedResponse with ``error`` populated when the
-    key is missing rather than raising — the runner skips reference
-    scenarios cleanly in that case.
-    """
-
-    model: str = DEFAULT_ANTHROPIC_MODEL
-    api_key: Optional[str] = None  # falls back to ANTHROPIC_API_KEY
-    max_tokens: int = DEFAULT_ANTHROPIC_MAX_TOKENS
-
-    async def call(
-        self,
-        *,
-        system_prompt: str,
-        user_message: str,
-        max_output_tokens: int,
-        scenario_name: str = "unknown",
-        **_unused: Any,
-    ) -> TimedResponse:
-        api_key = self.api_key or os.environ.get("ANTHROPIC_API_KEY")
-        model_id = f"anthropic:{self.model}"
-
-        if not api_key:
-            return TimedResponse(
-                scenario_name=scenario_name,
-                model_id=model_id,
-                ttft_ms=0.0,
-                decode_tps=0.0,
-                total_ms=0.0,
-                output_tokens=0,
-                prompt_tokens=0,
-                response_text="",
-                error="ANTHROPIC_API_KEY not set; reference scenario skipped",
-            )
-
-        try:
-            from anthropic import AsyncAnthropic
-        except ImportError:
-            return TimedResponse(
-                scenario_name=scenario_name,
-                model_id=model_id,
-                ttft_ms=0.0,
-                decode_tps=0.0,
-                total_ms=0.0,
-                output_tokens=0,
-                prompt_tokens=0,
-                response_text="",
-                error="anthropic SDK not installed; reference scenario skipped",
-            )
-
-        client = AsyncAnthropic(api_key=api_key)
-        t_start = time.perf_counter()
-        ttft_ms: Optional[float] = None
-        text_parts: list[str] = []
-        output_tokens = 0
-        prompt_tokens = 0
-
-        try:
-            async with client.messages.stream(
-                model=self.model,
-                max_tokens=min(self.max_tokens, max_output_tokens or self.max_tokens),
-                temperature=0,
-                system=system_prompt or "You are a helpful assistant.",
-                messages=[{"role": "user", "content": user_message}],
-            ) as stream:
-                async for event in stream:
-                    # First text delta marks TTFT
-                    text = getattr(event, "delta", None)
-                    delta_text = getattr(text, "text", None) if text else None
-                    if delta_text and ttft_ms is None:
-                        ttft_ms = (time.perf_counter() - t_start) * 1000.0
-                    if delta_text:
-                        text_parts.append(delta_text)
-                final = await stream.get_final_message()
-                output_tokens = getattr(final.usage, "output_tokens", 0) or 0
-                prompt_tokens = getattr(final.usage, "input_tokens", 0) or 0
-        except Exception as exc:  # noqa: BLE001 — surface every API error uniformly
-            return TimedResponse(
-                scenario_name=scenario_name,
-                model_id=model_id,
-                ttft_ms=0.0,
-                decode_tps=0.0,
-                total_ms=(time.perf_counter() - t_start) * 1000.0,
-                output_tokens=0,
-                prompt_tokens=0,
-                response_text="".join(text_parts),
-                error=f"anthropic: {exc}",
-            )
-        finally:
-            await client.close()
-
-        total_ms = (time.perf_counter() - t_start) * 1000.0
-        decode_seconds = max(
-            1e-6,
-            (total_ms - (ttft_ms if ttft_ms is not None else total_ms)) / 1000.0,
-        )
-        decode_tps = (output_tokens / decode_seconds) if output_tokens > 0 else 0.0
-
-        return TimedResponse(
-            scenario_name=scenario_name,
-            model_id=model_id,
-            ttft_ms=ttft_ms if ttft_ms is not None else total_ms,
-            decode_tps=decode_tps,
-            total_ms=total_ms,
-            output_tokens=output_tokens,
-            prompt_tokens=prompt_tokens,
-            response_text="".join(text_parts),
-        )

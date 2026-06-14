@@ -1,37 +1,29 @@
 """ChatCallable adapters for the conversation-replay runner (ADR 010).
 
-Two implementations of the ``ChatCallable`` Protocol:
+One implementation of the ``ChatCallable`` Protocol:
 
 - :class:`OllamaChat` — talks to a locally-running Ollama instance. The
-  default for the eval, since it measures the production stack honestly
+  only adapter for the eval, since it measures the production stack honestly
   (the same models customers run, the same quantization, the same runtime).
   Slower per turn (~5–15 tok/s on 24 GB unified memory) but the numbers
-  reflect what we actually ship.
+  reflect what we actually ship. This is a local-only build (ADR 015 removed
+  all cloud LLM SDKs); there is no hosted-API escape hatch.
 
-- :class:`AnthropicChat` — opt-in. Talks to Anthropic's hosted API.
-  Faster per turn, costs money per call, and uses a different model
-  family than production. Useful for quick iteration on the harness or
-  when local hardware can't run the chat-under-test model. Results from
-  this adapter must NOT be promoted to the canonical baseline; use it
-  for development loops only.
+Determinism: the adapter pins temperature to 0 and (where supported) a
+fixed seed. Ollama honors ``options.seed`` on most models. Document the
+caveat per result.
 
-Determinism: both adapters pin temperature to 0 and (where supported) a
-fixed seed. Anthropic's API does not accept a seed parameter — its
-non-determinism floor is small at temperature 0 but not zero. Ollama
-honors ``options.seed`` on most models. Document the caveat per result.
-
-Message-format translation: Anthropic-style messages with
-``content`` as a list of blocks (text / tool_use / tool_result) are the
-runner's canonical format. Each adapter translates to the provider's
-native shape at the boundary. Tool_use / tool_result blocks are honored
-because some launch fixtures (#2, #4, #7) script tool interactions in
-the assistant turn history that precedes the assistant_target turn.
+Message-format translation: messages with ``content`` as a list of blocks
+(text / tool_use / tool_result) are the runner's canonical format. The
+adapter translates to Ollama's native shape at the boundary. Tool_use /
+tool_result blocks are honored because some launch fixtures (#2, #4, #7)
+script tool interactions in the assistant turn history that precedes the
+assistant_target turn.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -60,9 +52,6 @@ DEFAULT_OLLAMA_TIMEOUT_S = 600.0  # 10 minutes per turn — generous for slow ha
 # headroom for OS).
 DEFAULT_OLLAMA_NUM_CTX = 16384
 
-DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-7"
-DEFAULT_ANTHROPIC_MAX_TOKENS = 1024
-
 
 # ── Message-format translation ───────────────────────────────────────────────
 
@@ -80,8 +69,8 @@ def _strip_thinking(text: str) -> str:
     so the scorer sees only the model's final answer — same shape production
     would see if /no_think were honored.
 
-    No-op for responses that don't contain ``</think>`` (Anthropic, models
-    not in thinking mode).
+    No-op for responses that don't contain ``</think>`` (models not in
+    thinking mode).
     """
     if "</think>" not in text:
         return text
@@ -89,7 +78,7 @@ def _strip_thinking(text: str) -> str:
 
 
 def _flatten_block_content(content: Any) -> str:
-    """Render an Anthropic-style content list into a plain string.
+    """Render a block-list content value into a plain string.
 
     Used by Ollama, which (at the time of writing) accepts simple
     ``role/content`` messages plus a separate ``tool_calls`` /
@@ -112,7 +101,7 @@ def _flatten_block_content(content: Any) -> str:
 
 
 def _translate_messages_for_ollama(messages: list[dict]) -> list[dict]:
-    """Translate Anthropic-style messages to Ollama's chat-API format.
+    """Translate canonical block-style messages to Ollama's chat-API format.
 
     Ollama's ``/api/chat`` expects:
     - ``{"role": "user"|"assistant"|"system"|"tool", "content": "<str>"}``
@@ -183,19 +172,6 @@ def _translate_messages_for_ollama(messages: list[dict]) -> list[dict]:
         out.append({"role": role, "content": _flatten_block_content(content)})
 
     return out
-
-
-def _split_system_for_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
-    """Anthropic's API takes ``system`` as a top-level argument, not as a
-    message role. Pull any ``system`` messages out and concatenate them."""
-    system_parts: list[str] = []
-    rest: list[dict] = []
-    for msg in messages:
-        if msg.get("role") == "system":
-            system_parts.append(_flatten_block_content(msg.get("content", "")))
-        else:
-            rest.append(msg)
-    return "\n\n".join(p for p in system_parts if p), rest
 
 
 # ── Ollama adapter ───────────────────────────────────────────────────────────
@@ -283,72 +259,6 @@ class OllamaChat:
         return _strip_thinking(text)
 
 
-# ── Anthropic adapter ────────────────────────────────────────────────────────
-
-
-@dataclass
-class AnthropicChat:
-    """ChatCallable that talks to Anthropic's hosted API.
-
-    Opt-in only. Use for harness development loops or when local hardware
-    can't host the chat-under-test model. Results from this adapter must
-    NOT be promoted to the canonical baseline — they reflect a different
-    model family than the production stack.
-
-    The ``seed`` field is recorded in ``model_id`` for bookkeeping only —
-    Anthropic's API does not accept a seed parameter. At temperature 0,
-    the variance across "seeds" is the API's own non-determinism; it's
-    typically small but not zero, and multi-seed runs against this
-    adapter surface that variance honestly.
-    """
-
-    model: str = DEFAULT_ANTHROPIC_MODEL
-    api_key: Optional[str] = None  # falls back to ANTHROPIC_API_KEY env var
-    max_tokens: int = DEFAULT_ANTHROPIC_MAX_TOKENS
-    seed: int = 0  # recorded only — not passed to API
-
-    @property
-    def model_id(self) -> str:
-        return f"anthropic:{self.model}@seed={self.seed}"
-
-    async def __call__(self, messages: list[dict], system_prompt: str) -> str:
-        # Lazy-import so importing this module does not require the
-        # anthropic SDK to be installed for callers who only use OllamaChat.
-        from anthropic import AsyncAnthropic
-
-        api_key = self.api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "AnthropicChat requires an api_key argument or the "
-                "ANTHROPIC_API_KEY environment variable."
-            )
-
-        # Anthropic accepts our message format natively (it IS Anthropic
-        # format). We only need to split out any system messages.
-        sys_from_messages, body_messages = _split_system_for_anthropic(messages)
-        full_system = "\n\n".join(p for p in (system_prompt, sys_from_messages) if p)
-
-        client = AsyncAnthropic(api_key=api_key)
-        try:
-            response = await client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=0,
-                system=full_system or "You are a helpful assistant.",
-                messages=body_messages,
-            )
-        finally:
-            await client.close()
-
-        # Concatenate text blocks from the response
-        parts: list[str] = []
-        for block in response.content:
-            text = getattr(block, "text", None)
-            if text:
-                parts.append(text)
-        return "".join(parts)
-
-
 # ── Factory ──────────────────────────────────────────────────────────────────
 
 
@@ -359,12 +269,12 @@ def make_chat(
     seed: int = 42,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
-) -> "OllamaChat | AnthropicChat":
+) -> OllamaChat:
     """Pick a chat adapter by provider name.
 
-    Default is Ollama, per the project's posture: measure the production
-    stack honestly. ``provider="anthropic"`` is the opt-in escape hatch
-    for harness-development loops.
+    Only Ollama is supported: this is a local-only build (ADR 015 removed
+    all cloud LLM SDKs), so the eval measures the production stack honestly
+    and has no hosted-API escape hatch.
     """
     p = provider.strip().lower()
     if p == "ollama":
@@ -373,15 +283,8 @@ def make_chat(
             base_url=base_url or DEFAULT_OLLAMA_BASE_URL,
             seed=seed,
         )
-    if p in ("anthropic", "claude"):
-        return AnthropicChat(
-            model=model or DEFAULT_ANTHROPIC_MODEL,
-            api_key=api_key,
-            seed=seed,
-        )
     raise ValueError(
-        f"Unknown chat provider {provider!r}. "
-        f"Supported: 'ollama' (default), 'anthropic'."
+        f"Unknown chat provider {provider!r}. Supported: 'ollama' (only)."
     )
 
 
@@ -395,14 +298,11 @@ def make_chat_factory(
     """Return a function ``(seed) -> ChatCallable``.
 
     Used by ``run_fixture_multi_seed`` to instantiate a fresh chat
-    callable for each seed. For Ollama, the seed reaches the model via
-    ``options.seed``; for Anthropic the seed is recorded in the model_id
-    for bookkeeping but does not change model behavior (the API does not
-    accept a seed parameter — variance at temperature 0 is small but not
-    zero, and multi-seed runs surface it).
+    callable for each seed. The seed reaches the Ollama model via
+    ``options.seed``.
     """
 
-    def factory(seed: int) -> "OllamaChat | AnthropicChat":
+    def factory(seed: int) -> OllamaChat:
         return make_chat(
             provider,
             model=model,

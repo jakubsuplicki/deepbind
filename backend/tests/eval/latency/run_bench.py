@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .harness import OllamaTimedClient, AnthropicTimedClient
+from .harness import OllamaTimedClient
 from .runner import GridResult, capture_machine_info, run_grid
 from .scenarios import (
     Scenario,
@@ -63,14 +63,12 @@ DEFAULT_SEEDS = (1, 2, 3, 4, 5)
 
 def _scope_scenarios_models(
     scope: str,
-    *,
-    include_reference: bool,
 ) -> tuple[list[Scenario], tuple[str, ...]]:
     if scope == "pr":
         # PR mode: smallest viable set for fast iteration
         return [warm_short(), chat_realistic()], DEFAULT_MODELS_PR
     if scope == "nightly":
-        return default_scenarios(include_reference=include_reference), DEFAULT_MODELS_NIGHTLY
+        return default_scenarios(), DEFAULT_MODELS_NIGHTLY
     raise ValueError(f"unknown --scope value {scope!r}; expected 'nightly' or 'pr'")
 
 
@@ -190,14 +188,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Comma-separated integer seeds (timed runs). Default: '1,2,3,4,5'.",
     )
     p.add_argument(
-        "--no-reference",
-        action="store_true",
-        help=(
-            "Skip the Anthropic reference scenario. Default behavior is to "
-            "include it; it skips silently when no API key is available."
-        ),
-    )
-    p.add_argument(
         "--knob-stack",
         default="",
         help=(
@@ -209,14 +199,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ollama-base-url",
         default="http://127.0.0.1:11434",
         help="Ollama HTTP base URL.",
-    )
-    p.add_argument(
-        "--anthropic-model",
-        default=None,
-        help=(
-            "Override the Anthropic reference model. Default is the realistic "
-            "shadow-IT comparison (Claude Sonnet 4.x family)."
-        ),
     )
     p.add_argument(
         "--out",
@@ -246,9 +228,7 @@ async def _run_async(args: argparse.Namespace) -> int:
     knob_stack = [k.strip() for k in args.knob_stack.split(",") if k.strip()]
     info = capture_machine_info(knob_stack=knob_stack)
 
-    scenarios, default_models = _scope_scenarios_models(
-        args.scope, include_reference=not args.no_reference
-    )
+    scenarios, default_models = _scope_scenarios_models(args.scope)
     if args.models:
         models = tuple(m.strip() for m in args.models.split(",") if m.strip())
     else:
@@ -257,10 +237,6 @@ async def _run_async(args: argparse.Namespace) -> int:
     seeds = _parse_seeds(args.seeds)
 
     ollama = OllamaTimedClient(base_url=args.ollama_base_url)
-    anthropic = AnthropicTimedClient(
-        model=args.anthropic_model
-        or AnthropicTimedClient().model
-    )
 
     print(
         f"running scope={args.scope} | "
@@ -272,7 +248,6 @@ async def _run_async(args: argparse.Namespace) -> int:
         models=models,
         seeds=seeds,
         ollama_client=ollama,
-        anthropic_client=anthropic,
         machine_info=info,
         progress=print,
     )

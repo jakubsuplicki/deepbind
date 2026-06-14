@@ -27,11 +27,10 @@ from typing import Optional, Sequence
 import httpx
 
 from .harness import (
-    AnthropicTimedClient,
     OllamaTimedClient,
     TimedResponse,
 )
-from .scenarios import Scenario, ScenarioCategory
+from .scenarios import Scenario
 
 
 # ── Aggregation ─────────────────────────────────────────────────────────────
@@ -307,18 +306,16 @@ async def run_grid(
     seeds: Sequence[int] = (1, 2, 3, 4, 5),
     n_warmup_runs: int = 1,
     ollama_client: Optional[OllamaTimedClient] = None,
-    anthropic_client: Optional[AnthropicTimedClient] = None,
     machine_info: Optional[MachineInfo] = None,
     progress: Optional[callable] = None,  # type: ignore[type-arg]
     pulled_models: Optional[set[str]] = None,
 ) -> GridResult:
     """Run every (model × scenario) combo with warm-up + N timed runs.
 
-    Sequential execution. Reference scenarios are run **once per grid**
-    (not per model) — they're provider-independent and don't need to
-    repeat. Ollama scenarios are run per (model × scenario); models not
-    present in ``pulled_models`` (probed via ``GET /api/tags`` if not
-    supplied) are recorded as skipped rather than retried 5x with HTTP 404.
+    Sequential execution against the local Ollama stack (ADR 015: local-only
+    build, no hosted-API comparison). Scenarios are run per (model × scenario);
+    models not present in ``pulled_models`` (probed via ``GET /api/tags`` if
+    not supplied) are recorded as skipped rather than retried 5x with HTTP 404.
 
     Failed cells surface as ``errors`` on the aggregated ScenarioStats —
     the grid as a whole completes even if one cell fails (a model OOM on
@@ -332,18 +329,12 @@ async def run_grid(
     Tests pass an explicit set to avoid network IO.
     """
     ollama = ollama_client or OllamaTimedClient()
-    anthropic = anthropic_client or AnthropicTimedClient()
     info = machine_info or capture_machine_info()
 
     n_timed = len(seeds)
     results: list[ScenarioStats] = []
 
-    ollama_scenarios = [
-        s for s in scenarios if s.category is not ScenarioCategory.REFERENCE
-    ]
-    reference_scenarios = [
-        s for s in scenarios if s.category is ScenarioCategory.REFERENCE
-    ]
+    ollama_scenarios = list(scenarios)
 
     if pulled_models is None:
         pulled_models = await _probe_pulled_models(ollama.base_url)
@@ -401,32 +392,6 @@ async def run_grid(
                 )
             )
 
-    # ── Reference scenarios run ONCE, not per Ollama model ──────────────
-    # These are provider-independent (Anthropic API). Running them per
-    # Ollama model produced duplicate cells in the baseline JSON.
-    for scenario in reference_scenarios:
-        label = f"anthropic:{anthropic.model} × {scenario.name}"
-        if progress is not None:
-            progress(f"  {label}: reference scenario (once per grid)...")
-        timed: list[TimedResponse] = []
-        for i, _seed in enumerate(seeds, 1):
-            if progress is not None:
-                progress(f"  {label}: timed run {i}/{n_timed}...")
-            r = await anthropic.call(
-                system_prompt=scenario.system_prompt,
-                user_message=scenario.user_message,
-                max_output_tokens=scenario.max_output_tokens,
-                scenario_name=scenario.name,
-            )
-            timed.append(r)
-        results.append(
-            aggregate(
-                timed,
-                model_id=f"anthropic:{anthropic.model}",
-                scenario_name=scenario.name,
-            )
-        )
-
     return GridResult(
         machine_info=info,
         seeds=tuple(seeds),
@@ -443,7 +408,6 @@ def run_grid_sync(
     seeds: Sequence[int] = (1, 2, 3, 4, 5),
     n_warmup_runs: int = 1,
     ollama_client: Optional[OllamaTimedClient] = None,
-    anthropic_client: Optional[AnthropicTimedClient] = None,
     machine_info: Optional[MachineInfo] = None,
     pulled_models: Optional[set[str]] = None,
 ) -> GridResult:
@@ -455,7 +419,6 @@ def run_grid_sync(
             seeds=seeds,
             n_warmup_runs=n_warmup_runs,
             ollama_client=ollama_client,
-            anthropic_client=anthropic_client,
             machine_info=machine_info,
             pulled_models=pulled_models,
         )

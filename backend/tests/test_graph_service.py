@@ -205,16 +205,6 @@ async def test_graph_rebuild_after_delete(ws_db):
     assert g1.to_dict() == g2.to_dict()
 
 
-def test_no_anthropic_calls(ws):
-    """Graph building should never call Anthropic API."""
-    import anthropic
-    from unittest.mock import patch
-
-    with patch.object(anthropic, "Anthropic", side_effect=AssertionError("Should not be called")):
-        with patch.object(anthropic, "AsyncAnthropic", side_effect=AssertionError("Should not be called")):
-            rebuild_graph(ws)
-
-
 def test_add_conversation_to_graph(ws):
     """Incrementally adding a conversation creates node + edges."""
     # Start with an empty graph
