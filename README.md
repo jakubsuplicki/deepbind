@@ -330,6 +330,6 @@ layout in recognition of that lineage.
 
 ## License
 
-DeepBind is open-source software released under the [Apache License 2.0](./LICENSE).
+DeepBind is open-source software released under the [Apache License 2.0](./LICENSE) — the same license as the original Jarvis it builds on. See also the [NOTICE](./NOTICE) file for attribution.
 
 Bundled third-party components retain their own licenses. See [Third-Party Notices](./docs/THIRD-PARTY-NOTICES.md).

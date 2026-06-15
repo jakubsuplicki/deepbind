@@ -7,9 +7,10 @@ referenced below is reproduced at the end of this document under "License
 Texts."
 
 DeepBind itself is released under the **Apache License 2.0**; see
-[`LICENSE`](../LICENSE) at the project root. The licenses listed below cover
-the **bundled third-party components only** — they govern those components and
-do not modify or supersede the Apache 2.0 license that applies to DeepBind itself.
+[`LICENSE`](../LICENSE) and [`NOTICE`](../NOTICE) at the project root. The
+licenses listed below cover the **bundled third-party components only** — they
+govern those components and do not modify or supersede the Apache 2.0 license
+that applies to DeepBind itself.
 
 This document is shipped inside the application bundle as
 `Contents/Resources/THIRD-PARTY-NOTICES.md` and is also surfaced in
