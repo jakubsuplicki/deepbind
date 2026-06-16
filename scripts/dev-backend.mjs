@@ -1,12 +1,21 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const isWin = process.platform === 'win32';
 const venvPython = isWin
   ? join('.venv', 'Scripts', 'python.exe')
   : join('.venv', 'bin', 'python');
 const fullPath = join('backend', venvPython);
+
+// Persistent fastembed cache for the embedder + reranker. When not frozen
+// (dev/serve from source) the backend passes no cache_dir, so fastembed would
+// otherwise default to $TMPDIR/fastembed_cache — which macOS purges, dropping
+// the ONNX weights and breaking semantic search/rerank on the next run. Pin it
+// to the gitignored bundled-models dir (same place desktop builds ship it via
+// desktop/scripts/fetch-bundled-models.sh). Respects an existing override.
+const fastembedCache =
+  process.env.FASTEMBED_CACHE_PATH || resolve('backend', '_bundled_models', 'fastembed');
 
 const YELLOW = '\x1b[33m';
 const DIM = '\x1b[2m';
@@ -37,7 +46,7 @@ if (probe.error || probe.status !== 0) {
 const child = spawn(
   venvPython,
   ['-m', 'uvicorn', 'main:app', '--reload', '--host', '127.0.0.1', '--port', '8000'],
-  { cwd: 'backend', stdio: 'inherit' },
+  { cwd: 'backend', stdio: 'inherit', env: { ...process.env, FASTEMBED_CACHE_PATH: fastembedCache } },
 );
 
 const forward = (sig) => () => child.kill(sig);
