@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { startBundledOllama } from './ollama-runtime.mjs';
 
 const isWin = process.platform === 'win32';
 
@@ -11,6 +12,11 @@ function spawnNpm(args, opts = {}) {
   }
   return spawn('npm', args, opts);
 }
+
+// Start the bundled, M5-safe Ollama runtime on a private port and point the
+// backend at it (mirrors the Tauri shell in production). No-op when
+// JARVIS_OLLAMA_BASE_URL is already set. See scripts/ollama-runtime.mjs.
+const ollama = await startBundledOllama();
 
 const procs = [
   { name: 'backend', color: '\x1b[36m', child: null },
@@ -25,6 +31,11 @@ let shuttingDown = false;
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  if (ollama?.child && ollama.child.exitCode === null) {
+    try {
+      ollama.child.kill(isWin ? undefined : 'SIGINT');
+    } catch {}
+  }
   for (const p of procs) {
     if (p.child && p.child.exitCode === null) {
       try {
